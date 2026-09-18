@@ -1,0 +1,23 @@
+# Optional override: rebuild browser-agent with Playwright Chromium
+# Usage (from deployments/):
+#   docker compose -f docker-compose.single.yml -f docker-compose.browser-chromium.yml up -d --build browser-agent
+
+services:
+  browser-agent:
+    build:
+      context: ../agents/browser-agent
+      dockerfile: Dockerfile.chromium
+    environment:
+      BROWSER_MODE: playwright
+      BROWSER_TIMEOUT_MS: ${BROWSER_TIMEOUT_MS:-15000}
+      BROWSER_SCREENSHOT: ${BROWSER_SCREENSHOT:-0}
+    # Chromium needs slightly more memory / shm
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    shm_size: "256mb"

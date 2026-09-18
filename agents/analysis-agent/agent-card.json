@@ -1,0 +1,20 @@
+{
+  "name": "Analysis Agent",
+  "description": "Business analysis over research and knowledge inputs for AOP Task DAGs.",
+  "url": "http://127.0.0.1:8004/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": { "streaming": false },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text", "application/json"],
+  "skills": [
+    {
+      "id": "business-analysis",
+      "name": "Business Analysis",
+      "description": "Synthesize research into structured business insights",
+      "tags": ["analysis", "business"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"]
+    }
+  ]
+}

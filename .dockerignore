@@ -1,0 +1,10 @@
+.git
+**/.next
+**/node_modules
+**/bin
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.uvicorn-*.log
+apps/web/.env.local
+**/agent-transcripts

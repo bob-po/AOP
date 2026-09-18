@@ -1,0 +1,20 @@
+{
+  "name": "Report Agent",
+  "description": "Generate markdown/PDF style reports from upstream analysis (Phase 3 stub).",
+  "url": "http://127.0.0.1:8003/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": { "streaming": false },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text", "text/markdown"],
+  "skills": [
+    {
+      "id": "report-generation",
+      "name": "Report Generation",
+      "description": "Generate a structured report from research inputs",
+      "tags": ["report", "writing"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "text/markdown"]
+    }
+  ]
+}

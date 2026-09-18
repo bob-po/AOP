@@ -1,0 +1,58 @@
+{
+  "documents": [
+    {
+      "doc_id": "kb-aop-001",
+      "title": "AOP Control Plane Overview",
+      "tags": ["aop", "architecture", "orchestrator", "control-plane"],
+      "content": "A2A Agent Orchestration Platform (AOP) is a control plane for multi-agent collaboration. Core modules: Registry, Planner, Router, Scheduler, Executor, Aggregator, Trace, Memory, Evaluation, and Artifact store backed by PostgreSQL, Redis, and MinIO."
+    },
+    {
+      "doc_id": "kb-aop-002",
+      "title": "Task DAG Scheduling",
+      "tags": ["dag", "scheduler", "parallel", "retry"],
+      "content": "The Planner turns a user goal into a Task DAG of skill nodes. Ready nodes without unmet dependencies are enqueued to Redis Streams for parallel execution. Failures trigger retry, optional failover, circuit breaker protection, and stale reclaim for long-running nodes."
+    },
+    {
+      "doc_id": "kb-aop-003",
+      "title": "A2A Protocol Contract",
+      "tags": ["a2a", "agent-card", "json-rpc"],
+      "content": "Agents expose Agent Card at /.well-known/agent-card.json and accept JSON-RPC message/send and tasks/get. Skills are declared on the card and indexed by the Gateway registry for discovery and smart routing."
+    },
+    {
+      "doc_id": "kb-aop-004",
+      "title": "Artifacts and MinIO",
+      "tags": ["artifact", "minio", "storage"],
+      "content": "Node outputs are persisted under s3://aop-artifacts/tasks/{task_id}/{node}/. The Console Artifacts page lists and previews multimodal deliverables produced by search, RAG, report, and media agents."
+    },
+    {
+      "doc_id": "kb-aop-005",
+      "title": "Realtime Trace and Pub/Sub",
+      "tags": ["websocket", "pubsub", "trace", "redis"],
+      "content": "Task lifecycle events are written to Redis Streams and fan-out via Pub/Sub channels aop:task:{id}:events and aop:events. The Console uses WebSocket as the primary live path with HTTP polling fallback."
+    },
+    {
+      "doc_id": "kb-aop-006",
+      "title": "API Key Auth and Scopes",
+      "tags": ["auth", "api-key", "security", "scopes"],
+      "content": "Gateway enforces Bearer or X-API-Key authentication when AUTH_REQUIRED=true. Mutating routes require scopes such as agent.write and task.write. Prometheus /metrics remains public for scraping."
+    },
+    {
+      "doc_id": "kb-biz-001",
+      "title": "Enterprise Research Workflow",
+      "tags": ["research", "workflow", "report", "hitl"],
+      "content": "The default enterprise research workflow runs web-search and knowledge-search in parallel, optionally business-analysis, then report-generation to produce a markdown deliverable. Report nodes may pause for human-in-the-loop approval."
+    },
+    {
+      "doc_id": "kb-biz-002",
+      "title": "Knowledge Retrieval Best Practices",
+      "tags": ["rag", "retrieval", "tfidf", "citations"],
+      "content": "Local RAG uses a hybrid TF-IDF vector index plus keyword boost over the enterprise corpus. Answers should cite doc_id and snippets so downstream report agents can attribute sources correctly."
+    },
+    {
+      "doc_id": "kb-biz-003",
+      "title": "AI Product Research Checklist",
+      "tags": ["ai", "product", "research", "checklist"],
+      "content": "When researching an AI product: capture positioning, target users, core capabilities, model providers, pricing signals, competitive alternatives, and integration constraints. Combine public web search with internal knowledge base findings."
+    }
+  ]
+}

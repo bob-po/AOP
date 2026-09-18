@@ -1,0 +1,31 @@
+# Local / docker default: swallow alerts (no external webhook required).
+# Override receivers in production via volume mount.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'null'
+  routes:
+    - matchers:
+        - severity = critical
+      receiver: 'null'
+      continue: false
+    - matchers:
+        - severity = warning
+      receiver: 'null'
+      continue: false
+
+receivers:
+  - name: 'null'
+
+inhibit_rules:
+  - source_matchers:
+      - severity = critical
+    target_matchers:
+      - severity = warning
+    equal: ['alertname', 'service']

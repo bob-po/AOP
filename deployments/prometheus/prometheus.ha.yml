@@ -1,0 +1,47 @@
+# Prometheus scrape config for HA compose (3× orchestrator)
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'aop-ha'
+    environment: 'docker'
+
+scrape_configs:
+  - job_name: 'orchestrator'
+    static_configs:
+      - targets:
+          - 'orchestrator-1:8090'
+          - 'orchestrator-2:8091'
+          - 'orchestrator-3:8092'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  - job_name: 'orchestrator-legacy'
+    static_configs:
+      - targets:
+          - 'orchestrator-1:8090'
+          - 'orchestrator-2:8091'
+          - 'orchestrator-3:8092'
+    metrics_path: '/v1/metrics'
+    params:
+      format: ['prometheus']
+    scrape_interval: 30s
+
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+rule_files:
+  - "alerts/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093

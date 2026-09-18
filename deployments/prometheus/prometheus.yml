@@ -1,0 +1,64 @@
+# Prometheus scrape config for full docker stacks (single / ha)
+# Targets must resolve on the compose network.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'aop'
+    environment: 'docker'
+
+scrape_configs:
+  # Primary: FastAPI /metrics on the orchestrator HTTP port (always present)
+  - job_name: 'orchestrator'
+    static_configs:
+      - targets: ['orchestrator:8090']
+        labels:
+          instance: 'orchestrator'
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Optional dedicated prometheus_client HTTP server (METRICS_PORT=9091)
+  - job_name: 'orchestrator-prom-client'
+    static_configs:
+      - targets: ['orchestrator:9091']
+    scrape_interval: 30s
+    # Soft-fail when sidecar metrics port is down
+    scrape_timeout: 5s
+
+  # Legacy JSON→text metrics (DB snapshot + client metrics)
+  - job_name: 'orchestrator-legacy'
+    static_configs:
+      - targets: ['orchestrator:8090']
+    metrics_path: '/v1/metrics'
+    params:
+      format: ['prometheus']
+    scrape_interval: 30s
+
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Worker process counters (agent calls happen here)
+  - job_name: 'worker'
+    static_configs:
+      - targets: ['worker:9091']
+        labels:
+          instance: 'worker'
+    scrape_interval: 30s
+    scrape_timeout: 5s
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+rule_files:
+  - "alerts/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093

@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=Manrope:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Fraunces", Georgia, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  color: #e8f2ee;
+  background:
+    radial-gradient(1200px 600px at 70% -10%, rgba(61, 255, 168, 0.12), transparent 55%),
+    radial-gradient(900px 500px at -10% 30%, rgba(255, 180, 84, 0.08), transparent 50%),
+    linear-gradient(160deg, #0a1210 0%, #0f1c18 45%, #12241e 100%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(61, 255, 168, 0.28);
+}

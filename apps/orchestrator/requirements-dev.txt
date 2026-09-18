@@ -1,0 +1,2 @@
+# Dev / CI extras for Phase 13+
+pytest>=8.0

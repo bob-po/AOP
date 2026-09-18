@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Go
+apps/gateway/bin/
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local data
+*.log
+.tmp/
+.data/
+
+# Secrets / local env
+.env.*
+!.env.example
+!**/.env.example
+apps/web/.env.local
+*.pem
+credentials.json
+secrets/
+
+# Runtime junk
+*.err
+.gateway.err
+.orch.err
+.worker.err

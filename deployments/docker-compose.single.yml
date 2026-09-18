@@ -1,0 +1,456 @@
+# AOP single-node full stack (cloud / one VM)
+# Usage: ./deploy.sh up   (from deployments/)
+
+name: aop
+
+x-agent-env: &agent-env
+  SEARCH_MODE: ${SEARCH_MODE:-auto}
+
+x-agent-resources: &agent-resources
+  deploy:
+    resources:
+      limits:
+        cpus: "1.0"
+        memory: 512M
+      reservations:
+        cpus: "0.1"
+        memory: 64M
+
+# Phase 27: baseline container hardening for all agents
+x-agent-security: &agent-security
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./seccomp/agent-hardened.json
+  cap_drop:
+    - ALL
+
+x-code-security: &code-security
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./seccomp/code-agent.json
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=64M,mode=1777
+    - /tmp/aop:size=32M,mode=1777
+
+x-browser-security: &browser-security
+  security_opt:
+    - no-new-privileges:true
+    - seccomp=./seccomp/browser-agent.json
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=128M,mode=1777
+    - /tmp/aop:size=64M,mode=1777
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aop-postgres
+    environment:
+      POSTGRES_USER: aop
+      POSTGRES_PASSWORD: aop
+      POSTGRES_DB: aop
+    volumes:
+      - aop_pg_data:/var/lib/postgresql/data
+      - ../infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aop -d aop"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: aop-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - aop_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: aop-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: aopminio
+      MINIO_ROOT_PASSWORD: aopminio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - aop_minio_data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: aop-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 aopminio aopminio123;
+      mc mb -p local/aop-artifacts || true;
+      mc anonymous set download local/aop-artifacts || true;
+      exit 0;
+      "
+    restart: "no"
+
+  search-agent:
+    build:
+      context: ../agents/search-agent
+    container_name: aop-search-agent
+    environment:
+      <<: *agent-env
+      PORT: "8001"
+      AGENT_URL: http://search-agent:8001/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  rag-agent:
+    build:
+      context: ../agents/rag-agent
+    container_name: aop-rag-agent
+    environment:
+      PORT: "8002"
+      AGENT_URL: http://rag-agent:8002/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  report-agent:
+    build:
+      context: ../agents/report-agent
+    container_name: aop-report-agent
+    environment:
+      PORT: "8003"
+      AGENT_URL: http://report-agent:8003/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  analysis-agent:
+    build:
+      context: ../agents/analysis-agent
+    container_name: aop-analysis-agent
+    environment:
+      PORT: "8004"
+      AGENT_URL: http://analysis-agent:8004/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  image-agent:
+    build:
+      context: ../agents/image-agent
+    container_name: aop-image-agent
+    environment:
+      PORT: "8005"
+      AGENT_URL: http://image-agent:8005/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  video-agent:
+    build:
+      context: ../agents/video-agent
+    container_name: aop-video-agent
+    environment:
+      PORT: "8006"
+      AGENT_URL: http://video-agent:8006/
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  code-agent:
+    build:
+      context: ../agents/code-agent
+    container_name: aop-code-agent
+    environment:
+      PORT: "8007"
+      AGENT_URL: http://code-agent:8007/
+      AOP_SECCOMP_PROFILE: code-agent
+    <<: [*agent-resources, *code-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8007/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  browser-agent:
+    build:
+      context: ../agents/browser-agent
+    container_name: aop-browser-agent
+    environment:
+      PORT: "8008"
+      AGENT_URL: http://browser-agent:8008/
+      AOP_SECCOMP_PROFILE: browser-agent
+      BROWSER_MODE: ${BROWSER_MODE:-stub}
+      BROWSER_EGRESS_ALLOWLIST: ${BROWSER_EGRESS_ALLOWLIST:-}
+      BROWSER_TIMEOUT_MS: ${BROWSER_TIMEOUT_MS:-15000}
+    <<: [*agent-resources, *browser-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ../apps/gateway
+    container_name: aop-gateway
+    environment:
+      GATEWAY_ADDR: ":8080"
+      DATABASE_URL: postgres://aop:aop@postgres:5432/aop?sslmode=disable
+      REDIS_ADDR: redis:6379
+      ORCHESTRATOR_URL: http://orchestrator:8090
+      DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-true}
+      SEED_DEV_KEY: ${SEED_DEV_KEY:-true}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: apps/orchestrator/Dockerfile
+    container_name: aop-orchestrator
+    environment: &orch-env
+      DATABASE_URL: postgresql://aop:aop@postgres:5432/aop
+      REDIS_URL: redis://redis:6379/0
+      GATEWAY_URL: http://gateway:8080
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: aopminio
+      MINIO_SECRET_KEY: aopminio123
+      MINIO_BUCKET: aop-artifacts
+      MINIO_SECURE: "false"
+      MINIO_PUBLIC_BASE: ${AOP_PUBLIC_SCHEME:-http}://${AOP_PUBLIC_HOST:-127.0.0.1}:9000/aop-artifacts
+      AOP_AGENT_SEARCH_URL: http://search-agent:8001
+      AOP_AGENT_RAG_URL: http://rag-agent:8002
+      AOP_AGENT_REPORT_URL: http://report-agent:8003
+      AOP_AGENT_ANALYSIS_URL: http://analysis-agent:8004
+      AOP_AGENT_IMAGE_URL: http://image-agent:8005
+      AOP_AGENT_VIDEO_URL: http://video-agent:8006
+      AOP_AGENT_CODE_URL: http://code-agent:8007
+      AOP_AGENT_BROWSER_URL: http://browser-agent:8008
+      METRICS_PORT: "9091"
+      ORCHESTRATOR_PORT: "8090"
+      AOP_RUNTIME: docker
+      AGENT_SANDBOX: "1"
+      AGENT_SANDBOX_STRICT: "0"
+      AGENT_ALLOW_HIGH_RISK: "1"
+      TENANT_QUOTAS: "1"
+      TENANT_EGRESS: "1"
+      STRIPE_WEBHOOK_ALLOW_UNSIGNED: ${STRIPE_WEBHOOK_ALLOW_UNSIGNED:-1}
+      AGENT_MAX_INPUT_CHARS: "50000"
+      AGENT_MAX_OUTPUT_CHARS: "200000"
+      AGENT_SKILL_TIMEOUTS: "code-execution:30,browser-automation:60"
+      AOP_SECCOMP_DIR: /seccomp
+    ports:
+      - "8090:8090"
+      - "9091:9091"
+    volumes:
+      - ./seccomp:/seccomp:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: apps/orchestrator/Dockerfile
+    container_name: aop-worker
+    command: ["python", "worker.py"]
+    environment:
+      <<: *orch-env
+    volumes:
+      - ./seccomp:/seccomp:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_BASE: ${AOP_PUBLIC_SCHEME:-http}://${AOP_PUBLIC_HOST:-127.0.0.1}:8080
+        NEXT_PUBLIC_API_KEY: ${NEXT_PUBLIC_API_KEY:-aop_sk_dev_local_0000000000000001}
+    container_name: aop-web
+    ports:
+      - "3000:3000"
+    depends_on:
+      gateway:
+        condition: service_started
+    restart: unless-stopped
+
+  register-agents:
+    build:
+      context: ..
+      dockerfile: apps/orchestrator/Dockerfile
+    container_name: aop-register-agents
+    working_dir: /workspace
+    command: ["python", "/workspace/deployments/register_agents.py"]
+    volumes:
+      - ../deployments/register_agents.py:/workspace/deployments/register_agents.py:ro
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-aop_sk_dev_local_0000000000000001}
+      AOP_AGENT_SEARCH_URL: http://search-agent:8001
+      AOP_AGENT_RAG_URL: http://rag-agent:8002
+      AOP_AGENT_REPORT_URL: http://report-agent:8003
+      AOP_AGENT_ANALYSIS_URL: http://analysis-agent:8004
+      AOP_AGENT_IMAGE_URL: http://image-agent:8005
+      AOP_AGENT_VIDEO_URL: http://video-agent:8006
+      AOP_AGENT_CODE_URL: http://code-agent:8007
+      AOP_AGENT_BROWSER_URL: http://browser-agent:8008
+    depends_on:
+      gateway:
+        condition: service_healthy
+      search-agent:
+        condition: service_started
+      rag-agent:
+        condition: service_started
+      report-agent:
+        condition: service_started
+      analysis-agent:
+        condition: service_started
+      image-agent:
+        condition: service_started
+      video-agent:
+        condition: service_started
+      code-agent:
+        condition: service_started
+      browser-agent:
+        condition: service_started
+    restart: "no"
+
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aop-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - aop_prometheus_data:/prometheus
+    depends_on:
+      orchestrator:
+        condition: service_started
+      gateway:
+        condition: service_started
+    restart: unless-stopped
+    profiles: ["observability"]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aop-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/aop/overview-dashboard.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - aop_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: aop-alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - aop_alertmanager_data:/alertmanager
+    restart: unless-stopped
+    profiles: ["observability"]
+
+volumes:
+  aop_pg_data:
+  aop_redis_data:
+  aop_minio_data:
+  aop_prometheus_data:
+  aop_grafana_data:
+  aop_alertmanager_data:

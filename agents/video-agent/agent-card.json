@@ -1,0 +1,20 @@
+{
+  "name": "Video Agent",
+  "description": "Text-to-video stub agent (AIVE-ready shape) for AOP media workflows.",
+  "url": "http://127.0.0.1:8006/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": { "streaming": false },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["application/json", "text"],
+  "skills": [
+    {
+      "id": "text-to-video",
+      "name": "Text to Video",
+      "description": "Generate a short promotional video storyboard / stub clip metadata",
+      "tags": ["video", "media", "aive"],
+      "inputModes": ["text"],
+      "outputModes": ["application/json", "text"]
+    }
+  ]
+}

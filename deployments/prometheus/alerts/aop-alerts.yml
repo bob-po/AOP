@@ -1,0 +1,115 @@
+groups:
+  - name: aop_alerts
+    interval: 30s
+    rules:
+      # Prefer live client counters (Phase 17); fallback-compatible with snapshot gauges
+      - alert: HighAgentFailureRate
+        expr: |
+          (
+            sum(rate(aop_agent_calls_total{status="failed"}[5m]))
+            /
+            clamp_min(sum(rate(aop_agent_calls_total[5m])), 0.001)
+          ) > 0.25
+        for: 5m
+        labels:
+          severity: warning
+          service: orchestrator
+        annotations:
+          summary: "High agent call failure rate"
+          description: "Agent failure rate is {{ $value | humanizePercentage }} over 5m"
+
+      - alert: AgentOffline
+        expr: aop_agents{status="offline"} > 0
+        for: 2m
+        labels:
+          severity: critical
+          service: orchestrator
+        annotations:
+          summary: "Agent is offline"
+          description: "{{ $value }} agents are offline"
+
+      - alert: TaskBacklog
+        expr: aop_tasks{status="running"} > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: orchestrator
+        annotations:
+          summary: "High task backlog"
+          description: "{{ $value }} tasks are currently running"
+
+      - alert: HighAgentLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(aop_agent_latency_seconds_bucket[5m])) by (le, agent)) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: orchestrator
+        annotations:
+          summary: "High agent p95 latency"
+          description: "p95 agent latency is {{ $value }}s"
+
+      - alert: HighAgentLatencySnapshot
+        expr: aop_agent_run_avg_latency_ms > 5000
+        for: 5m
+        labels:
+          severity: warning
+          service: orchestrator
+        annotations:
+          summary: "High average agent latency (DB snapshot)"
+          description: "Average agent latency is {{ $value }}ms"
+
+      - alert: GatewayLBNoHealthyTargets
+        expr: aop_gateway_lb_healthy_targets == 0 and aop_gateway_lb_targets > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: "No healthy orchestrator targets"
+          description: "Gateway LB reports 0 healthy backends"
+
+      - alert: HighTaskFailureRate
+        expr: |
+          (
+            sum(rate(aop_tasks_total{status="failed"}[15m]))
+            /
+            clamp_min(sum(rate(aop_tasks_total[15m])), 0.001)
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          service: orchestrator
+        annotations:
+          summary: "High task failure rate"
+          description: "Task failure rate is {{ $value | humanizePercentage }} over 15m"
+
+      - alert: OrchestratorDown
+        expr: up{job="orchestrator"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: orchestrator
+        annotations:
+          summary: "Orchestrator service is down"
+          description: "Orchestrator scrape target is down"
+
+      - alert: WorkerDown
+        expr: up{job="worker"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: "Worker metrics scrape is down"
+          description: "Worker :9091/metrics has been unreachable"
+
+      - alert: GatewayDown
+        expr: up{job="gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: "Gateway service is down"
+          description: "Gateway has been down for more than 1 minute"

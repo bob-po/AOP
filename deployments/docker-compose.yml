@@ -1,0 +1,165 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aop-postgres
+    environment:
+      POSTGRES_USER: aop
+      POSTGRES_PASSWORD: aop
+      POSTGRES_DB: aop
+    ports:
+      - "5432:5432"
+    volumes:
+      - aop_pg_data:/var/lib/postgresql/data
+      - ../infrastructure/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aop -d aop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aop-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - aop_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: aop-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: aopminio
+      MINIO_ROOT_PASSWORD: aopminio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - aop_minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: aop-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 aopminio aopminio123;
+      mc mb -p local/aop-artifacts || true;
+      mc anonymous set download local/aop-artifacts || true;
+      exit 0;
+      "
+
+  # Monitoring Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aop-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Apps typically run on the host with this compose file (infra-only)
+      - ./prometheus/prometheus.host.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - aop_prometheus_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aop-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - aop_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: aop-alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - aop_alertmanager_data:/alertmanager
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  webhook:
+    build:
+      context: ./webhook
+      dockerfile: Dockerfile
+    container_name: aop-webhook
+    ports:
+      - "5000:5000"
+    depends_on:
+      - alertmanager
+    restart: unless-stopped
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: aop-jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+    volumes:
+      - aop_jaeger_data:/tmp
+    restart: unless-stopped
+
+  search-agent:
+    build:
+      context: ../agents/search-agent
+      dockerfile: Dockerfile
+    container_name: aop-search-agent
+    environment:
+      AGENT_URL: http://search-agent:8001/
+      PORT: "8001"
+    ports:
+      - "8001:8001"
+    profiles:
+      - agents
+
+volumes:
+  aop_pg_data:
+  aop_redis_data:
+  aop_minio_data:
+  aop_prometheus_data:
+  aop_grafana_data:
+  aop_alertmanager_data:
+  aop_jaeger_data:

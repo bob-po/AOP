@@ -1,0 +1,24 @@
+{
+  "name": "Browser Agent",
+  "description": "Browser automation with Playwright Chromium (auto-fallback to stub) under seccomp + egress allowlist.",
+  "url": "http://127.0.0.1:8008/",
+  "version": "0.2.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text", "application/json"],
+  "skills": [
+    {
+      "id": "browser-automation",
+      "name": "Browser Automation",
+      "description": "Navigate to a URL with Chromium (or stub) and return title/snippet",
+      "tags": ["browser", "sandbox", "high-risk", "chromium"],
+      "examples": ["Open https://example.com and summarize the title"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"]
+    }
+  ]
+}
