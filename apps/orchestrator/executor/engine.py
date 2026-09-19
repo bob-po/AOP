@@ -43,23 +43,37 @@ try:
         handle_a2a_error,
         RetryPolicy,
         with_retry,
-        ErrorCategory,
         AOPError,
         get_circuit_breaker,
     )
     ERROR_HANDLING_AVAILABLE = True
 except ImportError:
     ERROR_HANDLING_AVAILABLE = False
-    # Fallback implementations
-    def handle_a2a_error(error):
-        return error
+    CircuitBreakerOpenError = Exception  # type: ignore
+    handle_a2a_error = lambda e: e
     RetryPolicy = None
     with_retry = None
-    ErrorCategory = None
     AOPError = Exception
-    CircuitBreakerOpenError = Exception  # type: ignore
     def get_circuit_breaker(service: str):  # type: ignore
         return None
+
+# Enhanced failure handling imports (P36.3)
+try:
+    from enhanced_failure_handling import (
+        ErrorCategory as EnhancedErrorCategory,
+        RecoveryStrategy,
+        FailureContext,
+        classify_error_module as classify_error,
+        determine_recovery_strategy_module as determine_recovery_strategy,
+    )
+    ENHANCED_FAILURE_HANDLING_AVAILABLE = True
+except ImportError:
+    ENHANCED_FAILURE_HANDLING_AVAILABLE = False
+    EnhancedErrorCategory = None
+    RecoveryStrategy = None
+    FailureContext = None
+    classify_error = lambda e: "unknown"
+    determine_recovery_strategy = lambda ec, ma: "retry"
 
 # Request tracking for P36.1 idempotency (lazy import to avoid circular dependency)
 REQUEST_TRACKING_AVAILABLE = False
@@ -208,6 +222,7 @@ class ExecutionEngine:
                     attempt=attempt,
                     agent_id=None,
                     exclude=exclude,
+                    idempotency_key=None,  # Not generated yet
                 )
                 if TRACING_AVAILABLE:
                     record_span_exception(exc)
@@ -233,6 +248,7 @@ class ExecutionEngine:
                     attempt=attempt,
                     agent_id=routed.agent_id,
                     exclude=exclude | {routed.agent_id},
+                    idempotency_key=None,  # Not generated yet
                 )
                 return
 
@@ -241,9 +257,11 @@ class ExecutionEngine:
                 print(f"[worker] skip claim node={node_key} (not ready/retrying)")
                 return
 
-            # P36.1: Generate idempotency key for this execution
-            import uuid
-            idempotency_key = f"req_{uuid.uuid4().hex}"
+            # P36.1: Get or generate stable idempotency key for this node
+            idempotency_key = self.scheduler.get_node_idempotency_key(task_id, node_key)
+            if not idempotency_key:
+                # Fallback for nodes created before migration
+                idempotency_key = f"req_{task_id[:8]}_{node_key}"
             
             # P36.1: Track the request before execution
             tracking_service = self._get_request_tracking_service()
@@ -412,6 +430,7 @@ class ExecutionEngine:
                     attempt=attempt,
                     agent_id=routed.agent_id,
                     exclude=exclude | {routed.agent_id},
+                    idempotency_key=idempotency_key,
                 )
             except Exception as exc:  # noqa: BLE001
                 if TRACING_AVAILABLE:
@@ -422,6 +441,7 @@ class ExecutionEngine:
                     attempt=attempt,
                     agent_id=routed.agent_id,
                     exclude=exclude | {routed.agent_id},
+                    idempotency_key=idempotency_key,
                 )
 
     def _on_failure(
@@ -432,6 +452,7 @@ class ExecutionEngine:
         attempt: int,
         agent_id: str | None,
         exclude: set[str],
+        idempotency_key: str | None = None,
     ) -> None:
         task_id = fields["task_id"]
         node_key = fields["node_key"]
@@ -440,13 +461,24 @@ class ExecutionEngine:
 
         print(f"[worker] failure node={node_key} attempt={attempt}: {error}")
         
-        # P36.1: Mark request as failed if tracking available
-        tracking_service = self._get_request_tracking_service()
-        if tracking_service:
+        # P36.3: Enhanced error classification
+        if ENHANCED_FAILURE_HANDLING_AVAILABLE:
             try:
-                # Try to get idempotency_key from fields (would need to be passed in)
-                # For now, we'll skip failure tracking as idempotency_key is not in fields
-                pass
+                error_category = classify_error(error)
+                recovery_strategy = determine_recovery_strategy(error_category)
+                print(f"[worker] error classification: {error_category.value}, strategy: {recovery_strategy.value}")
+            except Exception as e:
+                print(f"[worker] enhanced failure handling error: {e}")
+        
+        # P36.1: Mark request as failed or unknown (P1-006)
+        tracking_service = self._get_request_tracking_service()
+        if tracking_service and idempotency_key:
+            try:
+                # Mark as unknown on timeout, otherwise failed
+                if "timeout" in error.lower():
+                    tracking_service.mark_request_unknown(idempotency_key, reason=error)
+                else:
+                    tracking_service.mark_request_failed(idempotency_key, error)
             except Exception as e:
                 print(f"[worker] request failure tracking error: {e}")
         

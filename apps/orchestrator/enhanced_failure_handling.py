@@ -186,6 +186,45 @@ class EnhancedFailureHandler:
         return delay + (time.time() % jitter)
 
 
+# Module-level functions for easier integration
+def classify_error_module(error_message: str) -> ErrorCategory:
+    """Classify error based on message content (module-level function)."""
+    error_lower = error_message.lower()
+    
+    if "timeout" in error_lower or "timed out" in error_lower:
+        return ErrorCategory.TIMEOUT
+    elif "connection" in error_lower or "network" in error_lower:
+        return ErrorCategory.NETWORK
+    elif "agent" in error_lower and ("not found" in error_lower or "unavailable" in error_lower):
+        return ErrorCategory.AGENT_UNAVAILABLE
+    elif "agent" in error_lower:
+        return ErrorCategory.AGENT_ERROR
+    elif "validation" in error_lower or "invalid" in error_lower:
+        return ErrorCategory.VALIDATION
+    elif "resource" in error_lower or "exhausted" in error_lower:
+        return ErrorCategory.RESOURCE_EXHAUSTED
+    else:
+        return ErrorCategory.UNKNOWN
+
+
+def determine_recovery_strategy_module(error_category: ErrorCategory, max_attempts: int = 3) -> RecoveryStrategy:
+    """Determine recovery strategy based on error category (module-level function)."""
+    if error_category == ErrorCategory.TIMEOUT:
+        return RecoveryStrategy.RETRY_WITH_SAME_AGENT
+    elif error_category == ErrorCategory.NETWORK:
+        return RecoveryStrategy.RETRY_WITH_SAME_AGENT
+    elif error_category == ErrorCategory.AGENT_UNAVAILABLE:
+        return RecoveryStrategy.RETRY_WITH_DIFFERENT_AGENT
+    elif error_category == ErrorCategory.AGENT_ERROR:
+        return RecoveryStrategy.RETRY_WITH_DIFFERENT_AGENT
+    elif error_category == ErrorCategory.VALIDATION:
+        return RecoveryStrategy.FAIL_FAST
+    elif error_category == ErrorCategory.RESOURCE_EXHAUSTED:
+        return RecoveryStrategy.CIRCUIT_BREAK
+    else:
+        return RecoveryStrategy.RETRY_WITH_SAME_AGENT
+
+
 # Singleton instance
 _failure_handler: EnhancedFailureHandler | None = None
 

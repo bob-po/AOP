@@ -47,40 +47,42 @@ class RequestTrackingService:
         """Track a new A2A request."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
             with conn.transaction():
-                try:
-                    row = conn.execute(
-                        """
-                        INSERT INTO a2a_requests (
-                          idempotency_key, task_id, node_id, agent_id,
-                          status, request_json, created_at, updated_at
-                        ) VALUES (
-                          %s, %s::uuid, %s::uuid, %s::uuid,
-                          'pending', %s::jsonb, %s, %s
-                        )
-                        RETURNING id::text, status, created_at
-                        """,
-                        (
-                            idempotency_key,
-                            task_id,
-                            node_id,
-                            agent_id,
-                            Jsonb(request_json),
-                            _utc_now(),
-                            _utc_now(),
-                        ),
-                    ).fetchone()
-                    return dict(row) if row else {}
-                except psycopg.errors.UniqueViolation:
-                    # Request already tracked
-                    existing = conn.execute(
-                        """
-                        SELECT id::text, status, response_json, error_message, created_at
-                        FROM a2a_requests
-                        WHERE idempotency_key = %s
-                        """,
-                        (idempotency_key,),
-                    ).fetchone()
-                    return dict(existing) if existing else {}
+                # First check if request already exists
+                existing = conn.execute(
+                    """
+                    SELECT id::text, idempotency_key, status, response_json, error_message, created_at
+                    FROM a2a_requests
+                    WHERE idempotency_key = %s
+                    """,
+                    (idempotency_key,),
+                ).fetchone()
+                
+                if existing:
+                    return dict(existing)
+                
+                # Insert new request
+                row = conn.execute(
+                    """
+                    INSERT INTO a2a_requests (
+                      idempotency_key, task_id, node_id, agent_id,
+                      status, request_json, created_at, updated_at
+                    ) VALUES (
+                      %s, %s::uuid, %s::uuid, %s::uuid,
+                      'pending', %s::jsonb, %s, %s
+                    )
+                    RETURNING id::text, idempotency_key, status, created_at
+                    """,
+                    (
+                        idempotency_key,
+                        task_id,
+                        node_id,
+                        agent_id,
+                        Jsonb(request_json),
+                        _utc_now(),
+                        _utc_now(),
+                    ),
+                ).fetchone()
+                return dict(row) if row else {}
 
     def get_request(self, idempotency_key: str) -> dict[str, Any] | None:
         """Get an existing request by idempotency key."""
@@ -156,6 +158,28 @@ class RequestTrackingService:
                     RETURNING id::text
                     """,
                     (error_message, _utc_now(), _utc_now(), idempotency_key),
+                ).fetchone()
+                return result is not None
+
+    def mark_request_unknown(
+        self,
+        idempotency_key: str,
+        reason: str = "timeout",
+    ) -> bool:
+        """Mark a request as unknown (timeout/uncertain result)."""
+        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            with conn.transaction():
+                result = conn.execute(
+                    """
+                    UPDATE a2a_requests
+                    SET status = 'unknown',
+                        error_message = %s,
+                        updated_at = %s,
+                        finished_at = %s
+                    WHERE idempotency_key = %s AND status IN ('pending', 'running')
+                    RETURNING id::text
+                    """,
+                    (reason, _utc_now(), _utc_now(), idempotency_key),
                 ).fetchone()
                 return result is not None
 

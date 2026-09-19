@@ -125,14 +125,17 @@ class Scheduler:
                 for node in plan.nodes:
                     node_uuid = str(uuid.uuid4())
                     node_rows[node.id] = node_uuid
+                    # P36.1: Generate stable idempotency key for this node
+                    node_idempotency_key = f"req_{task_id[:8]}_{node.id}"
+                    
                     conn.execute(
                         """
                         INSERT INTO task_nodes (
                           id, task_id, node_key, skill, status, input_json,
-                          attempt, max_retry, created_at, updated_at
+                          attempt, max_retry, idempotency_key, created_at, updated_at
                         ) VALUES (
                           %s::uuid, %s::uuid, %s, %s, 'pending', %s::jsonb,
-                          0, 3, %s, %s
+                          0, 3, %s, %s, %s
                         )
                         """,
                         (
@@ -141,6 +144,7 @@ class Scheduler:
                             node.id,
                             node.skill,
                             Jsonb({"goal": goal, "node_id": node.id}),
+                            node_idempotency_key,
                             now,
                             now,
                         ),
@@ -402,6 +406,20 @@ class Scheduler:
                 now = _utc_now()
                 plan_node = next((n for n in plan.nodes if n.id == node_key), None)
                 needs_hitl = bool(plan_node and plan_node.requires_approval)
+                
+                # P36.2: Write task event to outbox
+                self.write_outbox_event(
+                    "task_event",
+                    {
+                        "task_id": task_id,
+                        "node_key": node_key,
+                        "event_type": "node_success",
+                        "output": output,
+                        "a2a_task_id": a2a_task_id,
+                        "latency_ms": latency_ms,
+                    },
+                    "task_events"
+                )
                 target_status = "waiting_for_user" if needs_hitl else "success"
 
                 node = conn.execute(
@@ -507,6 +525,21 @@ class Scheduler:
                     return {"decision": "failed", "attempt": attempt, "max_retry": 0}
 
                 max_retry = int(row["max_retry"] or 3)
+                
+                # P36.2: Write task event to outbox
+                self.write_outbox_event(
+                    "task_event",
+                    {
+                        "task_id": task_id,
+                        "node_key": node_key,
+                        "event_type": "node_failure",
+                        "error": error,
+                        "attempt": attempt,
+                        "agent_id": agent_id,
+                    },
+                    "task_events"
+                )
+                
                 if attempt < max_retry:
                     conn.execute(
                         """
@@ -1154,6 +1187,17 @@ class Scheduler:
             return False
         return service.mark_request_failed(idempotency_key, error_message)
 
+    def mark_a2a_request_unknown(
+        self,
+        idempotency_key: str,
+        reason: str = "timeout",
+    ) -> bool:
+        """Mark an A2A request as unknown (timeout/uncertain result)."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return False
+        return service.mark_request_unknown(idempotency_key, reason)
+
     def is_a2a_request_completed(self, idempotency_key: str) -> bool:
         """Check if an A2A request is already completed."""
         service = self._get_request_tracking_service()
@@ -1168,12 +1212,25 @@ class Scheduler:
             return None
         return service.get_cached_response(idempotency_key)
 
+    def get_node_idempotency_key(self, task_id: str, node_key: str) -> str | None:
+        """Get the stable idempotency key for a node."""
+        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT idempotency_key
+                FROM task_nodes
+                WHERE task_id = %s::uuid AND node_key = %s
+                """,
+                (task_id, node_key),
+            ).fetchone()
+            return row["idempotency_key"] if row else None
+
     def get_node_info(self, task_id: str, node_key: str) -> dict[str, Any] | None:
         """Get node information for request tracking."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
             row = conn.execute(
                 """
-                SELECT id::text, task_id::text, node_key, skill, status
+                SELECT id::text, task_id::text, node_key, skill, status, idempotency_key
                 FROM task_nodes
                 WHERE task_id = %s::uuid AND node_key = %s
                 """,
