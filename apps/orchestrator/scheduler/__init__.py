@@ -17,6 +17,9 @@ from planner.dag import PlanNode, TaskPlan, ready_node_ids, validate_plan
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
+# Request tracking will be imported lazily in methods to avoid circular dependency
+# Outbox pattern for P36.2 distributed transactions (lazy import)
+
 __all__ = [
     "DEFAULT_TENANT_ID",
     "Scheduler",
@@ -47,6 +50,8 @@ class Scheduler:
             "postgresql://aop:aop@127.0.0.1:5432/aop",
         )
         self.tenant_id = tenant_id
+        self._request_tracking_service = None  # Lazy-loaded
+        self._outbox_processor = None  # Lazy-loaded for P36.2
 
     def create_task(
         self,
@@ -1062,6 +1067,119 @@ class Scheduler:
                 _utc_now(),
             ),
         )
+
+    # P36.1: Request tracking methods for idempotency (lazy import to avoid circular dependency)
+    def _get_request_tracking_service(self):
+        """Lazy import of request tracking service."""
+        if self._request_tracking_service is None:
+            try:
+                from request_tracking import get_request_tracking_service
+                self._request_tracking_service = get_request_tracking_service()
+            except ImportError:
+                self._request_tracking_service = None
+        return self._request_tracking_service
+
+    # P36.2: Outbox pattern methods for distributed transactions
+    def _get_outbox_processor(self):
+        """Lazy import of outbox processor."""
+        if self._outbox_processor is None:
+            try:
+                from outbox import get_outbox_processor
+                self._outbox_processor = get_outbox_processor()
+            except ImportError:
+                self._outbox_processor = None
+        return self._outbox_processor
+
+    def write_outbox_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        target_stream: str,
+    ) -> str | None:
+        """Write an outbox event for reliable message delivery."""
+        processor = self._get_outbox_processor()
+        if not processor:
+            return None
+        return processor.write_event(event_type, payload, target_stream)
+
+    def track_a2a_request(
+        self,
+        idempotency_key: str,
+        task_id: str,
+        node_id: str,
+        agent_id: str,
+        request_json: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Track an A2A request for idempotency."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return None
+        return service.track_request(
+            idempotency_key, task_id, node_id, agent_id, request_json
+        )
+
+    def get_a2a_request(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Get an existing A2A request by idempotency key."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return None
+        return service.get_request(idempotency_key)
+
+    def mark_a2a_request_running(self, idempotency_key: str) -> bool:
+        """Mark an A2A request as running."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return False
+        return service.mark_request_running(idempotency_key)
+
+    def mark_a2a_request_completed(
+        self,
+        idempotency_key: str,
+        response_json: dict[str, Any],
+    ) -> bool:
+        """Mark an A2A request as completed."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return False
+        return service.mark_request_completed(idempotency_key, response_json)
+
+    def mark_a2a_request_failed(
+        self,
+        idempotency_key: str,
+        error_message: str,
+    ) -> bool:
+        """Mark an A2A request as failed."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return False
+        return service.mark_request_failed(idempotency_key, error_message)
+
+    def is_a2a_request_completed(self, idempotency_key: str) -> bool:
+        """Check if an A2A request is already completed."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return False
+        return service.is_request_completed(idempotency_key)
+
+    def get_cached_a2a_response(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Get cached response for a completed A2A request."""
+        service = self._get_request_tracking_service()
+        if not service:
+            return None
+        return service.get_cached_response(idempotency_key)
+
+    def get_node_info(self, task_id: str, node_key: str) -> dict[str, Any] | None:
+        """Get node information for request tracking."""
+        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT id::text, task_id::text, node_key, skill, status
+                FROM task_nodes
+                WHERE task_id = %s::uuid AND node_key = %s
+                """,
+                (task_id, node_key),
+            ).fetchone()
+            return dict(row) if row else None
 
 # Import new components after class definitions to avoid circular imports
 from .job_queue import JobQueue

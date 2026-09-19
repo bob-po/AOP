@@ -23,6 +23,9 @@ _TASKS: dict[str, dict[str, Any]] = {}
 _CORPUS: list[dict[str, Any]] | None = None
 _INDEX: TfidfIndex | None = None
 
+# P36.1: In-memory idempotency cache for Agent-side deduplication
+_IDEMPOTENCY_CACHE: dict[str, dict[str, Any]] = {}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -188,11 +191,24 @@ async def a2a_rpc(request: Request) -> JSONResponse:
     params = body.get("params") or {}
     try:
         if method == "message/send":
+            # P36.1: Extract idempotency key if present
+            idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
+            
+            # P36.1: Check if request already processed (Agent-side idempotency)
+            if idempotency_key and idempotency_key in _IDEMPOTENCY_CACHE:
+                cached = _IDEMPOTENCY_CACHE[idempotency_key]
+                return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": cached})
+            
             query = _extract_query(params)
             meta = params.get("metadata") or {}
             skill = str(meta.get("skillId") or "knowledge-search")
             payload = run_rag(query)
             result = _completed_task(str(uuid.uuid4()), query, payload, skill)
+            
+            # P36.1: Cache result for idempotency
+            if idempotency_key:
+                _IDEMPOTENCY_CACHE[idempotency_key] = result
+            
             return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
         if method == "tasks/get":
             task = _TASKS.get(params.get("id"))

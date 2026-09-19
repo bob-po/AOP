@@ -61,6 +61,9 @@ except ImportError:
     def get_circuit_breaker(service: str):  # type: ignore
         return None
 
+# Request tracking for P36.1 idempotency (lazy import to avoid circular dependency)
+REQUEST_TRACKING_AVAILABLE = False
+
 # Enhanced retry policy for worker operations
 if ERROR_HANDLING_AVAILABLE:
     WORKER_RETRY_POLICY = RetryPolicy(
@@ -94,6 +97,17 @@ class ExecutionEngine:
         self.evaluations = EvaluationService()
         self.memory = MemoryService()
         self._last_stale_check = 0.0
+        self._request_tracking_service = None  # Lazy-loaded
+
+    def _get_request_tracking_service(self):
+        """Lazy import of request tracking service."""
+        if self._request_tracking_service is None:
+            try:
+                from request_tracking import get_request_tracking_service
+                self._request_tracking_service = get_request_tracking_service()
+            except ImportError:
+                self._request_tracking_service = None
+        return self._request_tracking_service
 
     def run_forever(self) -> None:
         print(f"[worker] started consumer={self.worker_id}")
@@ -118,10 +132,10 @@ class ExecutionEngine:
                 print(f"[worker] loop error: {exc}")
                 time.sleep(1)
 
-    def _execute_with_retry(self, endpoint: str, query: str, skill: str):
+    def _execute_with_retry(self, endpoint: str, query: str, skill: str, idempotency_key: str | None = None):
         """Execute A2A call with circuit breaker + retry."""
         def execute_a2a():
-            result = self.executor.execute(endpoint, query, skill_id=skill)
+            result = self.executor.execute(endpoint, query, skill_id=skill, idempotency_key=idempotency_key)
             if not result.ok:
                 error_msg = f"A2A execution failed with status {result.task.status.value}"
                 raise handle_a2a_error(RuntimeError(error_msg))
@@ -227,6 +241,29 @@ class ExecutionEngine:
                 print(f"[worker] skip claim node={node_key} (not ready/retrying)")
                 return
 
+            # P36.1: Generate idempotency key for this execution
+            import uuid
+            idempotency_key = f"req_{uuid.uuid4().hex}"
+            
+            # P36.1: Track the request before execution
+            tracking_service = self._get_request_tracking_service()
+            if tracking_service:
+                try:
+                    # Get node_id from scheduler
+                    node_info = self.scheduler.get_node_info(task_id, node_key)
+                    node_id = node_info.get("id") if node_info else str(uuid.uuid4())
+                    
+                    tracking_service.track_request(
+                        idempotency_key,
+                        task_id,
+                        node_id,
+                        routed.agent_id,
+                        {"query": query, "skill": skill, "attempt": attempt},
+                    )
+                    tracking_service.mark_request_running(idempotency_key)
+                except Exception as e:
+                    print(f"[worker] request tracking error: {e}")
+
             self.streams.publish_execution_event(
                 "agent.task.started",
                 {
@@ -243,9 +280,9 @@ class ExecutionEngine:
                     "worker.execute_a2a", agent_id=routed.agent_id, endpoint=endpoint
                 ) as exec_span:
                     if ERROR_HANDLING_AVAILABLE and WORKER_RETRY_POLICY:
-                        result = self._execute_with_retry(endpoint, query, skill)
+                        result = self._execute_with_retry(endpoint, query, skill, idempotency_key=idempotency_key)
                     else:
-                        result = self.executor.execute(endpoint, query, skill_id=skill)
+                        result = self.executor.execute(endpoint, query, skill_id=skill, idempotency_key=idempotency_key)
 
                     if not result.ok:
                         raise RuntimeError(f"a2a status={result.task.status.value}")
@@ -274,6 +311,14 @@ class ExecutionEngine:
                     },
                     "a2a_task_id": result.task.id,
                 }
+                
+                # P36.1: Mark request as completed
+                if tracking_service:
+                    try:
+                        tracking_service.mark_request_completed(idempotency_key, output)
+                    except Exception as e:
+                        print(f"[worker] request completion tracking error: {e}")
+                
                 ready_jobs = self._with_task_lock(
                     task_id,
                     lambda: self.scheduler.mark_success(
@@ -394,6 +439,17 @@ class ExecutionEngine:
         node_id = fields.get("node_id") or ""
 
         print(f"[worker] failure node={node_key} attempt={attempt}: {error}")
+        
+        # P36.1: Mark request as failed if tracking available
+        tracking_service = self._get_request_tracking_service()
+        if tracking_service:
+            try:
+                # Try to get idempotency_key from fields (would need to be passed in)
+                # For now, we'll skip failure tracking as idempotency_key is not in fields
+                pass
+            except Exception as e:
+                print(f"[worker] request failure tracking error: {e}")
+        
         try:
             record_agent_call(
                 skill or (agent_id or "unknown"),

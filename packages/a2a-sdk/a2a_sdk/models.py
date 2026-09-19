@@ -50,6 +50,7 @@ class Message:
     role: str  # user | agent
     parts: list[Part]
     message_id: str | None = None
+    idempotency_key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -58,6 +59,8 @@ class Message:
         }
         if self.message_id:
             payload["messageId"] = self.message_id
+        if self.idempotency_key:
+            payload["idempotencyKey"] = self.idempotency_key
         return payload
 
     @classmethod
@@ -67,6 +70,7 @@ class Message:
             role=raw.get("role", "agent"),
             parts=parts,
             message_id=raw.get("messageId") or raw.get("message_id"),
+            idempotency_key=raw.get("idempotencyKey") or raw.get("idempotency_key"),
         )
 
 

@@ -40,11 +40,12 @@ class A2AClient:
         self._card = fetch_agent_card(self.base_url, timeout=self.timeout)
         return self._card
 
-    def send_text(self, text: str, *, skill_id: str | None = None) -> Task:
+    def send_text(self, text: str, *, skill_id: str | None = None, idempotency_key: str | None = None) -> Task:
         message = Message(
             role="user",
             parts=[Part(type="text", text=text)],
             message_id=str(uuid.uuid4()),
+            idempotency_key=idempotency_key,
         )
         return self.send_message(message, skill_id=skill_id)
 
@@ -52,6 +53,8 @@ class A2AClient:
         params: dict[str, Any] = {"message": message.to_dict()}
         if skill_id:
             params["metadata"] = {"skillId": skill_id}
+        if message.idempotency_key:
+            params["idempotencyKey"] = message.idempotency_key
 
         result = self._rpc("message/send", params)
         if not isinstance(result, dict):
