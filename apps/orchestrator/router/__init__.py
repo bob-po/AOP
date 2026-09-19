@@ -1,4 +1,4 @@
-"""Router v2: Skill Match + Online + scored selection (latency / success / priority)."""
+"""Router v3: Skill Match + Online + configurable scored selection (latency / success / priority)."""
 
 from __future__ import annotations
 
@@ -16,9 +16,18 @@ try:
 except ImportError:  # pragma: no cover
     redis = None  # type: ignore
 
+from .scoring import ScoringEngine, ScoringPolicy
+
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 ONLINE_STATUSES = frozenset({"online", "running"})
+
+# Optional: Import CandidateFilter for advanced filtering
+try:
+    from .filter import CandidateFilter, TaskRequirements, RoutingPolicy
+    HAS_FILTER = True
+except ImportError:  # pragma: no cover
+    HAS_FILTER = False
 
 
 @dataclass
@@ -53,6 +62,7 @@ class AgentRouter:
         tenant_id: str = DEFAULT_TENANT_ID,
         *,
         metrics_window_hours: float | None = None,
+        scoring_policy: ScoringPolicy | None = None,
     ):
         self.database_url = database_url or os.getenv(
             "DATABASE_URL",
@@ -73,6 +83,15 @@ class AgentRouter:
                 self._redis.ping()
             except Exception:  # noqa: BLE001
                 self._redis = None
+        
+        # Initialize scoring engine with configurable policy
+        self._scoring_policy = scoring_policy or ScoringPolicy.from_env()
+        self._scoring_engine = ScoringEngine(self._scoring_policy)
+
+    @property
+    def scoring_policy(self) -> ScoringPolicy:
+        """Get the current scoring policy."""
+        return self._scoring_policy
 
     def select(
         self,
@@ -153,6 +172,7 @@ class AgentRouter:
             "skill": skill,
             "smart": self.smart,
             "metrics_window_hours": self.metrics_window_hours,
+            "scoring_policy": self._scoring_policy.to_dict(),
             "candidates": [
                 {
                     "agent_id": a.agent_id,
@@ -206,46 +226,30 @@ class AgentRouter:
         return out
 
     def _score(self, candidate: dict[str, Any], metrics: dict[str, Any]) -> dict[str, float]:
+        """Score a candidate using the configurable scoring engine.
+
+        Args:
+            candidate: Agent candidate dictionary
+            metrics: Agent metrics from agent_runs
+
+        Returns:
+            Dictionary with individual scores and total score
+        """
+        # Use new configurable scoring engine
+        scores = self._scoring_engine.score_candidate(candidate, metrics)
+        
+        # Add sample count and latency for backward compatibility
         req = int(metrics.get("request_count") or 0)
-        ok = int(metrics.get("success_count") or 0)
         avg_lat = float(metrics.get("avg_latency_ms") or 0.0)
-        priority = int(candidate.get("priority") or 100)
-
-        success_rate = (ok / req) if req > 0 else 0.85
-        # latency: 0ms→1.0, 5s→0.0
-        if avg_lat <= 0 and req == 0:
-            latency_score = 0.75
-        else:
-            latency_score = max(0.0, min(1.0, 1.0 - (avg_lat / 5000.0)))
-        # priority: 1 best, 200 worst
-        priority_score = max(0.0, min(1.0, 1.0 - ((priority - 1) / 199.0)))
-        availability = 1.0 if candidate.get("status") in ONLINE_STATUSES else 0.0
-
+        scores["samples"] = float(req)
+        scores["avg_latency_ms"] = avg_lat
+        
+        # For backward compatibility with smart=false mode
         if not self.smart:
-            total = priority_score
-            return {
-                "availability": availability,
-                "success_rate": success_rate,
-                "latency": latency_score,
-                "priority": priority_score,
-                "total": total,
-            }
-
-        total = (
-            availability * 0.10
-            + success_rate * 0.35
-            + latency_score * 0.30
-            + priority_score * 0.25
-        )
-        return {
-            "availability": availability,
-            "success_rate": success_rate,
-            "latency": latency_score,
-            "priority": priority_score,
-            "total": total,
-            "samples": float(req),
-            "avg_latency_ms": avg_lat,
-        }
+            priority_score = scores["priority"]
+            scores["total"] = priority_score
+        
+        return scores
 
     def _load_metrics(self, agent_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not agent_ids:

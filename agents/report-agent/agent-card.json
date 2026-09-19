@@ -2,9 +2,14 @@
   "name": "Report Agent",
   "description": "Generate markdown/PDF style reports from upstream analysis (Phase 3 stub).",
   "url": "http://127.0.0.1:8003/",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "protocolVersion": "0.3.0",
-  "capabilities": { "streaming": false },
+  "agentId": "aop-report-agent-v1",
+  "agentKey": "report-agent",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
   "defaultInputModes": ["text"],
   "defaultOutputModes": ["text", "text/markdown"],
   "skills": [
@@ -13,8 +18,57 @@
       "name": "Report Generation",
       "description": "Generate a structured report from research inputs",
       "tags": ["report", "writing"],
+      "examples": ["Generate a market research report", "Create a technical analysis report"],
       "inputModes": ["text"],
-      "outputModes": ["text", "text/markdown"]
+      "outputModes": ["text", "text/markdown"],
+      "requiresApproval": true
+    },
+    {
+      "id": "markdown",
+      "name": "Markdown Generation",
+      "description": "Generate markdown formatted documents",
+      "tags": ["report", "writing", "markdown"],
+      "examples": ["Convert analysis to markdown", "Create markdown documentation"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "text/markdown"],
+      "requiresApproval": false
+    },
+    {
+      "id": "pdf",
+      "name": "PDF Report Generation",
+      "description": "Generate PDF formatted reports (stub implementation)",
+      "tags": ["report", "writing", "pdf"],
+      "examples": ["Generate PDF report for management", "Create PDF documentation"],
+      "inputModes": ["text"],
+      "outputModes": ["application/pdf"],
+      "requiresApproval": false
+    },
+    {
+      "id": "ppt",
+      "name": "PowerPoint Generation",
+      "description": "Generate PowerPoint presentation slides (stub implementation)",
+      "tags": ["report", "writing", "presentation"],
+      "examples": ["Create slide deck for quarterly review", "Generate presentation for product launch"],
+      "inputModes": ["text"],
+      "outputModes": ["application/vnd.ms-powerpoint"],
+      "requiresApproval": false
     }
-  ]
+  ],
+  "runtime": {
+    "framework": "fastapi",
+    "pythonVersion": "3.8+",
+    "timeoutSeconds": 60,
+    "startupTimeoutSeconds": 30
+  },
+  "resources": {
+    "cpuCores": 1.0,
+    "memoryMb": 512
+  },
+  "metadata": {
+    "author": "AOP Platform",
+    "license": "MIT",
+    "repository": "https://github.com/aop-platform/agents",
+    "tags": ["report", "writing", "reference"],
+    "categories": ["content-generation"]
+  }
 }

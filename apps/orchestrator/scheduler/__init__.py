@@ -17,6 +17,12 @@ from planner.dag import PlanNode, TaskPlan, ready_node_ids, validate_plan
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
+__all__ = [
+    "DEFAULT_TENANT_ID",
+    "Scheduler",
+    "ScheduleResult",
+]
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -1056,3 +1062,11 @@ class Scheduler:
                 _utc_now(),
             ),
         )
+
+# Import new components after class definitions to avoid circular imports
+from .job_queue import JobQueue
+from .event_publisher import EventPublisher
+
+# Make them available at module level
+JobQueue = JobQueue
+EventPublisher = EventPublisher

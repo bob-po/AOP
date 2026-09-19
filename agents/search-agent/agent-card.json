@@ -2,11 +2,14 @@
   "name": "Search Agent",
   "description": "Multi-backend web search (DuckDuckGo Instant/Lite, Wikipedia) with mock fallback for AOP research pipelines.",
   "url": "http://127.0.0.1:8001/",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocolVersion": "0.3.0",
+  "agentId": "aop-search-agent-v1",
+  "agentKey": "search-agent",
   "capabilities": {
     "streaming": false,
-    "pushNotifications": false
+    "pushNotifications": false,
+    "webBrowsing": true
   },
   "defaultInputModes": ["text"],
   "defaultOutputModes": ["text", "application/json"],
@@ -16,9 +19,47 @@
       "name": "Web Search",
       "description": "Search the public web for a query and return summarized results",
       "tags": ["search", "research"],
-      "examples": ["AI Agent Orchestration", "A2A protocol overview"],
+      "examples": ["AI Agent Orchestration", "A2A protocol overview", "latest Python features"],
       "inputModes": ["text"],
-      "outputModes": ["text", "application/json"]
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
+    },
+    {
+      "id": "url-fetch",
+      "name": "URL Fetch",
+      "description": "Fetch and extract content from a specific URL",
+      "tags": ["search", "fetch"],
+      "examples": ["https://example.com/article", "https://docs.python.org/3/library"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
+    },
+    {
+      "id": "research",
+      "name": "Deep Research",
+      "description": "Perform multi-source research on a topic with cross-referencing",
+      "tags": ["search", "research", "analysis"],
+      "examples": ["Compare LLM frameworks", "Research agent orchestration patterns"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
     }
-  ]
+  ],
+  "runtime": {
+    "framework": "fastapi",
+    "pythonVersion": "3.8+",
+    "timeoutSeconds": 60,
+    "startupTimeoutSeconds": 30
+  },
+  "resources": {
+    "cpuCores": 1.0,
+    "memoryMb": 512
+  },
+  "metadata": {
+    "author": "AOP Platform",
+    "license": "MIT",
+    "repository": "https://github.com/aop-platform/agents",
+    "tags": ["search", "research", "reference"],
+    "categories": ["information-retrieval"]
+  }
 }

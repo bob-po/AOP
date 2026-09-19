@@ -2,9 +2,14 @@
   "name": "RAG Agent",
   "description": "Enterprise knowledge retrieval with hybrid TF-IDF vector index and citations (Phase 16).",
   "url": "http://127.0.0.1:8002/",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocolVersion": "0.3.0",
-  "capabilities": { "streaming": false },
+  "agentId": "aop-rag-agent-v1",
+  "agentKey": "rag-agent",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
   "defaultInputModes": ["text"],
   "defaultOutputModes": ["text", "application/json"],
   "skills": [
@@ -13,16 +18,57 @@
       "name": "Knowledge Search",
       "description": "Hybrid vector + keyword search over the enterprise knowledge corpus",
       "tags": ["rag", "knowledge", "vector"],
+      "examples": ["Company policies on remote work", "Product documentation for feature X"],
       "inputModes": ["text"],
-      "outputModes": ["text", "application/json"]
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
+    },
+    {
+      "id": "retrieval",
+      "name": "Document Retrieval",
+      "description": "Retrieve relevant documents from knowledge base without answer generation",
+      "tags": ["rag", "retrieval", "vector"],
+      "examples": ["Find documents about pricing", "Retrieve technical specifications"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
     },
     {
       "id": "qa",
       "name": "Question Answering",
       "description": "Answer questions using enterprise knowledge with citations",
       "tags": ["rag", "qa"],
+      "examples": ["What is our refund policy?", "How do I configure OAuth?"],
       "inputModes": ["text"],
-      "outputModes": ["text"]
+      "outputModes": ["text"],
+      "requiresApproval": false
+    },
+    {
+      "id": "knowledge-summarization",
+      "name": "Knowledge Document Summarization",
+      "description": "Summarize documents from the knowledge base",
+      "tags": ["rag", "summarization"],
+      "examples": ["Summarize the Q3 financial report", "Summarize product launch documentation"],
+      "inputModes": ["text"],
+      "outputModes": ["text", "application/json"],
+      "requiresApproval": false
     }
-  ]
+  ],
+  "runtime": {
+    "framework": "fastapi",
+    "pythonVersion": "3.8+",
+    "timeoutSeconds": 60,
+    "startupTimeoutSeconds": 30
+  },
+  "resources": {
+    "cpuCores": 1.0,
+    "memoryMb": 1024
+  },
+  "metadata": {
+    "author": "AOP Platform",
+    "license": "MIT",
+    "repository": "https://github.com/aop-platform/agents",
+    "tags": ["rag", "knowledge", "vector", "reference"],
+    "categories": ["knowledge-management"]
+  }
 }
