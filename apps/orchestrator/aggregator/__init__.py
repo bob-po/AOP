@@ -8,6 +8,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 
@@ -23,7 +24,7 @@ class Aggregator:
         )
 
     def build_result(self, task_id: str) -> dict[str, Any]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             task = conn.execute(
                 """
                 SELECT title, input_json, plan_json, status

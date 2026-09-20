@@ -10,6 +10,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 from planner.dag import PlanNode, TaskPlan, validate_plan
@@ -54,7 +55,7 @@ class WorkflowService:
 
     def ensure_defaults(self) -> None:
         """Seed a built-in research workflow if registry is empty."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) AS c FROM workflows WHERE tenant_id = %s::uuid",
                 (self.tenant_id,),
@@ -85,12 +86,12 @@ class WorkflowService:
             sql += " AND w.status = %s"
             args.append(status)
         sql += " ORDER BY w.updated_at DESC"
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, args).fetchall()
         return [self._serialize(r) for r in rows]
 
     def get(self, workflow_id: str) -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT w.id::text AS workflow_id, w.workflow_key, w.name, w.description,
@@ -130,7 +131,7 @@ class WorkflowService:
         now = _utc_now()
         wf_id = str(uuid.uuid4())
         status = "published" if publish else "draft"
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 conn.execute(
                     """

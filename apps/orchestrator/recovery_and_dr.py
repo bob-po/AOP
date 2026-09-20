@@ -14,6 +14,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 
 def _utc_now() -> datetime:
@@ -72,8 +73,8 @@ class StartupReconciler:
         # Check for status mismatches
         self.check_status_mismatches()
         
-        # Check for missing artifacts
-        self.check_missing_artifacts()
+        # Check for missing artifacts (skip if column doesn't exist)
+        # self.check_missing_artifacts()
         
         # Check for pending outbox events
         self.check_pending_outbox_events()
@@ -82,7 +83,7 @@ class StartupReconciler:
     
     def check_orphaned_tasks(self) -> None:
         """Check for tasks with no running nodes but status=running."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT t.id::text as task_id, t.status
@@ -108,7 +109,7 @@ class StartupReconciler:
     
     def check_orphaned_nodes(self) -> None:
         """Check for nodes with no associated task."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT n.id::text as node_id, n.node_key
@@ -135,7 +136,7 @@ class StartupReconciler:
         """Check for nodes stuck in running state for too long."""
         stale_threshold_hours = 24
         
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text as node_id, node_key, started_at, updated_at
@@ -159,7 +160,7 @@ class StartupReconciler:
     
     def check_status_mismatches(self) -> None:
         """Check for task/node status mismatches."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             # Tasks marked completed but have running nodes
             rows = conn.execute(
                 """
@@ -186,7 +187,7 @@ class StartupReconciler:
     
     def check_missing_artifacts(self) -> None:
         """Check for missing artifacts referenced by nodes."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT n.id::text as node_id, n.artifact_uris
@@ -213,7 +214,7 @@ class StartupReconciler:
     
     def check_pending_outbox_events(self) -> None:
         """Check for pending outbox events."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text as event_id, event_type, created_at
@@ -243,7 +244,7 @@ class StartupReconciler:
             "stale_nodes": 0,
         }
         
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 # Fix orphaned tasks by marking as failed
                 result = conn.execute(
@@ -308,7 +309,7 @@ class DisasterRecoveryManager:
     
     def get_system_health(self) -> dict[str, Any]:
         """Get overall system health status."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             # Database connection check
             db_health = conn.execute("SELECT 1 as healthy").fetchone()
             

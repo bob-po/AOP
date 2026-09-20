@@ -15,6 +15,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 from billing import BillingService, DEFAULT_TENANT_ID, load_prices
 from billing.stripe_checkout import (
@@ -212,7 +213,7 @@ class InvoiceService:
         doc = build_invoice_from_usage(usage, invoice_number=number)
         doc["status"] = status if status in {"draft", "issued", "void"} else "draft"
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 INSERT INTO billing_invoices (
@@ -250,7 +251,7 @@ class InvoiceService:
     def list(self, *, tenant_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         tid = tenant_id or self.tenant_id
         limit = max(1, min(int(limit), 200))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text, invoice_number, currency, window_days,
@@ -274,7 +275,7 @@ class InvoiceService:
 
     def get(self, invoice_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT id::text, tenant_id::text, invoice_number, currency, window_days,
@@ -317,7 +318,7 @@ class InvoiceService:
             raise ValueError("invoice total must be > 0")
 
         session = create_checkout_session(inv, dry_run=dry_run)
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 INSERT INTO billing_checkout_sessions (
@@ -367,7 +368,7 @@ class InvoiceService:
     ) -> list[dict[str, Any]]:
         tid = tenant_id or self.tenant_id
         limit = max(1, min(int(limit), 100))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text, invoice_id::text, stripe_session_id, status, url,
@@ -399,7 +400,7 @@ class InvoiceService:
         if not event_id:
             raise WebhookError("event.id required")
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             existing = conn.execute(
                 "SELECT id FROM billing_webhook_events WHERE stripe_event_id = %s",
                 (event_id,),
@@ -531,7 +532,7 @@ class InvoiceService:
         grant: dict[str, Any] | None = None
         if invoice_id and invoice_status == "paid":
             try:
-                with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+                with connect(self.database_url) as conn:
                     inv_row = conn.execute(
                         """
                         SELECT tenant_id::text, total_usd::float AS total_usd

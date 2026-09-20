@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 try:
     import redis
@@ -211,7 +212,7 @@ class AgentRouter:
             ORDER BY request_count DESC, a.name ASC
             LIMIT %s
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (since, self.tenant_id, max(1, min(limit, 200)))).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
@@ -267,7 +268,7 @@ class AgentRouter:
               AND created_at >= %s
             GROUP BY agent_id
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (agent_ids, since)).fetchall()
         return {r["agent_id"]: dict(r) for r in rows}
 
@@ -308,7 +309,7 @@ class AgentRouter:
               )
             ORDER BY a.priority ASC, a.name ASC
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id, skill)).fetchall()
         return [dict(r) for r in rows]
 
@@ -333,7 +334,7 @@ class AgentRouter:
               AND (a.id::text = %s OR a.agent_key = %s)
             LIMIT 1
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(sql, (self.tenant_id, agent_id, agent_id)).fetchone()
         return dict(row) if row else None
 

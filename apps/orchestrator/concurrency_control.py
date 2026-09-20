@@ -15,6 +15,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 
 def _utc_now() -> datetime:
@@ -68,7 +69,7 @@ class ConcurrencyController:
         if now - self.last_refresh < self.refresh_interval:
             return
         
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             # Count active nodes
             active_nodes = conn.execute(
                 """
@@ -128,7 +129,7 @@ class ConcurrencyController:
             return False, f"Skill concurrency limit reached ({self.limits.per_skill})"
         
         # Check per-node limit (check if same node is already running)
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT COUNT(*) as count

@@ -10,6 +10,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 from .tfidf import rank_documents
@@ -52,7 +53,7 @@ class MemoryService:
             raise ValueError("content is required")
         tid = tenant_id or self.tenant_id
         now = _utc_now()
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 INSERT INTO task_memories (
@@ -73,7 +74,7 @@ class MemoryService:
         return dict(row) if row else {}
 
     def get(self, task_id: str, memory_key: str) -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT id::text AS id, tenant_id::text AS tenant_id, task_id::text AS task_id,
@@ -86,7 +87,7 @@ class MemoryService:
         return dict(row) if row else None
 
     def list_for_task(self, task_id: str) -> list[dict[str, Any]]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text AS id, tenant_id::text AS tenant_id, task_id::text AS task_id,
@@ -100,7 +101,7 @@ class MemoryService:
         return [dict(r) for r in rows]
 
     def delete(self, task_id: str, memory_key: str) -> bool:
-        with psycopg.connect(self.database_url) as conn:
+        with connect(self.database_url, row_factory=None) as conn:
             cur = conn.execute(
                 "DELETE FROM task_memories WHERE task_id = %s::uuid AND memory_key = %s",
                 (task_id, memory_key),
@@ -184,7 +185,7 @@ class MemoryService:
             raise ValueError("content is required")
         tid = tenant_id or self.tenant_id
         now = _utc_now()
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 INSERT INTO tenant_memories (
@@ -223,7 +224,7 @@ class MemoryService:
     ) -> list[dict[str, Any]]:
         tid = tenant_id or self.tenant_id
         lim = max(1, min(int(limit), 200))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text AS id, tenant_id::text AS tenant_id, memory_key, title, content,
@@ -239,7 +240,7 @@ class MemoryService:
 
     def delete_tenant(self, memory_key: str, *, tenant_id: str | None = None) -> bool:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url) as conn:
+        with connect(self.database_url, row_factory=None) as conn:
             cur = conn.execute(
                 "DELETE FROM tenant_memories WHERE tenant_id = %s::uuid AND memory_key = %s",
                 (tid, memory_key),

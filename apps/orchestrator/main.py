@@ -21,6 +21,9 @@ from quota import QuotaExceeded
 from billing.stripe_checkout import StripeCheckoutError
 from billing.webhook import WebhookError
 
+# Phase 36.8: Recovery and DR integration
+from recovery_and_dr import StartupReconciler
+
 # OpenTelemetry tracing
 try:
     from tracing import instrument_fastapi, ensure_tracing_initialized
@@ -37,9 +40,36 @@ workflows = WorkflowService()
 marketplace = MarketplaceService()
 streams = StreamClient()
 
+# Phase 36.8: Initialize startup reconciler
+startup_reconciler = StartupReconciler()
+
 # Instrument FastAPI for tracing
 if TRACING_AVAILABLE:
     instrument_fastapi(app)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Startup event handler for Phase 36.8 recovery integration."""
+    logger.info("Running startup reconciliation...")
+    
+    try:
+        issues = startup_reconciler.run_full_reconciliation()
+        
+        if issues:
+            logger.warning(f"Found {len(issues)} consistency issues during startup:")
+            for issue in issues:
+                logger.warning(f"  - {issue.issue_type.value}: {issue.description} (severity: {issue.severity})")
+            
+            # Auto-fix critical issues
+            fixed = startup_reconciler.auto_fix_critical_issues()
+            logger.info(f"Auto-fixed {sum(fixed.values())} critical issues: {fixed}")
+        else:
+            logger.info("No consistency issues found during startup")
+            
+    except Exception as e:
+        logger.error(f"Startup reconciliation failed: {e}")
+        # Don't fail startup if reconciliation fails
 
 
 class TaskInput(BaseModel):

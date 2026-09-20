@@ -10,6 +10,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 from .dag import DAGValidationError, PlanNode, TaskPlan, validate_plan
 from .decompose import decompose_to_nodes
@@ -115,7 +116,7 @@ class Planner:
               AND a.status IN ('online', 'running')
             ORDER BY s.skill_id
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
         return [r["skill_id"] for r in rows]
 

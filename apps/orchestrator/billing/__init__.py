@@ -13,6 +13,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -75,7 +76,7 @@ class BillingService:
             str(k): float(v) for k, v in (prices.get("per_skill") or {}).items()
         }
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             task_row = conn.execute(
                 """
                 SELECT COUNT(*)::int AS total,

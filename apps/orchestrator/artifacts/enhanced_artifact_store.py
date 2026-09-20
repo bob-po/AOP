@@ -14,6 +14,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 
@@ -55,7 +56,7 @@ class EnhancedArtifactStore:
         artifact_id = str(uuid.uuid4())
         uri = f"s3://aop-artifacts/tasks/{task_id}/{node_key}/{artifact_id}"
         
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 conn.execute(
                     """
@@ -87,7 +88,7 @@ class EnhancedArtifactStore:
         actual_size: int | None = None,
     ) -> bool:
         """Confirm artifact upload in two-phase commit."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 updates = ["status = 'committed'", "updated_at = %s"]
                 params = [_utc_now()]
@@ -112,7 +113,7 @@ class EnhancedArtifactStore:
     
     def rollback_artifact_upload(self, artifact_id: str) -> bool:
         """Rollback artifact upload if persistence fails."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -127,7 +128,7 @@ class EnhancedArtifactStore:
     
     def increment_reference_count(self, artifact_id: str) -> bool:
         """Increment reference count for an artifact."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -144,7 +145,7 @@ class EnhancedArtifactStore:
     
     def decrement_reference_count(self, artifact_id: str) -> bool:
         """Decrement reference count for an artifact."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -161,7 +162,7 @@ class EnhancedArtifactStore:
     
     def cleanup_orphaned_artifacts(self, dry_run: bool = False) -> int:
         """Clean up artifacts with zero reference count."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 if dry_run:
                     rows = conn.execute(
@@ -185,7 +186,7 @@ class EnhancedArtifactStore:
     
     def cleanup_pending_artifacts(self, older_than_hours: int = 24) -> int:
         """Clean up pending artifacts older than specified hours."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -200,7 +201,7 @@ class EnhancedArtifactStore:
     
     def get_artifact_reference(self, artifact_id: str) -> ArtifactReference | None:
         """Get artifact reference by ID."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT id::text, uri, name, size, content_type,
@@ -227,7 +228,7 @@ class EnhancedArtifactStore:
     
     def get_artifacts_by_task(self, task_id: str) -> list[ArtifactReference]:
         """Get all artifacts for a task."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text, uri, name, size, content_type,
@@ -255,7 +256,7 @@ class EnhancedArtifactStore:
     
     def get_artifact_stats(self) -> dict[str, Any]:
         """Get artifact statistics."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT status, COUNT(*) as count, SUM(size) as total_size

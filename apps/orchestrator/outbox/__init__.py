@@ -13,6 +13,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -85,7 +86,7 @@ class OutboxProcessor:
         target_stream: str,
     ) -> str:
         """Write an outbox event to PostgreSQL."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 row = conn.execute(
                     """
@@ -100,41 +101,50 @@ class OutboxProcessor:
                 ).fetchone()
                 return row["id"] if row else ""
 
+    def _publish_event_to_redis(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        target_stream: str,
+    ) -> None:
+        """Publish a single event's payload to its target Redis stream."""
+        streams = self._get_streams_client()
+        if not streams:
+            raise RuntimeError("StreamClient unavailable")
+
+        if event_type == "job_enqueue":
+            streams.enqueue_execution(
+                task_id=payload["task_id"],
+                node_id=payload["node_id"],
+                node_key=payload["node_key"],
+                skill=payload["skill"],
+                attempt=payload.get("attempt", 1),
+                priority=payload.get("priority", 100),
+                exclude_agent_ids=payload.get("exclude_agent_ids"),
+                delay_seconds=payload.get("delay_seconds", 0),
+            )
+        elif event_type == "task_event":
+            streams.publish_task_event(
+                payload.get("event_type", "unknown"),
+                payload.get("data", {}),
+            )
+        elif event_type == "execution_event":
+            streams.publish_execution_event(
+                payload.get("event_type", "unknown"),
+                payload.get("data", {}),
+            )
+        else:
+            raise ValueError(f"unknown event type: {event_type}")
+
     def publish_to_redis(self, event_id: str, event_data: dict[str, Any]) -> bool:
-        """Publish an outbox event to Redis using StreamClient."""
+        """Publish an outbox event to Redis and mark it processed (standalone)."""
         try:
-            streams = self._get_streams_client()
-            if not streams:
-                return False
-            
-            event_type = event_data["event_type"]
-            payload = event_data["payload"]
-            target_stream = event_data["target_stream"]
-            
-            if event_type == "job_enqueue":
-                streams.enqueue_execution(
-                    task_id=payload["task_id"],
-                    node_id=payload["node_id"],
-                    node_key=payload["node_key"],
-                    skill=payload["skill"],
-                    attempt=payload.get("attempt", 1),
-                    priority=payload.get("priority", 100),
-                    exclude_agent_ids=payload.get("exclude_agent_ids"),
-                    delay_seconds=payload.get("delay_seconds", 0),
-                )
-            elif event_type == "task_event":
-                streams.publish_task_event(
-                    payload.get("event_type", "unknown"),
-                    payload.get("data", {}),
-                )
-            elif event_type == "execution_event":
-                streams.publish_execution_event(
-                    payload.get("event_type", "unknown"),
-                    payload.get("data", {}),
-                )
-            
-            # Mark as processed
-            with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            self._publish_event_to_redis(
+                event_data["event_type"],
+                event_data["payload"],
+                event_data["target_stream"],
+            )
+            with connect(self.database_url) as conn:
                 with conn.transaction():
                     result = conn.execute(
                         """
@@ -152,8 +162,13 @@ class OutboxProcessor:
             return False
 
     def process_pending_events(self, limit: int = 100) -> int:
-        """Process pending outbox events."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        """Process pending outbox events.
+
+        Redis publish and the ``processed`` UPDATE share the same connection so
+        the ``FOR UPDATE SKIP LOCKED`` row locks are released without blocking
+        a second connection (avoids a self-deadlock).
+        """
+        with connect(self.database_url) as conn:
             # Get pending events
             rows = conn.execute(
                 """
@@ -169,17 +184,22 @@ class OutboxProcessor:
 
             processed_count = 0
             for row in rows:
+                event_id = row["id"]
                 try:
-                    # Publish to Redis
-                    event_data = {
-                        "event_type": row["event_type"],
-                        "payload": row["payload"],
-                        "target_stream": row["target_stream"],
-                    }
-                    if self.publish_to_redis(row["id"], event_data):
-                        processed_count += 1
+                    self._publish_event_to_redis(
+                        row["event_type"], row["payload"], row["target_stream"]
+                    )
+                    conn.execute(
+                        """
+                        UPDATE outbox_events
+                        SET status = 'processed', processed_at = %s
+                        WHERE id = %s::uuid
+                        """,
+                        (_utc_now(), event_id),
+                    )
+                    processed_count += 1
                 except Exception as e:
-                    # Mark as failed
+                    print(f"[outbox] Error processing event {event_id}: {e}")
                     conn.execute(
                         """
                         UPDATE outbox_events
@@ -188,13 +208,13 @@ class OutboxProcessor:
                             attempts = attempts + 1
                         WHERE id = %s::uuid
                         """,
-                        (str(e), row["id"]),
+                        (str(e), event_id),
                     )
             return processed_count
 
     def get_failed_events(self, limit: int = 50) -> list[dict[str, Any]]:
         """Get failed outbox events for retry."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT id::text, event_type, payload, target_stream, attempts, last_error
@@ -209,7 +229,7 @@ class OutboxProcessor:
 
     def retry_failed_event(self, event_id: str) -> bool:
         """Retry a failed outbox event."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -225,7 +245,7 @@ class OutboxProcessor:
 
     def cleanup_old_events(self, days: int = 7) -> int:
         """Clean up old processed events."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -240,7 +260,7 @@ class OutboxProcessor:
 
     def get_stats(self) -> dict[str, Any]:
         """Get outbox statistics."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
                 SELECT status, COUNT(*) as count

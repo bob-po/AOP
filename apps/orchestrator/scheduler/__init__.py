@@ -13,6 +13,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from db import connect
 from planner.dag import PlanNode, TaskPlan, ready_node_ids, validate_plan
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -53,6 +54,10 @@ class Scheduler:
         self._request_tracking_service = None  # Lazy-loaded
         self._outbox_processor = None  # Lazy-loaded for P36.2
 
+    def _connect(self):
+        """Open a DB connection via the shared resilient helper (db.connect)."""
+        return connect(self.database_url)
+
     def create_task(
         self,
         *,
@@ -71,7 +76,7 @@ class Scheduler:
         if input_extra:
             input_json.update(input_extra)
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 task_id = str(uuid.uuid4())
                 now = _utc_now()
@@ -222,7 +227,7 @@ class Scheduler:
         )
 
     def get_node(self, task_id: str, node_key: str) -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT id::text AS node_id, node_key, skill, status, attempt, max_retry,
@@ -236,7 +241,7 @@ class Scheduler:
             return dict(row) if row else None
 
     def get_task_goal(self, task_id: str) -> str:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT input_json FROM tasks WHERE id = %s::uuid",
                 (task_id,),
@@ -251,7 +256,7 @@ class Scheduler:
     def reclaim_stale_nodes(self, *, stale_seconds: float = 900) -> list[dict[str, Any]]:
         """Mark long-running nodes as retrying and return re-enqueue jobs (长任务回收)."""
         stale_seconds = max(60.0, float(stale_seconds))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 rows = conn.execute(
@@ -351,7 +356,7 @@ class Scheduler:
                 return jobs
 
     def claim_running(self, task_id: str, node_key: str, agent_id: str, attempt: int) -> bool:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 cur = conn.execute(
@@ -400,7 +405,7 @@ class Scheduler:
         latency_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         """Mark node success (or HITL wait), unlock dependents. Returns newly ready jobs."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 plan = self._load_plan(conn, task_id)
                 now = _utc_now()
@@ -510,7 +515,7 @@ class Scheduler:
         agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Return decision: retry | failed, plus next_attempt / max_retry."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 row = conn.execute(
@@ -638,7 +643,7 @@ class Scheduler:
         node_key: str | None = None,
     ) -> dict[str, Any]:
         """Approve a waiting_for_user node and unlock dependents."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 if node_key:
@@ -701,7 +706,7 @@ class Scheduler:
         reason: str = "rejected by user",
     ) -> dict[str, Any]:
         """Reject a waiting_for_user node and fail the task."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 if node_key:
@@ -857,7 +862,7 @@ class Scheduler:
     ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 200))
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             if status:
                 rows = conn.execute(
                     """
@@ -885,7 +890,7 @@ class Scheduler:
         return [dict(r) for r in rows]
 
     def get_task(self, task_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             if tenant_id:
                 row = conn.execute(
                     """
@@ -912,7 +917,7 @@ class Scheduler:
             return {**dict(row), "nodes": nodes}
 
     def cancel_task(self, task_id: str) -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             with conn.transaction():
                 row = conn.execute(
                     "SELECT id::text AS task_id, status FROM tasks WHERE id = %s::uuid FOR UPDATE",
@@ -960,12 +965,12 @@ class Scheduler:
 
     def overview_stats(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             totals = conn.execute(
                 """
                 SELECT
                   COUNT(*)::int AS total_tasks,
-                  COUNT(*) FILTER (WHERE status IN ('running', 'ready', 'created', 'planned'))::int AS running,
+                  COUNT(*) FILTER (WHERE status = 'running')::int AS running,
                   COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
                   COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
                 FROM tasks
@@ -1038,7 +1043,7 @@ class Scheduler:
         }
 
     def list_events(self, task_id: str, limit: int = 100) -> list[dict[str, Any]]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT event_type, message, payload, created_at AS ts
@@ -1214,7 +1219,7 @@ class Scheduler:
 
     def get_node_idempotency_key(self, task_id: str, node_key: str) -> str | None:
         """Get the stable idempotency key for a node."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT idempotency_key
@@ -1227,7 +1232,7 @@ class Scheduler:
 
     def get_node_info(self, task_id: str, node_key: str) -> dict[str, Any] | None:
         """Get node information for request tracking."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT id::text, task_id::text, node_key, skill, status, idempotency_key

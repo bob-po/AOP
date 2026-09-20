@@ -8,6 +8,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 try:
     from prometheus_client import Counter, Histogram, Gauge, start_http_server, generate_latest
@@ -128,7 +129,7 @@ class MetricsService:
 
     def snapshot(self, *, hours: float = 24) -> dict[str, Any]:
         since = _utc_now() - timedelta(hours=max(1.0, float(hours)))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             tasks = conn.execute(
                 """
                 SELECT

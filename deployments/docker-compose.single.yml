@@ -338,6 +338,21 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  outbox:
+    build:
+      context: ..
+      dockerfile: apps/orchestrator/Dockerfile
+    container_name: aop-outbox
+    command: ["python", "outbox_processor_service.py"]
+    environment:
+      <<: *orch-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   web:
     build:
       context: ../apps/web

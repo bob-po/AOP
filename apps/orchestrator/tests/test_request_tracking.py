@@ -24,21 +24,142 @@ def tracking_service(database_url):
 
 
 @pytest.fixture
-def sample_task_id():
-    """Sample task ID for testing."""
-    return str(uuid.uuid4())
+def sample_agent_id(database_url):
+    """Create a sample agent in database and return its ID."""
+    import psycopg
+    from psycopg.rows import dict_row
+    
+    agent_id = str(uuid.uuid4())
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    agent_key = f"test-agent-{agent_id[:8]}"
+    
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO agents (
+                  id, tenant_id, agent_key, name, protocol, status, 
+                  created_at, updated_at
+                ) VALUES (
+                  %s::uuid, %s::uuid, %s, %s, %s, %s, now(), now()
+                )
+                """,
+                (
+                    agent_id,
+                    tenant_id,
+                    agent_key,
+                    "Test Agent",
+                    "A2A",
+                    "active",
+                ),
+            )
+    
+    yield agent_id
+    
+    # Cleanup
+    with psycopg.connect(database_url) as conn:
+        with conn.transaction():
+            conn.execute("DELETE FROM agents WHERE id = %s::uuid", (agent_id,))
 
 
 @pytest.fixture
-def sample_node_id():
-    """Sample node ID for testing."""
-    return str(uuid.uuid4())
+def sample_task_id(database_url):
+    """Create a sample task in database and return its ID."""
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+    
+    task_id = str(uuid.uuid4())
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO tasks (
+                  id, tenant_id, title, input_json, status, progress,
+                  plan_json, created_at, updated_at, started_at
+                ) VALUES (
+                  %s::uuid, %s::uuid, %s, %s::jsonb, 'created', 0,
+                  %s::jsonb, now(), now(), now()
+                )
+                """,
+                (
+                    task_id,
+                    tenant_id,
+                    "Test task for request tracking",
+                    Jsonb({"type": "text", "content": "test"}),
+                    Jsonb({"nodes": []}),
+                ),
+            )
+    
+    yield task_id
+    
+    # Cleanup
+    with psycopg.connect(database_url) as conn:
+        with conn.transaction():
+            conn.execute("DELETE FROM a2a_requests WHERE task_id = %s::uuid", (task_id,))
+            conn.execute("DELETE FROM task_nodes WHERE task_id = %s::uuid", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE id = %s::uuid", (task_id,))
 
 
 @pytest.fixture
-def sample_agent_id():
-    """Sample agent ID for testing."""
-    return str(uuid.uuid4())
+def sample_node_id(sample_task_id, database_url):
+    """Create a sample node in database and return its ID."""
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+    
+    node_id = str(uuid.uuid4())
+    node_key = "test-node"
+    
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO task_nodes (
+                  id, task_id, node_key, skill, status, started_at, created_at, updated_at
+                ) VALUES (
+                  %s::uuid, %s::uuid, %s, %s, 'pending', now(), now(), now()
+                )
+                """,
+                (node_id, sample_task_id, node_key, "web-search"),
+            )
+    
+    return node_id
+
+
+@pytest.fixture
+def sample_agent_id(database_url):
+    """Create a sample agent in database and return its ID."""
+    import psycopg
+    from psycopg.rows import dict_row
+    
+    agent_id = str(uuid.uuid4())
+    tenant_id = "00000000-0000-0000-0000-000000000001"
+    
+    with psycopg.connect(database_url, row_factory=dict_row) as conn:
+        with conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO agents (
+                  id, tenant_id, agent_key, name, protocol, status, 
+                  created_at, updated_at
+                ) VALUES (
+                  %s::uuid, %s::uuid, %s, %s, %s, %s, now(), now()
+                )
+                """,
+                (
+                    agent_id,
+                    tenant_id,
+                    "test-agent",
+                    "Test Agent",
+                    "A2A",
+                    "active",
+                ),
+            )
+    
+    return agent_id
 
 
 class TestRequestTrackingService:

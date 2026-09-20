@@ -16,6 +16,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 
 def _utc_now() -> datetime:
@@ -78,7 +79,7 @@ class DistributedMetrics:
     
     def collect_distributed_state_metrics(self) -> dict[str, Any]:
         """Collect distributed state metrics from database."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             # Task state distribution
             task_states = conn.execute(
                 """
@@ -159,7 +160,7 @@ class DistributedMetrics:
     
     def get_error_classification_metrics(self) -> dict[str, Any]:
         """Get error classification metrics."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             # Error distribution by type
             error_types = conn.execute(
                 """

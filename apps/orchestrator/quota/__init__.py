@@ -13,6 +13,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 from billing import BillingService, DEFAULT_TENANT_ID
 
@@ -119,7 +120,7 @@ class QuotaService:
 
     def get(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT tenant_id::text,
@@ -188,7 +189,7 @@ class QuotaService:
             0.0, min(values["max_estimated_usd_per_month"], 1_000_000.0)
         )
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             conn.execute(
                 """
                 INSERT INTO tenant_quotas (
@@ -219,7 +220,7 @@ class QuotaService:
 
     def usage_snapshot(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             day = conn.execute(
                 """
                 SELECT COUNT(*)::int AS tasks_today
@@ -290,7 +291,7 @@ class QuotaService:
         tid = tenant_id or self.tenant_id
         limit = max(1, min(int(limit), 100))
         try:
-            with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+            with connect(self.database_url) as conn:
                 rows = conn.execute(
                     """
                     SELECT id::text, invoice_id::text, stripe_event_id,
@@ -327,7 +328,7 @@ class QuotaService:
         if not invoice_id:
             return {"skipped": True, "reason": "no invoice_id"}
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             existing = conn.execute(
                 "SELECT id::text FROM tenant_quota_grants WHERE invoice_id = %s::uuid",
                 (invoice_id,),

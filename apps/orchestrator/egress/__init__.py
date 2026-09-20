@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -90,7 +91,7 @@ class EgressService:
 
     def get(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         tid = tenant_id or self.tenant_id
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT tenant_id::text, mode, patterns, enabled, updated_at
@@ -134,7 +135,7 @@ class EgressService:
         new_patterns = patterns if patterns is not None else (current.get("patterns") or "")
         new_enabled = bool(enabled if enabled is not None else current.get("enabled", True))
 
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             conn.execute(
                 """
                 INSERT INTO tenant_egress_policies (tenant_id, mode, patterns, enabled, updated_at)

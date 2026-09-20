@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -45,7 +46,7 @@ class RequestTrackingService:
         request_json: dict[str, Any],
     ) -> dict[str, Any]:
         """Track a new A2A request."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 # First check if request already exists
                 existing = conn.execute(
@@ -86,7 +87,7 @@ class RequestTrackingService:
 
     def get_request(self, idempotency_key: str) -> dict[str, Any] | None:
         """Get an existing request by idempotency key."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT id::text, idempotency_key, task_id::text, node_id::text,
@@ -104,7 +105,7 @@ class RequestTrackingService:
         idempotency_key: str,
     ) -> bool:
         """Mark a request as running."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -123,7 +124,7 @@ class RequestTrackingService:
         response_json: dict[str, Any],
     ) -> bool:
         """Mark a request as completed with response."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -145,7 +146,7 @@ class RequestTrackingService:
         error_message: str,
     ) -> bool:
         """Mark a request as failed."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """
@@ -167,7 +168,7 @@ class RequestTrackingService:
         reason: str = "timeout",
     ) -> bool:
         """Mark a request as unknown (timeout/uncertain result)."""
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             with conn.transaction():
                 result = conn.execute(
                     """

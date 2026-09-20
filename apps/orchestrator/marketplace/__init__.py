@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -198,6 +199,6 @@ class MarketplaceService:
             FROM agents a
             WHERE a.tenant_id = %s::uuid
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
         return {r["agent_key"]: dict(r) for r in rows}

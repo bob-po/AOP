@@ -35,7 +35,7 @@ def _utc_now() -> str:
 
 class StreamClient:
     def __init__(self, redis_url: str | None = None):
-        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+        self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.r = redis.Redis.from_url(self.redis_url, decode_responses=True)
         self.r.ping()
         self.ensure_groups()

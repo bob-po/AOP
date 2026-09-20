@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from db import connect
 from psycopg.types.json import Jsonb
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -44,7 +45,7 @@ class EvaluationService:
         method: str = "heuristic",
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             task = conn.execute(
                 """
                 SELECT id::text AS task_id, tenant_id::text AS tenant_id, title, status,
@@ -112,7 +113,7 @@ class EvaluationService:
             return dict(row) if row else scored
 
     def get_for_task(self, task_id: str, *, method: str = "heuristic") -> dict[str, Any] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             row = conn.execute(
                 """
                 SELECT id::text AS id, tenant_id::text AS tenant_id, task_id::text AS task_id,
@@ -132,7 +133,7 @@ class EvaluationService:
         min_score: float | None = None,
     ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 200))
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             clauses = ["1=1"]
             args: list[Any] = []
             if tenant_id:
@@ -158,7 +159,7 @@ class EvaluationService:
         return [dict(r) for r in rows]
 
     def overview(self, *, tenant_id: str | None = None) -> dict[str, Any]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             args: list[Any] = []
             where = ""
             if tenant_id:

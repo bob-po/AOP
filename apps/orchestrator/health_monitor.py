@@ -12,6 +12,7 @@ import httpx
 import psycopg
 import redis
 from psycopg.rows import dict_row
+from db import connect
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -101,7 +102,7 @@ class HealthMonitor:
             WHERE a.tenant_id = %s::uuid
             ORDER BY a.agent_key
         """
-        with psycopg.connect(self.database_url, row_factory=dict_row) as conn:
+        with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -123,7 +124,7 @@ class HealthMonitor:
             return False, str(exc)
 
     def _set_status(self, agent_id: str, skills: list[str], status: str) -> None:
-        with psycopg.connect(self.database_url) as conn:
+        with connect(self.database_url, row_factory=None) as conn:
             conn.execute(
                 "UPDATE agents SET status = %s, updated_at = %s WHERE id = %s::uuid",
                 (status, _utc_now(), agent_id),
