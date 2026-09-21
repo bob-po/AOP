@@ -1,7 +1,0 @@
-$env:OPENAI_API_KEY = "sk-d100e0f49a6e43afaf62e7fec5961b58"
-$env:OPENAI_BASE_URL = "https://api.deepseek.com"
-$env:OPENAI_MODEL = "deepseek-v4-pro"
-
-
-# 杀死占用本地8001到8008的所有进程
-8001..8008 | ForEach-Object { Get-NetTCPConnection -LocalPort $_ -ErrorAction SilentlyContinue } | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { taskkill /F /PID $_ }
