@@ -1,3 +1,5 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
+# Phase 37.2: LLM Provider for enhanced RAG responses
+-e ../../../packages/llm-provider

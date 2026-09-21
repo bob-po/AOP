@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aop-agent-runtime"
+version = "0.1.0"
+description = "Agent Runtime Foundation for AOP Agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "aop-llm-provider>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.21"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_runtime*"]

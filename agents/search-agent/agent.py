@@ -13,6 +13,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from search import run_search
+try:
+    from search_enhanced import run_search_sync
+    ENHANCED_SEARCH_AVAILABLE = True
+except ImportError:
+    ENHANCED_SEARCH_AVAILABLE = False
 
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
@@ -125,7 +130,14 @@ async def a2a_rpc(request: Request) -> JSONResponse:
                 return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": cached})
             
             query = _extract_query(params)
-            payload = await run_search(query)
+            
+            # P37.2: Use enhanced search if available and enabled
+            use_enhanced = os.getenv("SEARCH_USE_ENHANCED", "false").lower() == "true"
+            if use_enhanced and ENHANCED_SEARCH_AVAILABLE:
+                payload = run_search_sync(query)
+            else:
+                payload = await run_search(query)
+            
             task_id = str(uuid.uuid4())
             result = _completed_task(task_id, query, payload)
             

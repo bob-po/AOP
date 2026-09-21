@@ -13,6 +13,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from vector_index import TfidfIndex
+try:
+    from rag_enhanced import run_rag_enhanced, get_rag_instance
+    ENHANCED_RAG_AVAILABLE = True
+except ImportError:
+    ENHANCED_RAG_AVAILABLE = False
 
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
@@ -202,7 +207,17 @@ async def a2a_rpc(request: Request) -> JSONResponse:
             query = _extract_query(params)
             meta = params.get("metadata") or {}
             skill = str(meta.get("skillId") or "knowledge-search")
-            payload = run_rag(query)
+            
+            # P37.2: Use enhanced RAG with tenant isolation if available and enabled
+            use_enhanced = os.getenv("RAG_USE_ENHANCED", "false").lower() == "true"
+            tenant_id = meta.get("tenantId") or os.getenv("DEFAULT_TENANT_ID")
+            
+            if use_enhanced and ENHANCED_RAG_AVAILABLE:
+                use_llm = os.getenv("RAG_USE_LLM", "false").lower() == "true"
+                payload = run_rag_enhanced(query, tenant_id=tenant_id, use_llm=use_llm)
+            else:
+                payload = run_rag(query)
+            
             result = _completed_task(str(uuid.uuid4()), query, payload, skill)
             
             # P36.1: Cache result for idempotency

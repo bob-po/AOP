@@ -12,6 +12,23 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from context import (
+    extract_urls,
+    format_upstream,
+    llm_available,
+    llm_chat,
+    parse_composed_query,
+    parse_json_lenient,
+)
+try:
+    from context_enhanced import (
+        llm_analysis_with_metadata,
+        get_llm_provider,
+    )
+    ENHANCED_CONTEXT_AVAILABLE = True
+except ImportError:
+    ENHANCED_CONTEXT_AVAILABLE = False
+
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
 app = FastAPI(title="AOP Analysis Agent", version="0.1.0")
@@ -42,26 +59,91 @@ def _extract_query(params: dict[str, Any]) -> str:
     raise ValueError("message.parts must include at least one text part")
 
 
-def run_analysis(query: str) -> dict[str, Any]:
-    insights = [
-        {
-            "theme": "Market signal",
-            "detail": f"Demand indicators around '{query}' favor platforms with discoverable agent skills.",
-        },
-        {
-            "theme": "Capability gap",
-            "detail": "Teams still lack unified orchestration across search, RAG, media, and reporting agents.",
-        },
+def _llm_analysis(goal: str, upstream: dict[str, Any]) -> dict[str, Any] | None:
+    """Synthesize insights via an OpenAI-compatible LLM; None on any failure."""
+    
+    # P37.2: Use enhanced context with metadata if available (default to enhanced)
+    use_enhanced = os.getenv("ANALYSIS_USE_ENHANCED", "true").lower() == "true"
+    
+    if use_enhanced and ENHANCED_CONTEXT_AVAILABLE:
+        result = llm_analysis_with_metadata(goal, upstream)
+        if result:
+            # Extract metadata and store it separately
+            metadata = result.pop("metadata", {})
+            print(f"[Analysis Agent] Enhanced analysis completed: {metadata.get('tokens_used', 0)} tokens, {metadata.get('latency_ms', 0)}ms")
+            return result
+    
+    # Fallback to legacy implementation
+    system = (
+        "You are a business analyst for a multi-agent AI orchestration platform. "
+        "Analyze the provided research context (web search results and knowledge-base "
+        "retrieval) and produce concise, specific, evidence-grounded insights. "
+        "Respond in the same language as the goal. Return ONLY a JSON object with keys "
+        '"summary" (string) and "insights" (array of {"theme", "detail"} objects).'
+    )
+    user = f"Goal: {goal}"
+    if upstream:
+        user += f"\n\nUpstream results:\n{format_upstream(upstream)}"
+
+    raw = llm_chat(system, user, json_mode=True)
+    if not raw:
+        return None
+    data = parse_json_lenient(raw)
+    if not isinstance(data, dict):
+        return None
+    summary = str(data.get("summary") or "").strip()
+    insights = data.get("insights")
+    if not summary or not isinstance(insights, list) or not insights:
+        return None
+    return {"summary": summary, "insights": insights}
+
+
+def _deterministic_analysis(goal: str, upstream: dict[str, Any]) -> dict[str, Any]:
+    """Input-driven fallback when no LLM is configured."""
+    search_text = upstream.get("search", "")
+    rag_text = upstream.get("rag", "")
+    urls = extract_urls(search_text)
+
+    insights: list[dict[str, str]] = []
+    if search_text:
+        refs = ", ".join(urls[:3]) or "no direct URLs extracted"
+        insights.append(
+            {
+                "theme": "Market signal (web search)",
+                "detail": f"{len(urls)} source(s) surfaced for this goal; top references: {refs}.",
+            }
+        )
+    if rag_text:
+        snippet = rag_text[:180] + ("..." if len(rag_text) > 180 else "")
+        insights.append({"theme": "Knowledge base", "detail": f"Internal corpus: {snippet}"})
+    insights.append(
         {
             "theme": "Recommendation",
-            "detail": "Prioritize registry health, DAG observability, and reusable workflow templates.",
-        },
-    ]
-    summary = (
-        f"Business analysis for '{query}': consolidate multi-agent research into a control-plane "
-        "narrative — discovery, parallel execution, and artifact reuse are the differentiators."
+            "detail": (
+                "Cross-reference external search signals with internal knowledge "
+                "to validate positioning and close capability gaps."
+            ),
+        }
     )
-    return {"query": query, "summary": summary, "insights": insights}
+
+    summary = (
+        f"Analysis of '{goal}' synthesized from {len(urls)} web source(s) and "
+        f"{'internal knowledge' if rag_text else 'no knowledge-base hit'}."
+    )
+    return {"query": goal, "summary": summary, "insights": insights}
+
+
+def run_analysis(query: str) -> dict[str, Any]:
+    parsed = parse_composed_query(query)
+    goal = parsed["goal"]
+    upstream = parsed["upstream"]
+
+    if llm_available():
+        llm = _llm_analysis(goal, upstream)
+        if llm:
+            return {"query": goal, **llm}
+
+    return _deterministic_analysis(goal, upstream)
 
 
 def _completed_task(task_id: str, query: str, payload: dict[str, Any]) -> dict[str, Any]:

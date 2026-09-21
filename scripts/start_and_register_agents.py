@@ -54,6 +54,10 @@ def wait_health(port: int, timeout: float = 20.0) -> bool:
 def main() -> int:
     procs: list[subprocess.Popen] = []
     print(f"Python: {PYTHON}")
+    print(f"Phase 37.2: Enhanced modes will be enabled for agents with LLM support")
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Note: Set OPENAI_API_KEY to enable full LLM capabilities")
+    
     for name, port in AGENTS:
         cwd = ROOT / "agents" / name
         if not (cwd / "agent.py").exists():
@@ -66,6 +70,19 @@ def main() -> int:
         env = os.environ.copy()
         env["PORT"] = str(port)
         env["AGENT_URL"] = f"http://127.0.0.1:{port}/"
+        
+        # Phase 37.2: Enable enhanced modes for agents with LLM support
+        if name == "search-agent":
+            env["SEARCH_USE_ENHANCED"] = "true"
+            env["SEARCH_USE_LLM"] = "true" if os.getenv("OPENAI_API_KEY") else "false"
+        elif name == "analysis-agent":
+            env["ANALYSIS_USE_ENHANCED"] = "true"
+        elif name == "report-agent":
+            env["REPORT_USE_ENHANCED"] = "true"
+        elif name == "rag-agent":
+            env["RAG_USE_ENHANCED"] = "true"
+            env["RAG_USE_LLM"] = "true" if os.getenv("OPENAI_API_KEY") else "false"
+        
         print(f"[start] {name} :{port}")
         log_path = cwd / f".uvicorn-{port}.log"
         log_f = open(log_path, "w", encoding="utf-8")

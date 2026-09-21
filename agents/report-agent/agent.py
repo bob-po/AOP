@@ -12,6 +12,22 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from context import (
+    format_upstream,
+    llm_available,
+    llm_chat,
+    parse_composed_query,
+)
+try:
+    from context_enhanced import (
+        llm_report_with_metadata,
+        extract_structured_data,
+        get_llm_provider,
+    )
+    ENHANCED_CONTEXT_AVAILABLE = True
+except ImportError:
+    ENHANCED_CONTEXT_AVAILABLE = False
+
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
 app = FastAPI(title="AOP Report Agent", version="0.2.0")
@@ -42,40 +58,80 @@ def _extract_query(params: dict[str, Any]) -> str:
     raise ValueError("message.parts must include at least one text part")
 
 
-def run_report(query: str) -> dict[str, Any]:
-    markdown = "\n".join(
-        [
-            f"# Report: {query}",
-            "",
-            f"_Generated at {_utc_now()}_",
-            "",
-            "## Executive Summary",
-            f"This report aggregates upstream research and knowledge retrieval for **{query}**.",
-            "",
-            "## Key Findings",
-            "1. **Agent Registry** enables skill discovery and online routing.",
-            "2. **Planner** produces an executable Task DAG from natural-language goals.",
-            "3. **Router + Scheduler** select online agents and run ready nodes in parallel.",
-            "4. **Artifacts** land in object storage for Console preview and reuse.",
-            "",
-            "## Architecture Snapshot",
-            "",
-            "```",
-            "User Goal → Planner → Task DAG → Router → A2A Agents → Aggregator → Report",
-            "```",
-            "",
-            "## Recommendations",
-            "- Keep critical agents (search / rag / analysis / report) online before large runs.",
-            "- Use Workflow templates for repeatable research pipelines.",
-            "- Enable `AUTH_REQUIRED` in non-local environments.",
-            "",
-            "## Appendix",
-            f"- Input goal length: {len(query)} chars",
-            "- Format: markdown",
-            "",
-        ]
+def _llm_report(goal: str, upstream: dict[str, Any]) -> str | None:
+    """Synthesize a markdown report via an OpenAI-compatible LLM."""
+    
+    # P37.2: Use enhanced context with structured data processing (default to enhanced)
+    use_enhanced = os.getenv("REPORT_USE_ENHANCED", "true").lower() == "true"
+    
+    if use_enhanced and ENHANCED_CONTEXT_AVAILABLE:
+        # Extract structured data from upstream for better report generation
+        structured_data = extract_structured_data(upstream)
+        print(f"[Report Agent] Extracted structured data from {len(structured_data)} upstream nodes")
+        
+        # Use enhanced report generation
+        report = llm_report_with_metadata(goal, upstream)
+        if report:
+            return report
+    
+    # Fallback to legacy implementation
+    system = (
+        "You are a report writer for a multi-agent AI orchestration platform. "
+        "Synthesize the provided research context (web search, knowledge-base retrieval, "
+        "business analysis) into a clear, well-structured markdown report with these "
+        "sections: Executive Summary, Research Findings, Knowledge Base, Business "
+        "Analysis, and Recommendations. Ground every claim in the provided upstream "
+        "content. Respond in the same language as the goal. Output markdown only."
     )
-    return {"query": query, "format": "markdown", "content": markdown}
+    user = f"Goal: {goal}"
+    if upstream:
+        user += f"\n\nUpstream results:\n{format_upstream(upstream)}"
+    return llm_chat(system, user, json_mode=False)
+
+
+def _deterministic_report(goal: str, upstream: dict[str, Any]) -> str:
+    """Input-driven fallback when no LLM is configured."""
+    lines = [
+        f"# Report: {goal}",
+        "",
+        f"_Generated at {_utc_now()}_",
+        "",
+        "## Executive Summary",
+        f"Automated research synthesis for the goal: **{goal}**",
+        "",
+    ]
+    section_titles = {
+        "search": "Research Findings (Web Search)",
+        "rag": "Knowledge Base",
+        "analysis": "Business Analysis",
+    }
+    for node_id, title in section_titles.items():
+        body = (upstream.get(node_id) or "").strip()
+        if not body:
+            continue
+        lines += [f"## {title}", "", body[:1500], ""]
+    lines += [
+        "## Recommendations",
+        "",
+        "Validate external search signals against internal knowledge, then prioritize "
+        "the highest-confidence capability gaps identified above.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def run_report(query: str) -> dict[str, Any]:
+    parsed = parse_composed_query(query)
+    goal = parsed["goal"]
+    upstream = parsed["upstream"]
+
+    content: str | None = None
+    if llm_available():
+        content = _llm_report(goal, upstream)
+    if not content:
+        content = _deterministic_report(goal, upstream)
+
+    return {"query": goal, "format": "markdown", "content": content}
 
 
 def _completed_task(task_id: str, query: str, payload: dict[str, Any]) -> dict[str, Any]:
