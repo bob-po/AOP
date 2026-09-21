@@ -41,7 +41,7 @@ class TenantAwareRAG:
                 api_key=api_key,
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                timeout=30.0,
+                timeout=180.0,
                 max_retries=2,
             )
             self._llm_provider = OpenAIProvider(config)
@@ -200,7 +200,6 @@ Always cite your sources using the citation numbers [1], [2], etc. Be accurate a
                     self._llm_provider.create_system_message(system_prompt),
                     self._llm_provider.create_user_message(user_prompt),
                 ],
-                max_tokens=500,
             )
             
             response = self._llm_provider.chat_completion(request)

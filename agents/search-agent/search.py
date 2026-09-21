@@ -29,6 +29,59 @@ def _unwrap_ddg_href(href: str) -> str:
         return href
 
 
+def _parse_bing(html: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Parse Bing SERP HTML into {title, url, snippet} results."""
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:  # noqa: BLE001
+        return []
+
+    results: list[dict[str, Any]] = []
+    for li in soup.select("li.b_algo"):
+        a = li.select_one("h2 a")
+        if not a:
+            continue
+        url = (a.get("href") or "").strip()
+        title = a.get_text(" ", strip=True)
+        if not title or not url:
+            continue
+        p = li.select_one("p")
+        snippet = p.get_text(" ", strip=True) if p else ""
+        results.append({"title": title, "url": url, "snippet": snippet[:400]})
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def bing_search(query: str, *, limit: int = 5) -> list[dict[str, Any]] | None:
+    """Bing web search — reachable from China, unlike DDG/Wikipedia."""
+    endpoint = (
+        os.getenv("SEARCH_BING_ENDPOINT", "https://cn.bing.com/search").strip()
+        or "https://cn.bing.com/search"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(
+                endpoint,
+                params={"q": query, "count": str(max(1, min(limit, 30)))},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+            )
+            if resp.status_code != 200:
+                return None
+            html = resp.text
+    except Exception:  # noqa: BLE001
+        return None
+
+    results = _parse_bing(html, limit=limit)
+    return results or None
+
+
 def mock_results(query: str) -> list[dict[str, Any]]:
     q = quote_plus(query)
     return [
@@ -184,6 +237,7 @@ async def run_search(query: str) -> dict[str, Any]:
         source = "mock"
     else:
         backends = [
+            ("bing", bing_search),
             ("duckduckgo-instant", duckduckgo_instant),
             ("duckduckgo-lite", duckduckgo_lite),
             ("wikipedia", wikipedia_opensearch),

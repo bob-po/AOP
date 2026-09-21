@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,18 @@ def _extract_query(params: dict[str, Any]) -> str:
     if texts:
         return " ".join(texts).strip()
     raise ValueError("message.parts must include at least one text part")
+
+
+def _extract_goal(query: str) -> str:
+    """Extract the user's research goal from the executor's composed prompt.
+
+    The orchestrator composes ``User goal: …`` + working memory + upstream results
+    into a single message; search only needs the bare goal as its query.
+    """
+    m = re.search(r"^User goal:\s*(.+)$", query, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return query.strip()
 
 
 def _completed_task(task_id: str, query: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -130,7 +143,8 @@ async def a2a_rpc(request: Request) -> JSONResponse:
                 return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": cached})
             
             query = _extract_query(params)
-            
+            query = _extract_goal(query)
+
             # P37.2: Use enhanced search if available and enabled
             use_enhanced = os.getenv("SEARCH_USE_ENHANCED", "false").lower() == "true"
             if use_enhanced and ENHANCED_SEARCH_AVAILABLE:

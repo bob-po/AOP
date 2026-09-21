@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +75,44 @@ def _extract_query(params: dict[str, Any]) -> str:
     raise ValueError("message.parts must include at least one text part")
 
 
+def _extract_goal(query: str) -> str:
+    """Extract the user's research goal from the executor's composed prompt.
+
+    Retrieval should run on the bare goal, not the ``User goal:`` / working-memory /
+    upstream-result boilerplate the orchestrator prepends.
+    """
+    m = re.search(r"^User goal:\s*(.+)$", query, re.MULTILINE)
+    if m:
+        return m.group(1).strip()
+    return query.strip()
+
+
+def _extract_upstream_context(query: str) -> str | None:
+    """Return upstream node results (``### node (skill)`` bodies) for LLM grounding.
+
+    Only matches the ``### <node> (<skill>)`` headers the executor emits under
+    ``Upstream results:``, not the ``### <key>`` working-memory headers.
+    """
+    header_re = re.compile(r"^###\s+([^\s()]+)\s*\(([^)]*)\)\s*$", re.MULTILINE)
+    matches = list(header_re.finditer(query))
+    if not matches:
+        return None
+    blocks = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(query)
+        body = query[start:end]
+        body = re.sub(
+            r"^Please continue based on the upstream results\..*$",
+            "",
+            body,
+            flags=re.MULTILINE,
+        ).strip()
+        if body:
+            blocks.append(body)
+    return "\n\n".join(blocks) if blocks else None
+
+
 def run_rag(query: str, *, top_k: int | None = None) -> dict[str, Any]:
     top_k = top_k or int(os.getenv("RAG_TOP_K") or "3")
     alpha = float(os.getenv("RAG_HYBRID_ALPHA") or "0.65")
@@ -137,6 +176,9 @@ def run_rag(query: str, *, top_k: int | None = None) -> dict[str, Any]:
 
 
 def _completed_task(task_id: str, query: str, payload: dict[str, Any], skill: str) -> dict[str, Any]:
+    # Prefer the LLM-enhanced answer when present; it is grounded in the same
+    # citations and is what downstream (analysis/report) should consume.
+    answer_text = payload.get("llm_answer") or payload["answer"]
     task = {
         "id": task_id,
         "contextId": task_id,
@@ -146,7 +188,7 @@ def _completed_task(task_id: str, query: str, payload: dict[str, Any], skill: st
                 "artifactId": str(uuid.uuid4()),
                 "name": "rag-answer",
                 "description": "Knowledge answer",
-                "parts": [{"type": "text", "text": payload["answer"]}],
+                "parts": [{"type": "text", "text": answer_text}],
             },
             {
                 "artifactId": str(uuid.uuid4()),
@@ -159,6 +201,7 @@ def _completed_task(task_id: str, query: str, payload: dict[str, Any], skill: st
             "skillId": skill,
             "query": query,
             "method": payload.get("method"),
+            "mode": payload.get("mode", "direct-rag"),
         },
     }
     _TASKS[task_id] = task
@@ -207,18 +250,24 @@ async def a2a_rpc(request: Request) -> JSONResponse:
             query = _extract_query(params)
             meta = params.get("metadata") or {}
             skill = str(meta.get("skillId") or "knowledge-search")
-            
+
+            # Retrieve on the bare goal, not the composed prompt boilerplate.
+            goal = _extract_goal(query)
+            upstream_context = _extract_upstream_context(query)
+
             # P37.2: Use enhanced RAG with tenant isolation if available and enabled
             use_enhanced = os.getenv("RAG_USE_ENHANCED", "false").lower() == "true"
             tenant_id = meta.get("tenantId") or os.getenv("DEFAULT_TENANT_ID")
-            
+
             if use_enhanced and ENHANCED_RAG_AVAILABLE:
                 use_llm = os.getenv("RAG_USE_LLM", "false").lower() == "true"
-                payload = run_rag_enhanced(query, tenant_id=tenant_id, use_llm=use_llm)
+                payload = run_rag_enhanced(
+                    goal, tenant_id=tenant_id, use_llm=use_llm, context=upstream_context
+                )
             else:
-                payload = run_rag(query)
+                payload = run_rag(goal)
             
-            result = _completed_task(str(uuid.uuid4()), query, payload, skill)
+            result = _completed_task(str(uuid.uuid4()), goal, payload, skill)
             
             # P36.1: Cache result for idempotency
             if idempotency_key:

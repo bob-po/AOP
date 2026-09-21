@@ -65,7 +65,7 @@ def get_llm_provider():
                 api_key=api_key,
                 base_url=os.getenv("OPENAI_BASE_URL"),
                 model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                timeout=60.0,
+                timeout=180.0,
                 max_retries=3,
                 temperature=0.3,  # Slightly higher temperature for more creative reports
             )
@@ -190,7 +190,6 @@ def llm_report_with_metadata(goal: str, upstream: dict[str, Any]) -> str | None:
                 provider.create_system_message(system),
                 provider.create_user_message(user),
             ],
-            max_tokens=2000,  # Allow longer responses for reports
         )
         
         response = provider.chat_completion(request)
