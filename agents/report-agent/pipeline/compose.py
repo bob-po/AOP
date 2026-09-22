@@ -125,6 +125,22 @@ def _is_experimental(goal: str, notes: list[dict[str, str]]) -> bool:
     return re.search(r"实验|PSNR|SSIM|LPIPS", blob, re.IGNORECASE) is not None
 
 
+def _is_brief_goal(goal: str) -> bool:
+    """One-sentence / short-answer goals get a 2-section layout."""
+    text = (goal or "").strip()
+    if not text:
+        return False
+    if any(k in text for k in ("分析", "对比", "比较", "研究", "调研", "报告", "实验")):
+        return False
+    markers = ("一句话", "是什么", "什么是", "简述", "简短", "简单介绍")
+    if any(k in text for k in markers):
+        return True
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) > 28:
+        return False
+    return bool(re.search(r"(什么|吗|呢|\?|？)$", compact) or "什么" in compact)
+
+
 def _layout_plan(goal: str, experimental: bool) -> dict[str, Any]:
     if experimental:
         sections = [
@@ -147,6 +163,11 @@ def _layout_plan(goal: str, experimental: bool) -> dict[str, Any]:
             {"id": "conclusion", "number": "6", "title": "结论", "paragraphs": []},
             {"id": "references", "number": "7", "title": "References", "paragraphs": []},
         ]
+    elif _is_brief_goal(goal):
+        sections = [
+            {"id": "summary", "number": "1", "title": "摘要", "paragraphs": []},
+            {"id": "references", "number": "2", "title": "References", "paragraphs": []},
+        ]
     else:
         sections = [
             {"id": "summary", "number": "1", "title": "摘要", "paragraphs": []},
@@ -159,6 +180,7 @@ def _layout_plan(goal: str, experimental: bool) -> dict[str, Any]:
     return {
         "title": _headline(goal),
         "experimental": experimental,
+        "brief": _is_brief_goal(goal) and not experimental,
         "sections": sections,
         "references": [],
     }
@@ -213,6 +235,24 @@ def _fill_content(plan: dict[str, Any], goal: str, notes: list[dict[str, str]]) 
     findings = grouped.get("findings") or []
     background = grouped.get("background") or []
     analysis = grouped.get("analysis") or []
+
+    brief = bool(plan.get("brief"))
+    if brief and "summary" in by_id:
+        # One or two sentences answering the goal — no multi-section expansion.
+        pieces = []
+        for item in findings[:1] + analysis[:1] + background[:1]:
+            if item and item not in pieces:
+                pieces.append(item.rstrip("。"))
+        if pieces:
+            by_id["summary"]["paragraphs"] = [_clip("。".join(pieces[:2]) + "。", 400)]
+        else:
+            by_id["summary"]["paragraphs"] = [
+                _clip(next((n["text"] for n in notes if n.get("text")), goal), 400)
+            ]
+        for section in _walk(plan["sections"]):
+            section["_fallback"] = list(section.get("paragraphs") or [])
+        return plan
+
     if "findings" in by_id:
         by_id["findings"]["paragraphs"] = findings[:2] or ["上游没有单独的检索结果。"]
     if "background" in by_id:
@@ -232,14 +272,16 @@ def _fill_content(plan: dict[str, Any], goal: str, notes: list[dict[str, str]]) 
     for item in finding_text[:1] + analysis[:1] + background[:1]:
         if item not in pieces:
             pieces.append(item.rstrip("。"))
-    if pieces:
-        by_id["summary"]["paragraphs"] = ["。".join(pieces[:2]) + "。"]
-    else:
-        by_id["summary"]["paragraphs"] = ["上游结果较少，以下只整理已经给出的材料。"]
-    closing = (analysis or finding_text or background or ["上游材料还不够形成进一步判断。"])[0]
-    if not str(closing).startswith("因此"):
-        closing = "因此，" + closing
-    by_id["conclusion"]["paragraphs"] = [_clip(closing, 280)]
+    if "summary" in by_id:
+        if pieces:
+            by_id["summary"]["paragraphs"] = ["。".join(pieces[:2]) + "。"]
+        else:
+            by_id["summary"]["paragraphs"] = ["上游结果较少，以下只整理已经给出的材料。"]
+    if "conclusion" in by_id:
+        closing = (analysis or finding_text or background or ["上游材料还不够形成进一步判断。"])[0]
+        if not str(closing).startswith("因此"):
+            closing = "因此，" + closing
+        by_id["conclusion"]["paragraphs"] = [_clip(closing, 280)]
     for section in _walk(plan["sections"]):
         section["_fallback"] = list(section.get("paragraphs") or [])
     return plan
@@ -253,15 +295,27 @@ def _merge_llm(plan: dict[str, Any], goal: str, notes: list[dict[str, str]]) -> 
     """
     if not llm_available() or not notes:
         return _scrub(plan, goal)
-    system = (
-        "You write the prose of a research report. Return one JSON object with "
-        "title (a short headline, never the user's instruction), "
-        "sections (array of {id, paragraphs}), and references (array of source names). "
-        "paragraphs are plain text in the same language as the goal, 1 to 3 items each. "
-        "Do not return HTML, CSS, or code. Do not copy the user goal into a paragraph. "
-        "Do not repeat a section title as a paragraph. "
-        "Keep 摘要, 研究发现, and 分析 distinct. Ground every sentence in the upstream notes."
-    )
+    brief = bool(plan.get("brief"))
+    if brief:
+        system = (
+            "You write a one-or-two sentence answer to the user's goal. "
+            "Return one JSON object with title (short headline), "
+            "sections (array of {id, paragraphs} for ids summary and optionally references), "
+            "and references (array of source names). "
+            "Put the direct answer only in 摘要/summary paragraphs (1-2 plain sentences). "
+            "Do not invent background, findings, or analysis sections. "
+            "Do not return HTML or code. Ground the answer in the upstream notes."
+        )
+    else:
+        system = (
+            "You write the prose of a research report. Return one JSON object with "
+            "title (a short headline, never the user's instruction), "
+            "sections (array of {id, paragraphs}), and references (array of source names). "
+            "paragraphs are plain text in the same language as the goal, 1 to 3 items each. "
+            "Do not return HTML, CSS, or code. Do not copy the user goal into a paragraph. "
+            "Do not repeat a section title as a paragraph. "
+            "Keep 摘要, 研究发现, and 分析 distinct. Ground every sentence in the upstream notes."
+        )
     user = f"Goal: {goal}\n\nExisting section ids: {[s['id'] for s in _walk(plan['sections'])]}\n\n"
     user += format_upstream({note["node_id"]: note["text"] for note in notes})
     raw = llm_chat(system, user, json_mode=True)

@@ -150,8 +150,87 @@ services:
     environment:
       AGENT_URL: http://search-agent:8001/
       PORT: "8001"
+      DEERFLOW_URL: ${DEERFLOW_URL:-http://deerflow:8000}
+      SEARCH_MODE: ${SEARCH_MODE:-auto}
+      DEERFLOW_TIMEOUT: ${DEERFLOW_TIMEOUT:-300}
     ports:
       - "8001:8001"
+    depends_on:
+      - deerflow
+    profiles:
+      - agents
+
+  # DeerFlow deep-research backend (https://github.com/bytedance/deer-flow main-1.x)
+  # Clone once: git clone --depth 1 --branch main-1.x https://github.com/bytedance/deer-flow.git third_party/deer-flow
+  # Then copy deployments/deerflow/{.env,conf.yaml}.example → .env / conf.yaml and fill LLM + search keys.
+  deerflow:
+    build:
+      context: ../third_party/deer-flow
+      dockerfile: Dockerfile
+    container_name: aop-deerflow
+    ports:
+      - "8020:8000"
+    env_file:
+      - ./deerflow/.env
+    environment:
+      # Resolved by conf.yaml $OPENAI_* placeholders (do not bake secrets into the image)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-chat}
+      SEARCH_API: ${SEARCH_API:-duckduckgo}
+      ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:8001,http://search-agent:8001
+    volumes:
+      - ./deerflow/conf.yaml:/app/conf.yaml:ro
+    # Image builds as root then switches to appuser; `uv run` tries to rewrite .venv → Permission denied.
+    # Call the venv interpreter directly so startup does not re-sync packages.
+    user: "0:0"
+    command: ["/app/.venv/bin/python", "server.py", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    profiles:
+      - deerflow
+      - agents
+
+  # DeepPresenter / PPTAgent v1.1.38 (https://github.com/icip-cas/PPTAgent/tree/v1.1.38)
+  # Clone once: git clone --depth 1 --branch v1.1.38 https://github.com/icip-cas/PPTAgent.git third_party/PPTAgent
+  # Pull images: docker pull forceless/deeppresenter-host && docker tag forceless/deeppresenter-host deeppresenter-host
+  #              docker pull forceless/deeppresenter-sandbox && docker tag forceless/deeppresenter-sandbox deeppresenter-sandbox
+  # Copy deployments/pptagent/config.yaml.example → config.yaml and fill LLM keys.
+  deeppresenter:
+    image: deeppresenter-host
+    container_name: aop-deeppresenter
+    ports:
+      - "8021:7861"
+    environment:
+      DEEPPRESENTER_HOST_WORKSPACE_BASE: /opt/workspace
+      DEEPPRESENTER_WORKSPACE_BASE: /opt/workspace
+      DEEPPRESENTER_LOG_LEVEL: "10"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com}
+    volumes:
+      - ./pptagent/workspace:/opt/workspace
+      - ./pptagent/config.yaml:/usr/src/pptagent/deeppresenter/config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    profiles:
+      - pptagent
+      - agents
+
+  ppt-agent:
+    build:
+      context: ../agents/ppt-agent
+    container_name: aop-ppt-agent
+    environment:
+      AGENT_URL: http://ppt-agent:8009/
+      PORT: "8009"
+      PPT_MODE: ${PPT_MODE:-auto}
+      PPTAGENT_CONTAINER: aop-deeppresenter
+      PPTAGENT_TIMEOUT: ${PPTAGENT_TIMEOUT:-600}
+    ports:
+      - "8009:8009"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - deeppresenter
     profiles:
       - agents
 

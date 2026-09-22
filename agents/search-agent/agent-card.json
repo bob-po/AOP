@@ -1,8 +1,8 @@
 {
   "name": "Search Agent",
-  "description": "Multi-backend web search (DuckDuckGo Instant/Lite, Wikipedia) with mock fallback for AOP research pipelines.",
+  "description": "Multi-backend web search (DeerFlow deep research + live engines) that returns sources and summarized content for AOP research pipelines.",
   "url": "http://127.0.0.1:8001/",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "protocolVersion": "0.3.0",
   "agentId": "aop-search-agent-v1",
   "agentKey": "search-agent",
@@ -17,7 +17,7 @@
     {
       "id": "web-search",
       "name": "Web Search",
-      "description": "Search the public web for a query and return summarized results",
+      "description": "Search via DeerFlow deep research (when configured) or live web backends; return sources and summary",
       "tags": ["search", "research"],
       "examples": ["AI Agent Orchestration", "A2A protocol overview", "latest Python features"],
       "inputModes": ["text"],

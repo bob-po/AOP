@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from search import run_search
+from page_fetch import fetch_url_sync
 try:
     from search_enhanced import run_search_sync
     ENHANCED_SEARCH_AVAILABLE = True
@@ -23,7 +24,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
 
-app = FastAPI(title="AOP Search Agent", version="0.2.0")
+app = FastAPI(title="AOP Search Agent", version="0.5.0")
 _TASKS: dict[str, dict[str, Any]] = {}
 
 # P36.1: In-memory idempotency cache for Agent-side deduplication
@@ -59,6 +60,11 @@ def _extract_query(params: dict[str, Any]) -> str:
     raise ValueError("message.parts must include at least one text part")
 
 
+def _skill_id(params: dict[str, Any]) -> str:
+    metadata = params.get("metadata") or {}
+    return str(metadata.get("skillId") or metadata.get("skill_id") or "web-search")
+
+
 def _extract_goal(query: str) -> str:
     """Extract the user's research goal from the executor's composed prompt.
 
@@ -71,7 +77,47 @@ def _extract_goal(query: str) -> str:
     return query.strip()
 
 
-def _completed_task(task_id: str, query: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _looks_like_url(text: str) -> bool:
+    return bool(re.match(r"^https?://\S+$", (text or "").strip(), flags=re.I))
+
+
+def _run_url_fetch(url: str) -> dict[str, Any]:
+    page = fetch_url_sync(url)
+    summary_lines = [
+        f"URL fetch: {page.get('url') or url}",
+        f"Status: {page.get('status')}",
+        "",
+    ]
+    if page.get("title"):
+        summary_lines.append(page["title"])
+        summary_lines.append("")
+    if page.get("content"):
+        summary_lines.append(page["content"])
+    elif page.get("error"):
+        summary_lines.append(f"Error: {page['error']}")
+    return {
+        "query": url,
+        "source": "url-fetch",
+        "results": [
+            {
+                "title": page.get("title") or url,
+                "url": page.get("url") or url,
+                "snippet": (page.get("content") or page.get("error") or "")[:400],
+                "content": page.get("content") or "",
+                "page": {
+                    "ok": page.get("ok"),
+                    "status": page.get("status"),
+                    "title": page.get("title") or "",
+                    "error": page.get("error") or "",
+                },
+            }
+        ],
+        "tried": ["url-fetch"],
+        "summary": "\n".join(summary_lines).strip(),
+    }
+
+
+def _completed_task(task_id: str, query: str, payload: dict[str, Any], *, skill: str) -> dict[str, Any]:
     task = {
         "id": task_id,
         "contextId": task_id,
@@ -96,13 +142,14 @@ def _completed_task(task_id: str, query: str, payload: dict[str, Any]) -> dict[s
                             "query": payload["query"],
                             "source": payload["source"],
                             "tried": payload.get("tried") or [],
+                            "answer": payload.get("answer") or "",
                             "results": payload["results"],
                         }
                     )
                 ],
             },
         ],
-        "metadata": {"skillId": "web-search", "query": query, "source": payload.get("source")},
+        "metadata": {"skillId": skill, "query": query, "source": payload.get("source")},
     }
     _TASKS[task_id] = task
     return task
@@ -113,8 +160,10 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "agent": "search-agent",
-        "version": "0.2.0",
+        "version": "0.5.0",
         "search_mode": os.getenv("SEARCH_MODE", "auto"),
+        "fetch_pages": os.getenv("SEARCH_FETCH_PAGES", "3"),
+        "deerflow": "configured" if os.getenv("DEERFLOW_URL") else "off",
     }
 
 
@@ -144,16 +193,21 @@ async def a2a_rpc(request: Request) -> JSONResponse:
             
             query = _extract_query(params)
             query = _extract_goal(query)
+            skill = _skill_id(params)
 
-            # P37.2: Use enhanced search if available and enabled
-            use_enhanced = os.getenv("SEARCH_USE_ENHANCED", "false").lower() == "true"
-            if use_enhanced and ENHANCED_SEARCH_AVAILABLE:
-                payload = run_search_sync(query)
+            if skill == "url-fetch" or _looks_like_url(query):
+                payload = _run_url_fetch(query)
+                skill = "url-fetch"
             else:
-                payload = await run_search(query)
+                # P37.2: Use enhanced search if available and enabled
+                use_enhanced = os.getenv("SEARCH_USE_ENHANCED", "false").lower() == "true"
+                if use_enhanced and ENHANCED_SEARCH_AVAILABLE:
+                    payload = run_search_sync(query)
+                else:
+                    payload = await run_search(query)
             
             task_id = str(uuid.uuid4())
-            result = _completed_task(task_id, query, payload)
+            result = _completed_task(task_id, query, payload, skill=skill)
             
             # P36.1: Cache result for idempotency
             if idempotency_key:

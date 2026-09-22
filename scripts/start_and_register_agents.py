@@ -21,6 +21,7 @@ AGENTS = [
     ("video-agent", 8006),
     ("code-agent", 8007),
     ("browser-agent", 8008),
+    ("ppt-agent", 8009),
 ]
 GATEWAY = os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")
 API_KEY = (
@@ -82,6 +83,11 @@ def main() -> int:
         elif name == "rag-agent":
             env["RAG_USE_ENHANCED"] = "true"
             env["RAG_USE_LLM"] = "true" if os.getenv("OPENAI_API_KEY") else "false"
+        
+        elif name == "ppt-agent":
+            env["PPT_MODE"] = os.getenv("PPT_MODE") or "auto"
+            if os.getenv("PPTAGENT_CONTAINER"):
+                env["PPTAGENT_CONTAINER"] = os.environ["PPTAGENT_CONTAINER"]
         
         print(f"[start] {name} :{port}")
         log_path = cwd / f".uvicorn-{port}.log"

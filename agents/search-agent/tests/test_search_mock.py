@@ -21,7 +21,9 @@ def test_mock_results_shape():
 
 def test_run_search_mock_mode():
     os.environ["SEARCH_MODE"] = "mock"
+    os.environ["SEARCH_FETCH_PAGES"] = "0"
     payload = asyncio.run(run_search("multi agent orchestration"))
     assert payload["source"] == "mock"
     assert payload["results"]
     assert "Search results for" in payload["summary"]
+    assert "content" not in payload["results"][0]

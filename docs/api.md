@@ -58,7 +58,7 @@ Gateway (:8080)
 
 **响应 `201`：** 含 `task_id`、`status`、`plan`、`ready_nodes`、`enqueued_nodes`、`nodes`。
 
-创建时写入工作记忆 `goal`；Planner 对 `HITL_SKILLS`（默认 `report-generation`）节点标记 `requires_approval`。
+创建时写入工作记忆 `goal`；Planner 对 `HITL_SKILLS`（默认 `report-generation,ppt-generation`）节点标记 `requires_approval`。
 
 ### 2.2 查询 / 列表 / 取消
 

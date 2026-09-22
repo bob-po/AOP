@@ -45,8 +45,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         }
       } catch {
         if (!cancelled) {
-          setAuthed(!!getSessionToken());
-          setUserLabel(getSessionToken() ? "会话" : "访客");
+          // Drop stale local session so API Key / anonymous mode can work.
+          if (getSessionToken()) setSessionToken(null);
+          setAuthed(false);
+          setUserLabel("访客");
         }
       }
     })();

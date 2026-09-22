@@ -28,7 +28,7 @@ import {
 
 const TEMPLATES = [
   { label: "产品调研", text: "帮我调研一款AI产品，搜索资料，RAG分析，生成宣传图，输出报告" },
-  { label: "PPT生成", text: "搜索并检索知识库后，生成一份产品分析报告" },
+  { label: "PPT生成", text: "搜索并检索知识库后，生成一份产品发布演示 PPT" },
   { label: "视频制作", text: "搜索 A2A Agent Orchestration 的公开资料并总结成宣传文案" },
 ];
 

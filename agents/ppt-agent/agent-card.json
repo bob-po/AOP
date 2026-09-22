@@ -1,0 +1,43 @@
+{
+  "name": "PPT Agent",
+  "description": "PowerPoint generation via DeepPresenter (PPTAgent v1.1.38) with python-pptx stub fallback.",
+  "url": "http://127.0.0.1:8009/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "agentId": "aop-ppt-agent-v1",
+  "agentKey": "ppt-agent",
+  "capabilities": { "streaming": false },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": [
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "ppt-generation",
+      "name": "PPT Generation",
+      "description": "Generate an editable PowerPoint deck from a text brief (DeepPresenter or stub)",
+      "tags": ["ppt", "presentation", "powerpoint", "pptagent"],
+      "examples": [
+        "生成一份产品发布会 PPT",
+        "Create a 6-slide deck about A2A orchestration"
+      ],
+      "inputModes": ["text"],
+      "outputModes": [
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/json"
+      ],
+      "requiresApproval": true
+    }
+  ],
+  "runtime": {
+    "framework": "fastapi",
+    "pythonVersion": "3.11+",
+    "timeoutSeconds": 600
+  },
+  "metadata": {
+    "author": "AOP Platform",
+    "upstream": "https://github.com/icip-cas/PPTAgent/tree/v1.1.38",
+    "tags": ["ppt", "deeppresenter", "pptagent"]
+  }
+}

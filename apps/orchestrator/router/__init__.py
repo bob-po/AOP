@@ -359,6 +359,7 @@ def normalize_endpoint(url: str) -> str:
         "video-agent": 8006,
         "code-agent": 8007,
         "browser-agent": 8008,
+        "ppt-agent": 8009,
     }
     if host in mapped:
         port = parsed.port or mapped[host]
@@ -368,7 +369,7 @@ def normalize_endpoint(url: str) -> str:
 
 def hitl_skills() -> set[str]:
     """Skills that pause for human approval after success (comma-separated env)."""
-    raw = os.getenv("HITL_SKILLS", "report-generation")
+    raw = os.getenv("HITL_SKILLS", "report-generation,ppt-generation")
     if not raw or raw.strip().lower() in {"0", "false", "off", "none"}:
         return set()
     return {s.strip() for s in raw.split(",") if s.strip()}

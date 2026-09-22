@@ -10,7 +10,8 @@ from .dag import PlanNode
 _SKILL_HINTS: list[tuple[tuple[str, ...], str]] = [
     (("视频", "video", "短片", "宣传片"), "text-to-video"),
     (("图", "image", "海报", "插画", "宣传图"), "text-to-image"),
-    (("报告", "report", "ppt", "总结", "summary"), "report-generation"),
+    (("ppt", "pptx", "幻灯片", "演示文稿", "课件", "powerpoint"), "ppt-generation"),
+    (("报告", "report", "总结", "summary"), "report-generation"),
     (("分析", "analysis", "研判"), "business-analysis"),
     (("知识库", "rag", "文档", "资料库"), "knowledge-search"),
     (("搜索", "search", "检索", "查找", "调研", "研究"), "web-search"),
@@ -22,7 +23,7 @@ _SPLIT_RE = re.compile(
     r"|首先|然后|接着|其次|最后|再者"
     r"|先\s*|再\s*|然后\s*"
     r"|\bthen\b|\bafter that\b|\band then\b"
-    r"|；|;|\n+"
+    r"|；|;|，|,|\n+"  # Chinese / English commas between actions
     r")",
     re.IGNORECASE,
 )
@@ -74,6 +75,7 @@ def decompose_to_nodes(
             "knowledge-search": "rag",
             "business-analysis": "analysis",
             "report-generation": "report",
+            "ppt-generation": "ppt",
             "text-to-image": "image",
             "text-to-video": "video",
         }.get(skill)

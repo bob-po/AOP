@@ -65,6 +65,25 @@ def test_run_report_emits_html_bundle(monkeypatch):
     assert numbers[:3] == ["摘要", "背景", "研究发现"]
 
 
+def test_brief_goal_uses_short_layout(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("REPORT_PDF_ENGINE", "none")
+    brief = (
+        "User goal: 用一句话介绍 A2A 协议是什么\n"
+        "\n"
+        "Upstream results:\n"
+        "### search (web-search)\n"
+        "A2A (Agent2Agent) is an open protocol for agent interoperability.\n"
+        "https://a2a-protocol.org/\n"
+    )
+    payload = run_report(brief)
+    titles = [section["title"] for section in payload["plan"]["sections"]]
+    assert titles == ["摘要", "References"]
+    assert payload["plan"].get("brief") is True
+    assert "背景" not in titles
+    assert "研究发现" not in titles
+
+
 def test_experiment_plan_includes_metric_sections(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("REPORT_PDF_ENGINE", "none")

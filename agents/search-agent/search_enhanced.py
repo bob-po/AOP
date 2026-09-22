@@ -26,6 +26,7 @@ from agent_runtime import (
 from agent_runtime.tool_loop import ToolCallingLoop
 
 from search import mock_results, _parse_bing
+from page_fetch import enrich_results_with_pages, format_page_summary
 
 USER_AGENT = "AOP-SearchAgent/0.3 (+https://github.com/aop)"
 
@@ -481,16 +482,18 @@ class SearchAgentRuntime(AgentRuntime):
 
     def _llm_synthesize(self, query: str, results: list[dict[str, Any]], source: str) -> dict[str, Any]:
         """Synthesize a research overview grounded ONLY in the provided live results."""
+        results = enrich_results_with_pages(results)
         system = (
             "You are a research assistant. The user asked a research question and you "
-            "were given live web search results. Synthesize a concise, accurate research "
-            "overview grounded ONLY in the provided results, citing them by number [1], "
-            "[2], etc. Answer in the same language as the query."
+            "were given live web search results plus page excerpts opened from those URLs. "
+            "Synthesize a concise, accurate research overview grounded ONLY in the provided "
+            "results, citing them by number [1], [2], etc. Answer in the same language as the query."
         )
-        context = "\n\n".join(
-            f"[{i}] {r['title']}\n{r['url']}\n{r['snippet']}"
-            for i, r in enumerate(results, 1)
-        )
+        blocks = []
+        for i, r in enumerate(results, 1):
+            body = r.get("content") or r.get("snippet") or ""
+            blocks.append(f"[{i}] {r.get('title')}\n{r.get('url')}\n{body}")
+        context = "\n\n".join(blocks)
         content = ""
         try:
             request = self._llm_provider.create_request(
@@ -507,13 +510,23 @@ class SearchAgentRuntime(AgentRuntime):
         summary_lines = [f"Search results for: {query}", f"Source: {source} (real-time web)", ""]
         if content:
             summary_lines.append(content)
-        else:
-            for i, item in enumerate(results, 1):
-                summary_lines.append(f"{i}. {item['title']}")
-                summary_lines.append(f"   {item['url']}")
-                if item.get("snippet"):
-                    summary_lines.append(f"   {item['snippet']}")
-                summary_lines.append("")
+            summary_lines.append("")
+        for i, item in enumerate(results, 1):
+            summary_lines.append(f"{i}. {item.get('title')}")
+            summary_lines.append(f"   {item.get('url')}")
+            if item.get("snippet"):
+                summary_lines.append(f"   {item['snippet']}")
+            if item.get("content"):
+                excerpt = item["content"]
+                if len(excerpt) > 700:
+                    excerpt = excerpt[:700].rstrip() + "…"
+                summary_lines.append(f"   [page] {excerpt}")
+            summary_lines.append("")
+        page_lines = format_page_summary(results)
+        if page_lines:
+            summary_lines.append("---")
+            summary_lines.append("")
+            summary_lines.extend(page_lines)
 
         return {
             "query": query,
@@ -541,14 +554,24 @@ class SearchAgentRuntime(AgentRuntime):
                 }
             
             # Format results
-            results = result.data.get("results", [])
+            results = enrich_results_with_pages(result.data.get("results", []))
             summary_lines = [f"Search results for: {query}", f"Source: {result.data.get('source', 'unknown')}", ""]
             for i, item in enumerate(results, 1):
                 summary_lines.append(f"{i}. {item['title']}")
                 summary_lines.append(f"   {item['url']}")
                 if item.get("snippet"):
                     summary_lines.append(f"   {item['snippet']}")
+                if item.get("content"):
+                    excerpt = item["content"]
+                    if len(excerpt) > 700:
+                        excerpt = excerpt[:700].rstrip() + "…"
+                    summary_lines.append(f"   [page] {excerpt}")
                 summary_lines.append("")
+            page_lines = format_page_summary(results)
+            if page_lines:
+                summary_lines.append("---")
+                summary_lines.append("")
+                summary_lines.extend(page_lines)
             
             return {
                 "query": query,

@@ -15,9 +15,9 @@ from minio.error import S3Error
 
 
 DEFAULT_BUCKET = "aop-artifacts"
-_MAX_BUNDLE_BYTES = 2_000_000
+_MAX_BUNDLE_BYTES = 15_000_000
 _MAX_BUNDLE_FILES = 32
-_BUNDLE_EXACT = {"report.html", "report.css", "report.pdf"}
+_BUNDLE_EXACT = {"report.html", "report.css", "report.pdf", "deck.pptx", "report.pptx"}
 _BUNDLE_DIRS = ("assets/images/", "assets/charts/", "assets/diagrams/")
 _MIME = {
     ".html": "text/html; charset=utf-8",
@@ -28,6 +28,7 @@ _MIME = {
     ".jpeg": "image/jpeg",
     ".pdf": "application/pdf",
     ".json": "application/json",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 
 
@@ -338,6 +339,13 @@ class ArtifactStore:
                 mime = "video/" + name.rsplit(".", 1)[-1]
             elif name.endswith(".pdf"):
                 mime = "application/pdf"
+            elif name.endswith(".pptx"):
+                mime = (
+                    "application/vnd.openxmlformats-officedocument"
+                    ".presentationml.presentation"
+                )
+            elif name.endswith(".ppt"):
+                mime = "application/vnd.ms-powerpoint"
             out.append(
                 {
                     "task_id": tid,
@@ -374,4 +382,12 @@ def _guess_type(name: str) -> str:
         return "json"
     if name.endswith((".txt", ".md")):
         return "text"
+    if name.endswith((".pptx", ".ppt")):
+        return "ppt"
+    if name.endswith(".pdf"):
+        return "pdf"
+    if name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+        return "image"
+    if name.endswith((".mp4", ".webm")):
+        return "video"
     return "file"

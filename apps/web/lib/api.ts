@@ -26,6 +26,10 @@ function authHeader(): string {
   return getSessionToken() || API_KEY;
 }
 
+function isSessionToken(token: string): boolean {
+  return token.startsWith("aop_sess_");
+}
+
 export type TaskNode = {
   id: string;
   skill: string;
@@ -128,12 +132,17 @@ export type ApiKeyRecord = {
   api_key?: string;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit & { __sessionRetried?: boolean },
+): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(init?.headers as Record<string, string> | undefined),
   };
-  const token = authHeader();
+  // Login is public — do not attach a stale session Bearer.
+  const skipAuth = path === "/v1/auth/login";
+  const token = skipAuth ? "" : authHeader();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
@@ -144,6 +153,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text();
+    // Stale browser session blocks API Key / anonymous local mode — clear and retry once.
+    if (
+      res.status === 401 &&
+      !skipAuth &&
+      token &&
+      isSessionToken(token) &&
+      !init?.__sessionRetried
+    ) {
+      setSessionToken(null);
+      const { __sessionRetried: _ignored, ...rest } = init || {};
+      return request<T>(path, { ...rest, __sessionRetried: true });
+    }
     throw new Error(`${res.status} ${text}`);
   }
   return res.json() as Promise<T>;

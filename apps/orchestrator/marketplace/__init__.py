@@ -108,6 +108,17 @@ CATALOG: list[dict[str, Any]] = [
         "agent_key": "browser-agent",
         "tags": ["browser", "sandbox", "high-risk", "chromium"],
     },
+    {
+        "package_id": "pkg-ppt",
+        "name": "PPT Agent",
+        "description": "PowerPoint decks via DeepPresenter (PPTAgent) with python-pptx stub",
+        "publisher": "AOP Official",
+        "version": "0.1.0",
+        "skills": ["ppt-generation"],
+        "default_endpoint": _agent_endpoint("AOP_AGENT_PPT_URL", "http://127.0.0.1:8009"),
+        "agent_key": "ppt-agent",
+        "tags": ["ppt", "presentation", "pptagent"],
+    },
 ]
 
 

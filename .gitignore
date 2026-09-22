@@ -47,3 +47,10 @@ secrets/
 .gateway.err
 .orch.err
 .worker.err
+
+# Vendored upstream clones (optional local Docker builds)
+third_party/
+
+# DeerFlow runtime secrets (keep *.example committed)
+deployments/deerflow/.env
+deployments/deerflow/conf.yaml

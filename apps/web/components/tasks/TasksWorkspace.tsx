@@ -15,6 +15,7 @@ import {
 import { useTaskLive } from "@/hooks/useTaskLive";
 import { TaskFlowDag } from "@/components/tasks/TaskFlowDag";
 import { TaskTrace } from "@/components/TaskTrace";
+import { PptPreview } from "@/components/tasks/PptPreview";
 
 const FILTERS = [
   { key: "", label: "全部" },
@@ -27,6 +28,20 @@ const FILTERS = [
 
 function isReportSkill(skill: string) {
   return skill.toLowerCase().includes("report");
+}
+
+function isPptSkill(skill: string) {
+  const s = skill.toLowerCase();
+  return s === "ppt" || s === "ppt-generation" || s.includes("ppt-generation");
+}
+
+function isWideDetail(skill: string) {
+  return isReportSkill(skill) || isPptSkill(skill);
+}
+
+function isPptxName(name: string | undefined) {
+  const n = (name || "").replace(/\\/g, "/").toLowerCase();
+  return n.endsWith(".pptx") || n.endsWith("deck.pptx") || n.endsWith("report.pptx");
 }
 
 const DIMENSION_LABELS: Record<string, string> = {
@@ -178,6 +193,15 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     return html?.url || text?.url || null;
   }, [artifacts, detailNode]);
 
+  const pptArtifact = useMemo(() => {
+    if (!detailNode || !isPptSkill(detailNode.skill)) return null;
+    const owned = artifacts.filter((item) => item.node_id === detailNode.id);
+    const deck =
+      owned.find((item) => (item.name || "").replace(/\\/g, "/").endsWith("deck.pptx")) ||
+      owned.find((item) => isPptxName(item.name));
+    return deck?.url ? deck : null;
+  }, [artifacts, detailNode]);
+
   const goal = task?.input_json?.content || task?.plan_json?.goal || task?.title || "";
 
   function copyArtifactsToClipboard() {
@@ -317,7 +341,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       {/* Right drawer */}
       <aside
         className={`flex w-full shrink-0 flex-col border-t border-white/10 lg:border-l lg:border-t-0 ${
-          detailNode && isReportSkill(detailNode.skill) ? "lg:w-[40rem]" : "lg:w-80"
+          detailNode && isWideDetail(detailNode.skill) ? "lg:w-[40rem]" : "lg:w-80"
         }`}
       >
         <div className="border-b border-white/10 px-4 py-3">
@@ -461,7 +485,15 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                   {detailNode.id} · {detailNode.skill}
                 </span>
               </div>
-              {isReportSkill(detailNode.skill) ? (
+              {isPptSkill(detailNode.skill) ? (
+                pptArtifact?.url ? (
+                  <PptPreview url={pptArtifact.url} name={pptArtifact.name} />
+                ) : (
+                  <p className="text-xs text-mist-400">
+                    PPT 还在生成，预览会在 deck.pptx 产出后出现。
+                  </p>
+                )
+              ) : isReportSkill(detailNode.skill) ? (
                 reportPreviewUrl ? (
                   <iframe
                     title="报告预览"

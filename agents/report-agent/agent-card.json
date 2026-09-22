@@ -45,12 +45,12 @@
     },
     {
       "id": "ppt",
-      "name": "PowerPoint Generation",
-      "description": "Generate PowerPoint presentation slides (stub implementation)",
-      "tags": ["report", "writing", "presentation"],
-      "examples": ["Create slide deck for quarterly review", "Generate presentation for product launch"],
+      "name": "PowerPoint Generation (deprecated)",
+      "description": "Deprecated: use ppt-agent skill ppt-generation. This skill still emits HTML report layout, not PPTX.",
+      "tags": ["report", "writing", "presentation", "deprecated"],
+      "examples": ["Create slide deck for quarterly review"],
       "inputModes": ["text"],
-      "outputModes": ["application/vnd.ms-powerpoint"],
+      "outputModes": ["text/html"],
       "requiresApproval": false
     }
   ],

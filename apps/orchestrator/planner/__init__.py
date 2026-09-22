@@ -27,6 +27,137 @@ PIPELINE: list[tuple[str, str, tuple[str, ...]]] = [
     ("report", "report-generation", ("analysis",)),
 ]
 
+_SIMPLE_QA_MARKERS = (
+    "一句话",
+    "一句话介绍",
+    "是什么",
+    "什么是",
+    "简述",
+    "简短",
+    "简单介绍",
+)
+_REPORT_INTENT = (
+    "报告",
+    "report",
+    "总结",
+    "summary",
+    "调研",
+    "生成报告",
+)
+_PPT_INTENT = (
+    "ppt",
+    "pptx",
+    "powerpoint",
+    "幻灯片",
+    "演示文稿",
+    "课件",
+    "生成ppt",
+    "做个ppt",
+    "做一份ppt",
+)
+_SEARCH_INTENT = (
+    "搜索",
+    "检索",
+    "查找",
+    "搜一下",
+    "search",
+    "什么是",
+    "是什么",
+)
+_RAG_INTENT = (
+    "知识库",
+    "rag",
+    "资料库",
+    "本地文档",
+    "文档库",
+)
+_ANALYSIS_INTENT = (
+    "分析",
+    "对比",
+    "比较",
+    "研判",
+    "综述",
+)
+_DEEP_RESEARCH = (
+    "调研",
+    "研究",
+    "深入",
+    "全面了解",
+    "深度",
+)
+_RESEARCH_EXCLUDE_FROM_SIMPLE = (
+    "报告",
+    "report",
+    "ppt",
+    "pptx",
+    "幻灯片",
+    "演示文稿",
+    "总结",
+    "summary",
+    "调研",
+    "分析并",
+    "生成报告",
+)
+_MEDIA_EXCLUDE_FROM_SIMPLE = (
+    "图",
+    "image",
+    "宣传图",
+    "海报",
+    "插画",
+    "视频",
+    "video",
+    "短片",
+    "宣传片",
+)
+
+
+def _wants_report(goal: str) -> bool:
+    text = (goal or "").lower()
+    return any(k in text for k in _REPORT_INTENT)
+
+
+def _wants_ppt(goal: str) -> bool:
+    text = (goal or "").lower()
+    return any(k in text for k in _PPT_INTENT)
+
+
+def _wants_search(goal: str) -> bool:
+    text = (goal or "").lower()
+    return any(k in text for k in _SEARCH_INTENT)
+
+
+def _wants_rag(goal: str) -> bool:
+    text = (goal or "").lower()
+    return any(k in text for k in _RAG_INTENT)
+
+
+def _wants_analysis(goal: str) -> bool:
+    return any(k in (goal or "") for k in _ANALYSIS_INTENT)
+
+
+def _wants_deep_research(goal: str) -> bool:
+    return any(k in (goal or "") for k in _DEEP_RESEARCH)
+
+
+def _is_simple_qa(goal: str) -> bool:
+    """True for short factual / one-sentence questions — search only, no report DAG."""
+    text = (goal or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if any(k in lower for k in _RESEARCH_EXCLUDE_FROM_SIMPLE):
+        return False
+    if any(k in text for k in _MEDIA_EXCLUDE_FROM_SIMPLE):
+        return False
+    if any(k in text for k in ("分析", "对比", "比较", "研究", "调研")):
+        return False
+    if any(k in text for k in _SIMPLE_QA_MARKERS):
+        return True
+    compact = re.sub(r"\s+", "", text)
+    if len(compact) > 28:
+        return False
+    return bool(re.search(r"(什么|吗|呢|\?|？)$", compact) or "什么" in compact)
+
 
 @dataclass
 class PlannerResult:
@@ -121,11 +252,26 @@ class Planner:
         return [r["skill_id"] for r in rows]
 
     def _heuristic_nodes(self, goal: str, available: set[str]) -> list[PlanNode]:
+        """Build a *minimal* intent DAG — do not dump the full research pipeline."""
         text = goal.lower()
-        wants_report = any(
-            k in text for k in ("报告", "report", "ppt", "总结", "summary", "生成")
-        )
+        wants_report = _wants_report(goal)
+        wants_ppt = _wants_ppt(goal)
+        wants_search = _wants_search(goal)
+        wants_rag = _wants_rag(goal)
+        wants_analysis = _wants_analysis(goal)
+        deep = _wants_deep_research(goal)
+        wants_image = any(k in text for k in ("图", "image", "宣传图", "海报", "插画"))
+        wants_video = any(k in text for k in ("视频", "video", "短片", "宣传片"))
         hitl = set(hitl_skills())
+
+        # Intro PPT without deep research / analysis / report → search→ppt only.
+        thin_intro_ppt = (
+            wants_ppt
+            and not wants_report
+            and not wants_analysis
+            and not deep
+            and not wants_rag
+        )
 
         created: dict[str, PlanNode] = {}
 
@@ -140,21 +286,67 @@ class Planner:
                 requires_approval=skill in hitl,
             )
 
-        try_add("search", "web-search", ())
-        try_add("rag", "knowledge-search", ())
-        try_add("analysis", "business-analysis", ("search", "rag"))
+        # Short factual Q&A → web-search only (DeerFlow/Bing already answer in-band).
+        if _is_simple_qa(goal):
+            try_add("search", "web-search", ())
+            return list(created.values())
 
-        if "report-generation" in available and (wants_report or len(created) >= 1):
+        # Pure media generation (no research / report / ppt wording).
+        researchish = (
+            wants_search
+            or wants_rag
+            or wants_analysis
+            or wants_report
+            or wants_ppt
+            or deep
+        )
+        if (wants_image or wants_video) and not researchish:
+            if wants_image:
+                try_add("image", "text-to-image", ())
+            if wants_video:
+                try_add("video", "text-to-video", ())
+            return list(created.values())
+
+        # --- gather context only when needed ---
+        need_search = (
+            wants_search
+            or wants_report
+            or wants_ppt
+            or wants_analysis
+            or deep
+            or (not created and not wants_image and not wants_video)
+        )
+        if need_search:
+            try_add("search", "web-search", ())
+
+        # RAG: explicit ask, or deep research (not thin intro PPT).
+        if wants_rag or (deep and not thin_intro_ppt):
+            try_add("rag", "knowledge-search", ())
+
+        # Analysis: explicit, report pipeline, or deep research (not thin PPT).
+        if wants_analysis or wants_report or (deep and not thin_intro_ppt):
+            analysis_deps = tuple(n for n in ("search", "rag") if n in created)
+            try_add("analysis", "business-analysis", analysis_deps)
+
+        if wants_report:
+            report_deps: tuple[str, ...] = (
+                ("analysis",) if "analysis" in created else tuple(created.keys())
+            )
+            try_add("report", "report-generation", report_deps)
+
+        if wants_ppt:
             if "analysis" in created:
-                deps: tuple[str, ...] = ("analysis",)
+                ppt_deps: tuple[str, ...] = ("analysis",)
+            elif "search" in created:
+                ppt_deps = ("search",)
+            elif "rag" in created:
+                ppt_deps = ("rag",)
             else:
-                deps = tuple(created.keys())
-            try_add("report", "report-generation", deps)
+                ppt_deps = ()
+            try_add("ppt", "ppt-generation", ppt_deps)
 
-        wants_image = any(k in text for k in ("图", "image", "宣传图", "海报", "插画"))
-        wants_video = any(k in text for k in ("视频", "video", "短片", "宣传片"))
         media_deps = tuple(
-            n for n in ("search", "rag", "analysis", "report") if n in created
+            n for n in ("search", "rag", "analysis", "report", "ppt") if n in created
         ) or ()
         if wants_image:
             try_add("image", "text-to-image", media_deps)

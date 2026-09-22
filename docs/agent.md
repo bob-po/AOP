@@ -55,6 +55,7 @@ agents/<name>/
 | video-agent | 8006 | `text-to-video` | Storyboard stub（AIVE 位） |
 | code-agent | 8007 | `code-execution` | AST-safe 求值（seccomp） |
 | browser-agent | 8008 | `browser-automation` | Playwright Chromium（可 stub 回退） |
+| ppt-agent | 8009 | `ppt-generation` | DeepPresenter（PPTAgent v1.1.38）/ python-pptx stub |
 
 一键启动并注册：
 

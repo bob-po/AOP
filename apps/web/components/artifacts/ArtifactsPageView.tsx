@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { listArtifacts, type ArtifactItem } from "@/lib/api";
+import { PptPreview } from "@/components/tasks/PptPreview";
 
-const TYPES = ["", "json", "text", "image", "video", "pdf"];
+const TYPES = ["", "json", "text", "image", "video", "pdf", "ppt"];
 
 export function ArtifactsPageView() {
   const router = useRouter();
@@ -48,6 +49,10 @@ export function ArtifactsPageView() {
     (a.mime_type || "").startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(a.name || "");
   const isVideo = (a: ArtifactItem) =>
     (a.mime_type || "").startsWith("video/") || /\.(mp4|webm)$/i.test(a.name || "");
+  const isPpt = (a: ArtifactItem) =>
+    (a.type || "") === "ppt" ||
+    (a.mime_type || "").includes("presentation") ||
+    /\.pptx?$/i.test(a.name || "");
 
   return (
     <div className="px-4 py-6 md:px-8">
@@ -164,6 +169,8 @@ export function ArtifactsPageView() {
               <img src={preview.url} alt="" className="max-h-[70vh] w-full object-contain" />
             ) : isVideo(preview) && preview.url ? (
               <video src={preview.url} controls className="w-full" />
+            ) : isPpt(preview) && preview.url ? (
+              <PptPreview url={preview.url} name={preview.name} />
             ) : (
               <pre className="overflow-auto rounded-xl border border-white/10 bg-ink-900 p-3 font-mono text-xs text-mist-200">
                 {preview.uri}
