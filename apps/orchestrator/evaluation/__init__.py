@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timezone
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
 from db import connect
+from evaluation.rubric import score_task
 from psycopg.types.json import Jsonb
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -17,18 +15,6 @@ DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _grade(score: float) -> str:
-    if score >= 90:
-        return "A"
-    if score >= 75:
-        return "B"
-    if score >= 60:
-        return "C"
-    if score >= 40:
-        return "D"
-    return "F"
 
 
 class EvaluationService:
@@ -66,7 +52,7 @@ class EvaluationService:
                 (task_id,),
             ).fetchall()
 
-            scored = self._heuristic(dict(task), [dict(n) for n in nodes])
+            scored = score_task(dict(task), [dict(n) for n in nodes])
             now = _utc_now()
             row = conn.execute(
                 """
@@ -179,94 +165,3 @@ class EvaluationService:
                 args,
             ).fetchone()
         return dict(row) if row else {}
-
-    def _heuristic(self, task: dict[str, Any], nodes: list[dict[str, Any]]) -> dict[str, Any]:
-        status = (task.get("status") or "").lower()
-        total = len(nodes) or 1
-        success = sum(1 for n in nodes if n.get("status") == "success")
-        failed = sum(1 for n in nodes if n.get("status") == "failed")
-        cancelled = sum(1 for n in nodes if n.get("status") == "cancelled")
-        success_rate = success / total
-
-        # base by terminal status
-        if status == "completed":
-            base = 55.0
-        elif status == "failed":
-            base = 25.0
-        elif status == "cancelled":
-            base = 15.0
-        else:
-            base = 35.0
-
-        reliability = round(success_rate * 100, 1)
-        completeness = round(success_rate * 100, 1)
-
-        # artifacts / summary
-        result = task.get("result_json") or {}
-        if isinstance(result, str):
-            result = json.loads(result)
-        arts = result.get("artifacts") if isinstance(result, dict) else None
-        art_count = len(arts) if isinstance(arts, list) else 0
-        has_summary = bool(isinstance(result, dict) and (result.get("summary") or "").strip())
-        artifact_score = min(100.0, 40.0 + art_count * 15.0) if art_count else (20.0 if status == "completed" else 0.0)
-        if has_summary:
-            artifact_score = min(100.0, artifact_score + 20.0)
-
-        # latency: prefer finishing within 120s
-        latency_score = 70.0
-        created = task.get("created_at")
-        finished = task.get("finished_at") or task.get("updated_at")
-        duration_s = None
-        if created and finished:
-            try:
-                duration_s = max(0.0, (finished - created).total_seconds())
-                if duration_s <= 30:
-                    latency_score = 100.0
-                elif duration_s <= 120:
-                    latency_score = 85.0
-                elif duration_s <= 300:
-                    latency_score = 65.0
-                else:
-                    latency_score = 45.0
-            except Exception:  # noqa: BLE001
-                duration_s = None
-
-        score = (
-            base
-            + success_rate * 30.0
-            + (8.0 if art_count else 0.0)
-            + (5.0 if has_summary else 0.0)
-            + (latency_score - 70.0) * 0.15
-            - failed * 4.0
-            - cancelled * 2.0
-        )
-        score = round(max(0.0, min(100.0, score)), 1)
-        grade = _grade(score)
-
-        dims = {
-            "completeness": completeness,
-            "reliability": reliability,
-            "artifacts": round(artifact_score, 1),
-            "latency": round(latency_score, 1),
-        }
-        summary = (
-            f"Grade {grade} ({score}). status={status}, nodes={success}/{total} ok, "
-            f"artifacts={art_count}"
-            + (f", duration={int(duration_s)}s" if duration_s is not None else "")
-        )
-        return {
-            "score": score,
-            "grade": grade,
-            "dimensions": dims,
-            "summary": summary,
-            "details": {
-                "status": status,
-                "nodes_total": total,
-                "nodes_success": success,
-                "nodes_failed": failed,
-                "nodes_cancelled": cancelled,
-                "artifact_count": art_count,
-                "has_summary": has_summary,
-                "duration_sec": duration_s,
-            },
-        }

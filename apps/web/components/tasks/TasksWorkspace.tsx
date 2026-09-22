@@ -25,6 +25,22 @@ const FILTERS = [
   { key: "cancelled", label: "已取消" },
 ];
 
+function isReportSkill(skill: string) {
+  return skill.toLowerCase().includes("report");
+}
+
+const DIMENSION_LABELS: Record<string, string> = {
+  structure: "结构",
+  prose: "行文",
+  citations: "引用",
+  layout: "版式",
+  execution: "执行",
+  completeness: "完整",
+  reliability: "可靠",
+  artifacts: "产物",
+  latency: "耗时",
+};
+
 export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -34,6 +50,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(initialTaskId || null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [detailNodeId, setDetailNodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const { task, events, artifacts, evaluation, memories, error: liveError, reload, liveMode, wsConnected } =
@@ -54,7 +71,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
 
   useEffect(() => {
     loadList();
-    const t = setInterval(loadList, 4000);
+    const t = setInterval(loadList, 8000);
     return () => clearInterval(t);
   }, [loadList]);
 
@@ -71,6 +88,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   function selectTask(id: string) {
     setSelectedId(id);
     setSelectedNodeId(null);
+    setDetailNodeId(null);
     router.replace(`/tasks/${id}${statusFilter ? `?status=${statusFilter}` : ""}`);
   }
 
@@ -145,62 +163,51 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     }
   }
 
-  const selectedNode = useMemo(
-    () => (task?.nodes || []).find((n) => n.id === selectedNodeId) || null,
-    [task, selectedNodeId],
+  const detailNode = useMemo(
+    () => (task?.nodes || []).find((n) => n.id === detailNodeId) || null,
+    [task, detailNodeId],
   );
+
+  const reportPreviewUrl = useMemo(() => {
+    if (!detailNode || !isReportSkill(detailNode.skill)) return null;
+    const owned = artifacts.filter((item) => item.node_id === detailNode.id);
+    const html = owned.find((item) =>
+      (item.name || "").replace(/\\/g, "/").endsWith("report.html"),
+    );
+    const text = owned.find((item) => (item.name || "").endsWith("output.txt"));
+    return html?.url || text?.url || null;
+  }, [artifacts, detailNode]);
 
   const goal = task?.input_json?.content || task?.plan_json?.goal || task?.title || "";
 
   function copyArtifactsToClipboard() {
     if (artifacts.length === 0) return;
-    
-    // Group artifacts by node
+
     const grouped = artifacts.reduce((acc, a) => {
-      const node = a.node_id || 'unknown';
+      const node = a.node_id || "unknown";
       if (!acc[node]) acc[node] = [];
       acc[node].push(a);
       return acc;
     }, {} as Record<string, typeof artifacts>);
-    
-    let text = `Task: ${task?.task_id || 'unknown'}\n`;
+
+    let text = `Task: ${task?.task_id || "unknown"}\n`;
     text += `Goal: ${goal}\n\n`;
-    
+
     Object.entries(grouped).forEach(([nodeId, nodeArtifacts]) => {
       text += `Node: ${nodeId}\n`;
-      nodeArtifacts.forEach(a => {
+      nodeArtifacts.forEach((a) => {
         text += `  - ${a.name || a.uri}\n`;
         text += `    URL: ${a.url || a.uri}\n`;
       });
-      text += '\n';
+      text += "\n";
     });
-    
-    navigator.clipboard.writeText(text).then(() => {
-      console.log('Artifacts copied to clipboard');
-    }).catch(err => {
-      console.error('Failed to copy:', err);
-    });
+
+    navigator.clipboard.writeText(text).catch(() => undefined);
   }
 
-  function copyNodeArtifactsToClipboard(nodeId: string, nodeArtifacts: typeof artifacts) {
-    const nodeInfo = (task?.nodes || []).find(n => n.id === nodeId);
-    let text = `Node: ${nodeId}\n`;
-    if (nodeInfo) {
-      text += `Skill: ${nodeInfo.skill}\n`;
-      text += `Status: ${nodeInfo.status}\n`;
-    }
-    text += '\nArtifacts:\n';
-    
-    nodeArtifacts.forEach(a => {
-      text += `  - ${a.name || a.uri}\n`;
-      text += `    URL: ${a.url || a.uri}\n`;
-    });
-    
-    navigator.clipboard.writeText(text).then(() => {
-      console.log(`Node ${nodeId} artifacts copied to clipboard`);
-    }).catch(err => {
-      console.error('Failed to copy:', err);
-    });
+  function openNodeDetail(nodeId: string) {
+    setSelectedNodeId(nodeId);
+    setDetailNodeId(nodeId);
   }
 
   return (
@@ -308,7 +315,11 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       </section>
 
       {/* Right drawer */}
-      <aside className="flex w-full shrink-0 flex-col border-t border-white/10 lg:w-80 lg:border-l lg:border-t-0">
+      <aside
+        className={`flex w-full shrink-0 flex-col border-t border-white/10 lg:border-l lg:border-t-0 ${
+          detailNode && isReportSkill(detailNode.skill) ? "lg:w-[40rem]" : "lg:w-80"
+        }`}
+      >
         <div className="border-b border-white/10 px-4 py-3">
           <div className="font-display text-lg text-mist-100">任务详情</div>
           {task ? (
@@ -413,7 +424,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                       className="rounded-lg border border-white/10 bg-ink-900/40 px-2 py-1.5"
                     >
                       <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-mist-400">
-                        {k}
+                        {DIMENSION_LABELS[k] ?? k}
                       </div>
                       <div className="font-mono text-sm text-mist-100">{v}</div>
                     </div>
@@ -423,82 +434,86 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
             </div>
           ) : null}
 
-          {selectedNode ? (
-            <div className="rounded-xl border border-white/10 bg-ink-900/50 p-3">
-              <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-                节点 {selectedNode.id}
-              </div>
-              <div className="mt-2 text-sm text-mist-100">{selectedNode.skill}</div>
-              <div className="mt-1 font-mono text-[11px] text-mist-400">
-                status={selectedNode.status} · attempt={selectedNode.attempt ?? 0}
-              </div>
-              {selectedNode.error_message ? (
-                <p className="mt-2 text-xs text-red-300">{selectedNode.error_message}</p>
-              ) : null}
+          {task ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={artifacts.length === 0}
+                onClick={() => copyArtifactsToClipboard()}
+                className="rounded border border-white/15 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-mist-300 hover:bg-white/5 disabled:opacity-40"
+              >
+                复制全部
+              </button>
             </div>
           ) : null}
 
-          {artifacts.length > 0 ? (
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-                  Artifacts
-                </div>
+          {detailNode ? (
+            <div className="rounded-xl border border-white/10 bg-ink-900/50 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  onClick={() => copyArtifactsToClipboard()}
-                  className="rounded border border-white/15 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-mist-300 hover:bg-white/5"
+                  onClick={() => setDetailNodeId(null)}
+                  className="font-mono text-[10px] text-mist-400 hover:text-mist-100"
                 >
-                  复制全部
+                  ← 返回
                 </button>
+                <span className="truncate font-mono text-[10px] text-mist-200">
+                  {detailNode.id} · {detailNode.skill}
+                </span>
               </div>
-              <div className="space-y-2">
-                {(() => {
-                  // Group artifacts by node
-                  const grouped = artifacts.reduce((acc, a) => {
-                    const node = a.node_id || 'unknown';
-                    if (!acc[node]) acc[node] = [];
-                    acc[node].push(a);
-                    return acc;
-                  }, {} as Record<string, typeof artifacts>);
-                  
-                  return Object.entries(grouped).map(([nodeId, nodeArtifacts]) => (
-                    <div key={nodeId} className="rounded-lg border border-white/10 bg-ink-900/30 p-2">
-                      <div className="mb-1 flex items-center justify-between">
-                        <div className="font-mono text-[10px] text-mist-200">
-                          {nodeId}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => copyNodeArtifactsToClipboard(nodeId, nodeArtifacts)}
-                          className="rounded border border-white/15 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-mist-400 hover:bg-white/5"
-                        >
-                          复制
-                        </button>
-                      </div>
-                      <ul className="space-y-0.5">
-                        {nodeArtifacts.map((a, i) => (
-                          <li key={`${a.uri}-${i}`} className="flex items-center gap-2">
-                            <span className="font-mono text-[9px] text-mist-500">
-                              {a.name?.split('.').pop() || 'file'}
-                            </span>
-                            <a
-                              href={a.url || a.uri || "#"}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="flex-1 truncate font-mono text-[10px] text-signal-dim hover:text-signal"
-                            >
-                              {a.name || a.uri}
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ));
-                })()}
-              </div>
+              {isReportSkill(detailNode.skill) ? (
+                reportPreviewUrl ? (
+                  <iframe
+                    title="报告预览"
+                    src={reportPreviewUrl}
+                    sandbox="allow-same-origin"
+                    className="h-[520px] w-full rounded-lg border border-white/10 bg-white"
+                  />
+                ) : (
+                  <p className="text-xs text-mist-400">报告还在生成，预览会在 report.html 产出后出现。</p>
+                )
+              ) : (
+                <div>
+                  <div className="text-sm text-mist-100">{detailNode.skill}</div>
+                  <div className="mt-1 font-mono text-[11px] text-mist-400">
+                    status={detailNode.status} · attempt={detailNode.attempt ?? 0}
+                  </div>
+                  {detailNode.error_message ? (
+                    <p className="mt-2 text-xs text-red-300">{detailNode.error_message}</p>
+                  ) : null}
+                </div>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div className="space-y-2">
+              {(task?.nodes || []).map((node) => (
+                <div
+                  key={node.id}
+                  className={`relative rounded-xl border bg-ink-900/50 p-3 ${
+                    selectedNodeId === node.id ? "border-signal/40" : "border-white/10"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => openNodeDetail(node.id)}
+                    className="absolute right-3 top-3 font-mono text-[10px] text-signal-dim underline underline-offset-2 hover:text-signal"
+                  >
+                    详情
+                  </button>
+                  <div className="pr-10 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
+                    节点 {node.id}
+                  </div>
+                  <div className="mt-2 text-sm text-mist-100">{node.skill}</div>
+                  <div className="mt-1 font-mono text-[11px] text-mist-400">
+                    status={node.status} · attempt={node.attempt ?? 0}
+                  </div>
+                  {node.error_message ? (
+                    <p className="mt-2 text-xs text-red-300">{node.error_message}</p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div>
             <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -14,6 +15,61 @@ from minio.error import S3Error
 
 
 DEFAULT_BUCKET = "aop-artifacts"
+_MAX_BUNDLE_BYTES = 2_000_000
+_MAX_BUNDLE_FILES = 32
+_BUNDLE_EXACT = {"report.html", "report.css", "report.pdf"}
+_BUNDLE_DIRS = ("assets/images/", "assets/charts/", "assets/diagrams/")
+_MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".pdf": "application/pdf",
+    ".json": "application/json",
+}
+
+
+def safe_bundle_path(name: str) -> str | None:
+    """Allow only the report bundle layout. Reject absolute paths and `..`."""
+    rel = (name or "").replace("\\", "/").lstrip("/")
+    if not rel or rel.endswith("/"):
+        return None
+    parts = rel.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    if rel in _BUNDLE_EXACT:
+        return rel
+    if any(rel.startswith(prefix) for prefix in _BUNDLE_DIRS):
+        return rel
+    return None
+
+
+def decode_bundle_files(files: dict[str, Any]) -> list[tuple[str, bytes, str]]:
+    """Turn a report-agent ``files`` map into (relative path, bytes, mime)."""
+    decoded: list[tuple[str, bytes, str]] = []
+    for raw_name, body in files.items():
+        if len(decoded) >= _MAX_BUNDLE_FILES:
+            break
+        rel = safe_bundle_path(str(raw_name))
+        if rel is None:
+            continue
+        mime = _MIME.get(os.path.splitext(rel)[1].lower(), "application/octet-stream")
+        if isinstance(body, str):
+            data = body.encode("utf-8")
+        elif isinstance(body, dict) and body.get("encoding") == "base64":
+            try:
+                data = base64.b64decode(body.get("content") or "", validate=True)
+            except Exception:
+                continue
+            mime = str(body.get("mime") or mime)
+        else:
+            continue
+        if not data or len(data) > _MAX_BUNDLE_BYTES:
+            continue
+        decoded.append((rel, data, mime))
+    return decoded
 
 
 @dataclass
@@ -173,12 +229,28 @@ class ArtifactStore:
                 )
             )
         if data is not None:
+            payload = data
+            if isinstance(data, dict) and isinstance(data.get("files"), dict):
+                payload = dict(data)
+                index: dict[str, Any] = {}
+                for rel, raw, mime in decode_bundle_files(data["files"]):
+                    ref = self.put_bytes(
+                        task_id=task_id,
+                        node_key=node_key,
+                        name=rel,
+                        data=raw,
+                        content_type=mime,
+                        artifact_type="file",
+                    )
+                    refs.append(ref)
+                    index[rel] = {"uri": ref.uri, "size": ref.size, "mime_type": mime}
+                payload["files"] = index
             refs.append(
                 self.put_json(
                     task_id=task_id,
                     node_key=node_key,
                     name="output.json",
-                    payload=data,
+                    payload=payload,
                 )
             )
         # Always write a meta sidecar for listing

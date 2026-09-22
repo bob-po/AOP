@@ -133,8 +133,10 @@ export function useTaskLive(taskId: string | null) {
         }
       }
 
-      // WS connected → slow backup poll; otherwise 1s fallback
-      const delay = isConnected ? 8000 : 1000;
+      // WS connected → slow backup poll; otherwise 2.5s fallback.
+      // Keep this above ~2s on Windows: each poll opens several PG
+      // connections through the gateway and burns ephemeral ports.
+      const delay = isConnected ? 10000 : 2500;
       if (aliveRef.current) timer = setTimeout(tick, delay);
     }
 

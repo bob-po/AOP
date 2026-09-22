@@ -1,8 +1,8 @@
 {
   "name": "Report Agent",
-  "description": "Generate markdown/PDF style reports from upstream analysis (Phase 3 stub).",
+  "description": "Plan a report, then emit report.html, report.css, chart/diagram assets, and an optional sandboxed PDF.",
   "url": "http://127.0.0.1:8003/",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocolVersion": "0.3.0",
   "agentId": "aop-report-agent-v1",
   "agentKey": "report-agent",
@@ -11,16 +11,16 @@
     "pushNotifications": false
   },
   "defaultInputModes": ["text"],
-  "defaultOutputModes": ["text", "text/markdown"],
+  "defaultOutputModes": ["text", "text/html", "application/pdf"],
   "skills": [
     {
       "id": "report-generation",
       "name": "Report Generation",
-      "description": "Generate a structured report from research inputs",
-      "tags": ["report", "writing"],
+      "description": "Plan the report, then generate HTML/CSS, charts, and citations",
+      "tags": ["report", "writing", "html"],
       "examples": ["Generate a market research report", "Create a technical analysis report"],
       "inputModes": ["text"],
-      "outputModes": ["text", "text/markdown"],
+      "outputModes": ["text", "text/html"],
       "requiresApproval": true
     },
     {
@@ -36,11 +36,11 @@
     {
       "id": "pdf",
       "name": "PDF Report Generation",
-      "description": "Generate PDF formatted reports (stub implementation)",
+      "description": "Render the HTML report to PDF with Paged.js or headless Chromium inside a filesystem sandbox",
       "tags": ["report", "writing", "pdf"],
       "examples": ["Generate PDF report for management", "Create PDF documentation"],
       "inputModes": ["text"],
-      "outputModes": ["application/pdf"],
+      "outputModes": ["text/html", "application/pdf"],
       "requiresApproval": false
     },
     {

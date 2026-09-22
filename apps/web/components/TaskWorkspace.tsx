@@ -43,7 +43,7 @@ export function TaskWorkspace({ taskId }: { taskId: string }) {
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : "poll failed");
       }
-      if (alive) timer = setTimeout(tick, 1000);
+      if (alive) timer = setTimeout(tick, 2500);
     }
 
     tick();
