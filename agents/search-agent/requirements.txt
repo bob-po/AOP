@@ -6,3 +6,6 @@ lxml>=5.0
 # Phase 37.2: LLM Provider and Agent Runtime dependencies
 -e ../../../packages/llm-provider
 -e ../../../packages/agent-runtime
+# A2A OS: agent-side collaboration runtime + A2A client (Server + Client)
+# (agent-runtime already listed above)
+-e ../../../packages/a2a-sdk

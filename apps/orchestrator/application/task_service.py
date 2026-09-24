@@ -15,6 +15,7 @@ from observability import MetricsService
 from planner.engine import PlanningEngine
 from quota import QuotaService
 from router.engine import RoutingEngine
+from runtime_graph import RuntimeGraphService
 from scheduler.engine import SchedulingEngine
 from streams import StreamClient
 from workflows import WorkflowService
@@ -31,6 +32,7 @@ class TaskService:
         self.planner = self.planner_engine.planner
         self.router_engine = RoutingEngine()
         self.router = self.router_engine.router
+        self.runtime_graph = RuntimeGraphService()
         self.streams = StreamClient()
         self.artifact_store = ArtifactStore()
         self.artifacts = self.artifact_store  # legacy attribute name
@@ -138,6 +140,49 @@ class TaskService:
 
     def router_preview(self, skill: str) -> dict[str, Any]:
         return self.router_engine.preview(skill)
+
+    def discover(self, **kwargs: Any) -> dict[str, Any]:
+        """A2A OS: capability-aware Agent discovery (callable by any Agent)."""
+        return self.router_engine.discover(**kwargs)
+
+    def route(self, **kwargs: Any) -> dict[str, Any]:
+        """A2A OS: select the best Agent for a request (callable by any Agent)."""
+        return self.router_engine.route(**kwargs)
+
+    # ── runtime execution graph ──────────────────────────────────────────
+
+    def record_runtime_edge(self, **kwargs: Any) -> dict[str, Any]:
+        """A2A OS: record an Agent-to-Agent call edge in the runtime graph."""
+        return self.runtime_graph.record_edge(**kwargs)
+
+    def runtime_graph_view(self, root_task_id: str) -> dict[str, Any]:
+        """A2A OS: reconstruct the runtime execution graph for a root task."""
+        return self.runtime_graph.get_graph(root_task_id)
+
+    def collaboration_graph_view(self, root_task_id: str) -> dict[str, Any]:
+        """A2A OS: frontend-friendly collaboration graph (nodes + links)."""
+        return self.runtime_graph.collaboration_graph(root_task_id)
+
+    def get_with_graph(self, task_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
+        """Central Task plus associated runtime collaboration graph (Phase 2)."""
+        row = self.tasks.get(task_id, tenant_id=tenant_id)
+        if not row:
+            return None
+        try:
+            graph = self.runtime_graph.collaboration_graph(task_id)
+        except Exception:  # noqa: BLE001 - graph is best-effort enrichment
+            graph = {
+                "root_task_id": task_id,
+                "kind": "collaboration_graph",
+                "nodes": [],
+                "links": [],
+                "tree": [],
+                "edges": [],
+            }
+        out = dict(row)
+        out["collaboration_graph"] = graph
+        out["runtime_graph"] = self.runtime_graph.get_graph(task_id)
+        return out
 
     def agent_performance(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self.router_engine.agent_performance(limit=limit)

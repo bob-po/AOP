@@ -14,11 +14,15 @@ import {
 } from "recharts";
 import {
   createTask,
+  getDefaultTenantId,
   getEvaluationOverview,
   getMetrics,
   getOverviewStats,
   listAgents,
   listEvaluations,
+  listGovernanceDenials,
+  getTenantBudget,
+  getTenantCost,
   type Agent,
   type EvaluationOverview,
   type MetricsSnapshot,
@@ -65,6 +69,10 @@ export function DashboardView() {
   const [goal, setGoal] = useState(TEMPLATES[0].text);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [osDenialCount, setOsDenialCount] = useState<number | null>(null);
+  const [osOnlineAgents, setOsOnlineAgents] = useState<number | null>(null);
+  const [osBudgetRem, setOsBudgetRem] = useState<string | null>(null);
+  const [osCost30d, setOsCost30d] = useState<string | null>(null);
 
   useEffect(() => {
     const prefill = searchParams.get("prefill");
@@ -88,12 +96,54 @@ export function DashboardView() {
         setEvalStats(eo);
         setRecentEvals(el.evaluations || []);
         setMetrics(m);
+        setError(null);
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : "load failed");
       }
     }
     load();
     const t = setInterval(load, 8000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  // OS KPI — independent of main load; slow poll to avoid Windows ephemeral-port exhaustion
+  useEffect(() => {
+    let alive = true;
+    async function loadOs() {
+      const tenantId = getDefaultTenantId();
+      const [den, agentsRes, bud, cost] = await Promise.allSettled([
+        listGovernanceDenials({ limit: 50 }),
+        listAgents({ status: "online" }),
+        getTenantBudget(tenantId),
+        getTenantCost(tenantId),
+      ]);
+      if (!alive) return;
+      setOsDenialCount(
+        den.status === "fulfilled" ? den.value.count ?? (den.value.denials || []).length : null,
+      );
+      if (agentsRes.status === "fulfilled") {
+        setOsOnlineAgents((agentsRes.value.agents || []).length);
+      } else {
+        setOsOnlineAgents(null);
+      }
+      if (bud.status === "fulfilled") {
+        const b = bud.value;
+        const rem = b.day?.remaining ?? b.tenant?.remaining ?? b.month?.remaining;
+        setOsBudgetRem(rem != null ? String(rem) : "—");
+      } else setOsBudgetRem(null);
+      if (cost.status === "fulfilled") {
+        setOsCost30d(
+          cost.value.estimated_cost != null
+            ? `$${Number(cost.value.estimated_cost).toFixed(2)}`
+            : "—",
+        );
+      } else setOsCost30d(null);
+    }
+    loadOs();
+    const t = setInterval(loadOs, 60000);
     return () => {
       alive = false;
       clearInterval(t);
@@ -145,6 +195,30 @@ export function DashboardView() {
         />
         <Kpi label="Agent 在线" value={stats?.agents_online ?? online} href="/agents" />
         <Kpi label="队列等待" value={stats?.queue_waiting ?? "—"} href="/tasks?status=running" />
+      </div>
+
+      <div>
+        <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-mist-400">
+          治理 / 调度 · OS 运行态
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Kpi
+            label="治理拒绝"
+            value={osDenialCount ?? "—"}
+            href="/settings?tab=governance"
+          />
+          <Kpi label="在线 Agent" value={osOnlineAgents ?? "—"} href="/agents" />
+          <Kpi
+            label="预算剩余"
+            value={osBudgetRem ?? "—"}
+            href="/settings?tab=tenant"
+          />
+          <Kpi
+            label="近 30 日成本"
+            value={osCost30d ?? "—"}
+            href="/settings?tab=tenant"
+          />
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">

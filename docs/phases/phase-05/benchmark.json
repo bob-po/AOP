@@ -1,0 +1,37 @@
+{
+  "tasks": 100,
+  "agents": 10,
+  "tenants": 5,
+  "success_rate": 1.0,
+  "selected_count": 100,
+  "retries": 0,
+  "estimated_cost": 9.44,
+  "estimated_latency": 19689.0,
+  "average_latency": 196.89,
+  "agent_distribution": {
+    "agent-4": 14,
+    "agent-1": 12,
+    "agent-2": 14,
+    "agent-3": 22,
+    "agent-6": 14,
+    "agent-5": 8,
+    "agent-0": 3,
+    "agent-8": 6,
+    "agent-9": 7
+  },
+  "queue_depth": {
+    "agent-0": 3,
+    "agent-1": 13,
+    "agent-2": 16,
+    "agent-3": 25,
+    "agent-4": 14,
+    "agent-5": 9,
+    "agent-6": 16,
+    "agent-7": 3,
+    "agent-8": 6,
+    "agent-9": 8
+  },
+  "reselection_success_rate": 1.0,
+  "budget_deny_rate": 1.0,
+  "duration_s": 0.006506
+}

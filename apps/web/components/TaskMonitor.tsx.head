@@ -1,0 +1,5 @@
+'use client';
+
+// @ts-nocheck — dead legacy component; not imported by App Router pages.
+import React, { useState, useEffect } from 'react';
+import { useTaskWebSocket } from '../hooks/useWebSocket';

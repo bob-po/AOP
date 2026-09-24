@@ -2,3 +2,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
 python-pptx>=0.6.21
+# A2A OS: agent-side collaboration runtime + A2A client (Server + Client)
+-e ../../../packages/agent-runtime
+-e ../../../packages/a2a-sdk

@@ -13,6 +13,8 @@ export type WebSocketMessage = {
 
 type UseWebSocketOptions = {
   taskId?: string;
+  /** Custom WS path (overrides task/global default). Use with buildWsUrl semantics. */
+  path?: string;
   enabled?: boolean;
   onMessage?: (message: WebSocketMessage) => void;
   onError?: (error: Event) => void;
@@ -40,6 +42,7 @@ export function buildWsUrl(path: string, apiKey?: string): string {
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
     taskId,
+    path: customPath,
     enabled = true,
     onMessage,
     onError,
@@ -88,9 +91,11 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const apiKey = process.env.NEXT_PUBLIC_API_KEY || "";
-    const path = taskId
-      ? `/v1/tasks/${taskId}/events/ws`
-      : `/v1/events/ws`;
+    const path = customPath
+      ? customPath
+      : taskId
+        ? `/v1/tasks/${taskId}/events/ws`
+        : `/v1/events/ws`;
     const wsUrl = buildWsUrl(path, apiKey || undefined);
 
     try {
@@ -134,7 +139,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       setConnectionError("Failed to create WebSocket connection");
       console.error("WebSocket connection error:", error);
     }
-  }, [enabled, taskId, reconnectInterval, maxReconnectAttempts]);
+  }, [enabled, taskId, customPath, reconnectInterval, maxReconnectAttempts]);
 
   const sendMessage = useCallback((message: unknown) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

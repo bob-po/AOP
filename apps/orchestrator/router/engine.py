@@ -43,3 +43,11 @@ class RoutingEngine:
 
     def agent_performance(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._router.agent_performance(limit=limit)
+
+    def discover(self, **kwargs: Any) -> dict[str, Any]:
+        """Capability-aware discovery — open to any Agent (A2A OS)."""
+        return self._router.discover(**kwargs)
+
+    def route(self, **kwargs: Any) -> dict[str, Any]:
+        """Select the best Agent for a request — open to any Agent (A2A OS)."""
+        return self._router.route(**kwargs)

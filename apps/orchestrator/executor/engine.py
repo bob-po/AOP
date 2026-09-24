@@ -146,10 +146,27 @@ class ExecutionEngine:
                 print(f"[worker] loop error: {exc}")
                 time.sleep(1)
 
-    def _execute_with_retry(self, endpoint: str, query: str, skill: str, idempotency_key: str | None = None):
+    def _execute_with_retry(
+        self,
+        endpoint: str,
+        query: str,
+        skill: str,
+        idempotency_key: str | None = None,
+        *,
+        task_id: str | None = None,
+        target_agent_id: str | None = None,
+    ):
         """Execute A2A call with circuit breaker + retry."""
         def execute_a2a():
-            result = self.executor.execute(endpoint, query, skill_id=skill, idempotency_key=idempotency_key)
+            result = self.executor.execute(
+                endpoint,
+                query,
+                skill_id=skill,
+                idempotency_key=idempotency_key,
+                task_id=task_id,
+                correlation_id=task_id,
+                target_agent_id=target_agent_id,
+            )
             if not result.ok:
                 error_msg = f"A2A execution failed with status {result.task.status.value}"
                 raise handle_a2a_error(RuntimeError(error_msg))
@@ -298,9 +315,24 @@ class ExecutionEngine:
                     "worker.execute_a2a", agent_id=routed.agent_id, endpoint=endpoint
                 ) as exec_span:
                     if ERROR_HANDLING_AVAILABLE and WORKER_RETRY_POLICY:
-                        result = self._execute_with_retry(endpoint, query, skill, idempotency_key=idempotency_key)
+                        result = self._execute_with_retry(
+                            endpoint,
+                            query,
+                            skill,
+                            idempotency_key=idempotency_key,
+                            task_id=task_id,
+                            target_agent_id=routed.agent_id,
+                        )
                     else:
-                        result = self.executor.execute(endpoint, query, skill_id=skill, idempotency_key=idempotency_key)
+                        result = self.executor.execute(
+                            endpoint,
+                            query,
+                            skill_id=skill,
+                            idempotency_key=idempotency_key,
+                            task_id=task_id,
+                            correlation_id=task_id,
+                            target_agent_id=routed.agent_id,
+                        )
 
                     if not result.ok:
                         raise RuntimeError(f"a2a status={result.task.status.value}")

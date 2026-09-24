@@ -44,43 +44,45 @@ class TestExecutorIdempotency:
         """Test that execute generates idempotency key when not provided."""
         with patch("executor.A2AClient", return_value=mock_a2a_client):
             with patch("executor.guard_call", return_value=("test query", 60.0)):
-                mock_a2a_client.send_text.return_value = mock_task
-                
-                executor = A2AExecutor()
-                result = executor.execute("http://test.agent", "test query")
-                
-                # Verify idempotency key was passed to send_text
-                mock_a2a_client.send_text.assert_called_once()
-                call_kwargs = mock_a2a_client.send_text.call_args[1]
-                assert "idempotency_key" in call_kwargs
-                assert call_kwargs["idempotency_key"].startswith("req_")
+                with patch("executor.A2AExecutor._get_request_tracking_service", return_value=None):
+                    mock_a2a_client.send_text.return_value = mock_task
+
+                    executor = A2AExecutor()
+                    result = executor.execute("http://test.agent", "test query")
+
+                    # Verify idempotency key was passed to send_text
+                    mock_a2a_client.send_text.assert_called_once()
+                    call_kwargs = mock_a2a_client.send_text.call_args[1]
+                    assert "idempotency_key" in call_kwargs
+                    assert call_kwargs["idempotency_key"].startswith("req_")
 
     def test_execute_uses_provided_idempotency_key(self, mock_a2a_client, mock_task):
         """Test that execute uses provided idempotency key."""
         provided_key = "custom_key_123"
-        
+
         with patch("executor.A2AClient", return_value=mock_a2a_client):
             with patch("executor.guard_call", return_value=("test query", 60.0)):
-                mock_a2a_client.send_text.return_value = mock_task
-                
-                executor = A2AExecutor()
-                result = executor.execute(
-                    "http://test.agent",
-                    "test query",
-                    idempotency_key=provided_key,
-                )
-                
-                # Verify provided key was used
-                mock_a2a_client.send_text.assert_called_once()
-                call_kwargs = mock_a2a_client.send_text.call_args[1]
-                assert call_kwargs["idempotency_key"] == provided_key
+                with patch("executor.A2AExecutor._get_request_tracking_service", return_value=None):
+                    mock_a2a_client.send_text.return_value = mock_task
+
+                    executor = A2AExecutor()
+                    result = executor.execute(
+                        "http://test.agent",
+                        "test query",
+                        idempotency_key=provided_key,
+                    )
+
+                    # Verify provided key was used
+                    mock_a2a_client.send_text.assert_called_once()
+                    call_kwargs = mock_a2a_client.send_text.call_args[1]
+                    assert call_kwargs["idempotency_key"] == provided_key
 
     def test_execute_returns_cached_response(self, mock_a2a_client, mock_task):
         """Test that execute returns cached response when request already completed."""
         idempotency_key = "cached_key_123"
         cached_response = {
             "agent_name": "cached-agent",
-            "task": mock_task.to_dict(),
+            "task": {"id": mock_task.id, "status": "completed", "artifacts": []},
             "text": "cached result",
             "data": {"cached": True},
         }

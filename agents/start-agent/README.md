@@ -14,7 +14,7 @@ GitHub / local path
   real URL + logs + task state
 ```
 
-## Install
+## Install (DeployPilot CLI)
 
 ```bash
 cd agents/start-agent
@@ -22,6 +22,20 @@ npm install
 npm run build
 npm link   # optional: expose `deploypilot` globally
 ```
+
+## A2A Server+Client façade (Phase 2)
+
+DeployPilot remains the TypeScript engine. A Python FastAPI process exposes the
+standard A2A surface so start-agent is a first-class peer (10/10 Client-ization):
+
+```bash
+pip install -r requirements.txt
+python agent.py   # default http://127.0.0.1:8010/
+```
+
+JSON-RPC: `message/send`, `tasks/get`, `tasks/cancel`, `tasks/subscribe`, plus
+optional autonomous peer delegation via `AgentCollaborator` when `A2A_OS_URL` is set.
+Set `START_AGENT_INVOKE_CLI=1` to shell out to `deploypilot` for real deploys.
 
 Requirements:
 

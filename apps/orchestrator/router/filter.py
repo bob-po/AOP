@@ -100,8 +100,18 @@ class RoutingPolicy:
 class CandidateFilter:
     """Multi-stage candidate filtering for agent selection."""
 
-    def __init__(self, policy: RoutingPolicy | None = None):
+    def __init__(
+        self,
+        policy: RoutingPolicy | None = None,
+        lifecycle_checker=None,
+        capacity_queue_depth=None,
+    ):
         self.policy = policy or RoutingPolicy.default()
+        # Phase 4: optional callables injected by orchestrator
+        # lifecycle_checker(agent_id) -> (ok: bool, reason: str)
+        self.lifecycle_checker = lifecycle_checker
+        # capacity_queue_depth(agent_id) -> int
+        self.capacity_queue_depth = capacity_queue_depth
 
     def filter_candidates(
         self,
@@ -250,23 +260,42 @@ class CandidateFilter:
         return passed, FilterResult("mode_compatibility", len(candidates), len(passed), excluded)
 
     def _filter_by_health(self, candidates: list[dict]) -> tuple[list[dict], FilterResult]:
-        """Filter by health status."""
+        """Filter by health status + Phase 4 lifecycle/capacity."""
         excluded = []
         passed = []
 
         for candidate in candidates:
+            agent_id = candidate.get("agent_id")
             status = candidate.get("status", "")
 
             # Online status check
             if status not in ONLINE_STATUSES:
                 excluded.append({
-                    "agent_id": candidate["agent_id"],
+                    "agent_id": agent_id,
                     "reason": f"not online: {status}",
                 })
                 continue
 
-            # Health check (TODO: integrate actual health checks)
-            # For now, just check online status
+            # Phase 4: lifecycle READY/BUSY + capacity (legacy untracked allowed)
+            if self.lifecycle_checker is not None and agent_id:
+                try:
+                    ok, reason = self.lifecycle_checker(agent_id)
+                    if not ok:
+                        excluded.append({
+                            "agent_id": agent_id,
+                            "reason": reason,
+                        })
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if self.capacity_queue_depth is not None and agent_id:
+                try:
+                    depth = int(self.capacity_queue_depth(agent_id) or 0)
+                    candidate = {**candidate, "queue_depth": depth}
+                except Exception:  # noqa: BLE001
+                    pass
+
             passed.append(candidate)
 
         return passed, FilterResult("health_filter", len(candidates), len(passed), excluded)

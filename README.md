@@ -2,25 +2,31 @@
 
 基于 A2A 协议的多 Agent **注册 · 发现 · 调度 · 编排 · 执行** 平台。
 
-当前进度：**Phase 1–34 已落地**（鉴权 / RBAC / 计费 / 配额 / Code·Browser 沙箱 / Stripe / 租户出站）。
+当前进度：**Phase 1–34**（鉴权 / 计费 / 配额 / 沙箱 / Stripe）+ **A2A OS Phase 3–6**（Execution · Scheduling · Marketplace）。
 
 ## 文档
 
+完整索引与目录规范见 **[docs/README.md](./docs/README.md)**。
+
 | 文档 | 说明 |
 |------|------|
-| [《A2A Agent 调度平台 v1.0 技术方案》](./docs/A2A-Agent-调度平台-v1.0-技术方案.md) | 总体架构与设计决策 |
-| [architecture.md](./docs/architecture.md) | 落地架构索引 |
-| [mvp-plan.md](./docs/mvp-plan.md) | Phase 1–34 任务与验收 |
-| [api.md](./docs/api.md) | Gateway REST API |
-| [database.md](./docs/database.md) | PostgreSQL 表结构与迁移 |
-| [redis.md](./docs/redis.md) | Redis Streams / 队列 / 锁 |
-| [a2a.md](./docs/a2a.md) | A2A 协议落地约定 |
-| [agent.md](./docs/agent.md) | Agent 开发规范 |
-| [agent-sandbox.md](./docs/agent-sandbox.md) | 沙箱 / seccomp |
-| [billing.md](./docs/billing.md) · [billing-invoice.md](./docs/billing-invoice.md) | 用量 · 发票 · Stripe |
-| [quotas.md](./docs/quotas.md) | 租户配额 |
-| [egress.md](./docs/egress.md) | 租户出站策略 |
-| [monitoring-setup.md](./docs/monitoring-setup.md) | Prometheus / Grafana |
+| [文档中心](./docs/README.md) | 索引 · 分类规范 · Phase 归档 |
+| [启动指南](./docs/guides/getting-started.md) | 本地与环境启动 |
+| [架构总览](./docs/architecture/overview.md) | 落地架构索引 |
+| [技术方案 v1.0](./docs/architecture/a2a-platform-v1-design.md) | 总体架构与设计决策 |
+| [A2A OS 分析](./docs/architecture/a2a-os-architecture-analysis.md) | Agent OS 能力演进 |
+| [MVP / Phase 计划](./docs/architecture/mvp-plan.md) | Phase 1–34 任务与验收 |
+| [API](./docs/reference/api.md) | Gateway REST API |
+| [Database](./docs/reference/database.md) | PostgreSQL 表结构与迁移 |
+| [Redis](./docs/reference/redis.md) | Streams / 队列 / 锁 |
+| [A2A 协议](./docs/architecture/a2a-protocol.md) | 协议落地约定 |
+| [Agent 开发](./docs/architecture/agent-dev-guide.md) | Agent 开发规范 |
+| [沙箱](./docs/architecture/agent-sandbox.md) | seccomp / 隔离 |
+| [Billing](./docs/reference/billing.md) · [Invoice](./docs/reference/billing-invoice.md) | 用量 · 发票 · Stripe |
+| [Quotas](./docs/reference/quotas.md) | 租户配额 |
+| [Egress](./docs/reference/egress.md) | 租户出站策略 |
+| [Monitoring](./docs/operations/monitoring.md) | Prometheus / Grafana |
+| [Phase 6 交付](./docs/phases/phase-06/delivery-report.md) | Marketplace / Skill / Discovery |
 
 ## 仓库结构
 
@@ -30,9 +36,11 @@ agents/         search · rag · report · analysis · image · video · code ·
 packages/       a2a-sdk · schemas · common
 infrastructure/ postgres（migrate.py + init/*.sql）· redis · minio
 deployments/    docker-compose · deploy.sh · seccomp · observability
-docs/           技术方案与专项设计
+docs/           文档中心（guides · architecture · reference · operations · phases）
 scripts/        start_and_register_agents.py
 ```
+
+文档规范见 [docs/README.md](./docs/README.md)。根目录除本 README 外不存放项目 Markdown。
 
 ## 快速开始（本地）
 
@@ -130,7 +138,7 @@ chmod +x deploy.sh
 - [x] Phase 33：支付后配额提升（`tenant_quota_grants`）
 - [x] Phase 34：租户出站策略（browser URL allow/deny）
 
-冒烟脚本：`apps/orchestrator/scripts/phase*.py`。完整验收表见 [mvp-plan.md](./docs/mvp-plan.md)。
+冒烟脚本：`apps/orchestrator/scripts/phase*.py`。完整验收表见 [mvp-plan.md](./docs/architecture/mvp-plan.md)。
 
 ### 常用运维提示
 
@@ -157,13 +165,13 @@ cd apps/orchestrator && python scripts/phase25_auth_users.py
 
 | Phase | 文档 / 冒烟 |
 |-------|-------------|
-| 26 Billing | [billing.md](./docs/billing.md) · `phase26_billing.py` |
-| 27 seccomp / Code·Browser | [agent-sandbox.md](./docs/agent-sandbox.md) · `phase27_seccomp.py` |
-| 28 Quotas | [quotas.md](./docs/quotas.md) · `phase28_quotas.py` |
+| 26 Billing | [billing.md](./docs/reference/billing.md) · `phase26_billing.py` |
+| 27 seccomp / Code·Browser | [agent-sandbox.md](./docs/architecture/agent-sandbox.md) · `phase27_seccomp.py` |
+| 28 Quotas | [quotas.md](./docs/reference/quotas.md) · `phase28_quotas.py` |
 | 29 Chromium | `agents/browser-agent` · `phase29_browser_chromium.py` |
-| 30–32 Invoice / Stripe | [billing-invoice.md](./docs/billing-invoice.md) · `phase30`–`phase32_*.py` |
+| 30–32 Invoice / Stripe | [billing-invoice.md](./docs/reference/billing-invoice.md) · `phase30`–`phase32_*.py` |
 | 33 Quota boost | `phase33_quota_boost.py` |
-| 34 Egress | [egress.md](./docs/egress.md) · `phase34_egress.py` |
+| 34 Egress | [egress.md](./docs/reference/egress.md) · `phase34_egress.py` |
 
 ### Phase 8：API Key
 

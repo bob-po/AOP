@@ -11,19 +11,36 @@ import {
 } from "recharts";
 import {
   disableAgent,
+  drainAgent,
   enableAgent,
+  getAgentCapacity,
+  getAgentReliability,
+  getAgentRuntimeHealth,
   getAgentStats,
   healthCheckAgent,
+  heartbeatAgent,
   listAgents,
   previewRouter,
   registerAgent,
+  apiErrorMessage,
   type Agent,
+  type AgentCapacity,
   type AgentPerformance,
+  type AgentReliability,
+  type AgentRuntimeHealth,
 } from "@/lib/api";
 import { MarketplacePanel } from "@/components/MarketplacePanel";
 
 type Tab = "registry" | "market" | "routing";
 type ViewMode = "cards" | "list";
+
+const LIFE_COLOR: Record<string, string> = {
+  REGISTERED: "text-mist-400",
+  READY: "text-signal",
+  BUSY: "text-signal-warm",
+  DRAINING: "text-amber-300",
+  OFFLINE: "text-mist-400",
+};
 
 export function AgentsPageView() {
   const [tab, setTab] = useState<Tab>("registry");
@@ -50,6 +67,58 @@ export function AgentsPageView() {
   const [endpoint, setEndpoint] = useState("http://127.0.0.1:8001");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Agent | null>(null);
+  const [lifeHealth, setLifeHealth] = useState<AgentRuntimeHealth | null>(null);
+  const [capacity, setCapacity] = useState<AgentCapacity | null>(null);
+  const [reliability, setReliability] = useState<AgentReliability | null>(null);
+  const [capNote, setCapNote] = useState<string | null>(null);
+  const [relNote, setRelNote] = useState<string | null>(null);
+  const [lifeError, setLifeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selected) {
+      setLifeHealth(null);
+      setCapacity(null);
+      setReliability(null);
+      setCapNote(null);
+      setRelNote(null);
+      setLifeError(null);
+      return;
+    }
+    let alive = true;
+    const id = selected.agent_id;
+    (async () => {
+      const [h, c, r] = await Promise.allSettled([
+        getAgentRuntimeHealth(id),
+        getAgentCapacity(id),
+        getAgentReliability(id),
+      ]);
+      if (!alive) return;
+      if (h.status === "fulfilled") {
+        setLifeHealth(h.value);
+        setLifeError(null);
+      } else {
+        setLifeHealth(null);
+        setLifeError(apiErrorMessage(h.reason, "生命周期健康不可用"));
+      }
+      if (c.status === "fulfilled") {
+        setCapacity(c.value);
+        setCapNote(null);
+      } else {
+        setCapacity(null);
+        setCapNote("容量数据暂不可用（Gateway 需代理 GET /v1/agents/{id}/capacity）");
+      }
+      if (r.status === "fulfilled") {
+        setReliability(r.value);
+        setRelNote(null);
+      } else {
+        setReliability(null);
+        setRelNote("可靠性数据暂不可用（Gateway 需代理 GET /v1/agents/{id}/reliability）");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [selected]);
 
   async function load() {
     try {
@@ -464,6 +533,85 @@ export function AgentsPageView() {
           <div className="mt-4 truncate font-mono text-[11px] text-mist-400">
             {selected.endpoint || "—"}
           </div>
+
+          <div className="mt-5 rounded-2xl border border-white/10 bg-ink-900/50 p-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
+              生命周期 / 容量 / 可靠性
+            </div>
+            {lifeError ? (
+              <p className="mt-2 font-mono text-[10px] text-signal-warm">{lifeError}</p>
+            ) : null}
+            <div className="mt-2 space-y-1 font-mono text-[11px] text-mist-200">
+              <div>
+                state ·{" "}
+                <span className={LIFE_COLOR[String(lifeHealth?.state || "")] || "text-mist-400"}>
+                  {lifeHealth?.state || "—"}
+                </span>
+              </div>
+              <div>active_tasks · {lifeHealth?.active_tasks ?? "—"}</div>
+              <div>last_seen · {lifeHealth?.last_seen || "—"}</div>
+              <div>
+                queue_depth · {capacity?.queue_depth ?? "—"} · accepts{" "}
+                {capacity ? String(capacity.accepts) : "—"}
+                {capacity?.reason ? ` (${capacity.reason})` : ""}
+              </div>
+              <div>
+                availability ·{" "}
+                {reliability?.availability != null
+                  ? Number(reliability.availability).toFixed(3)
+                  : "—"}{" "}
+                · success_rate ·{" "}
+                {reliability?.success_rate != null
+                  ? Number(reliability.success_rate).toFixed(3)
+                  : "—"}{" "}
+                · n={reliability?.sample_size ?? "—"}
+              </div>
+            </div>
+            {(capNote || relNote) && (
+              <p className="mt-2 font-mono text-[10px] text-mist-400">{capNote || relNote}</p>
+            )}
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  if (!selected || busy) return;
+                  setBusy(true);
+                  try {
+                    const h = await heartbeatAgent(selected.agent_id);
+                    setLifeHealth(h);
+                  } catch (err) {
+                    setLifeError(apiErrorMessage(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded-lg border border-white/15 px-2 py-1 font-mono text-[10px] uppercase text-mist-200 disabled:opacity-40"
+              >
+                Heartbeat
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  if (!selected || busy) return;
+                  setBusy(true);
+                  try {
+                    const h = await drainAgent(selected.agent_id);
+                    setLifeHealth(h);
+                  } catch (err) {
+                    setLifeError(apiErrorMessage(err));
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded-lg border border-signal-warm/40 px-2 py-1 font-mono text-[10px] uppercase text-signal-warm disabled:opacity-40"
+              >
+                Drain
+              </button>
+            </div>
+          </div>
+
           <div className="mt-6 h-40">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
               运行指标（agent_runs）

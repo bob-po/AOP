@@ -60,6 +60,9 @@ func (s *Server) Handler() http.Handler {
 				"GET /health",
 				"GET /v1/agents",
 				"POST /v1/agents/register",
+				"GET /v1/agents/{id}/capacity",
+				"GET /v1/agents/{id}/reliability",
+				"GET /v1/agents/{id}/health",
 				"GET /v1/api-keys",
 				"POST /v1/api-keys",
 				"DELETE /v1/api-keys/{id}",
@@ -105,6 +108,13 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	r.Route("/v1/agents", func(r chi.Router) {
+		// Phase 5/6 OS endpoints: register before registry handlers so these
+		// paths forward to Orchestrator (registry keeps POST /{id}/health probe).
+		if s.OrchestratorProxy != nil {
+			r.Get("/{agentID}/capacity", s.OrchestratorProxy.ServeHTTP)
+			r.Get("/{agentID}/reliability", s.OrchestratorProxy.ServeHTTP)
+			r.Get("/{agentID}/health", s.OrchestratorProxy.ServeHTTP)
+		}
 		s.Agents.Routes(r)
 	})
 
@@ -140,6 +150,10 @@ func (s *Server) Handler() http.Handler {
 		r.Handle("/v1/workflows/*", taskProxy)
 		r.Handle("/v1/marketplace", s.OrchestratorProxy)
 		r.Handle("/v1/marketplace/*", s.OrchestratorProxy)
+		r.Handle("/v1/skills", s.OrchestratorProxy)
+		r.Handle("/v1/skills/*", s.OrchestratorProxy)
+		r.Handle("/v1/discover/skill", s.OrchestratorProxy)
+		r.Handle("/v1/invoke/skill", s.OrchestratorProxy)
 		r.Handle("/v1/health/probe", requireMutatingScope(s.AuthStore, "agent.write")(s.OrchestratorProxy))
 		r.Handle("/v1/stats", s.OrchestratorProxy)
 		r.Handle("/v1/stats/*", s.OrchestratorProxy)
@@ -155,6 +169,27 @@ func (s *Server) Handler() http.Handler {
 		r.Handle("/v1/evaluations/*", taskProxy)
 		r.Handle("/v1/router", s.OrchestratorProxy)
 		r.Handle("/v1/router/*", s.OrchestratorProxy)
+		// A2A OS: open discovery/routing/runtime-graph infrastructure. Any
+		// authenticated Agent may call these directly (no central orchestrator).
+		r.Handle("/v1/route", s.OrchestratorProxy)
+		r.Handle("/v1/discover", s.OrchestratorProxy)
+		r.Handle("/v1/runtime", s.OrchestratorProxy)
+		r.Handle("/v1/runtime/*", s.OrchestratorProxy)
+		// Phase 2: collaboration graph API for frontend visualization.
+		r.Handle("/v1/collaboration", s.OrchestratorProxy)
+		r.Handle("/v1/collaboration/*", s.OrchestratorProxy)
+		// Phase 2.2: OS-level governance authority. Agents query the trusted OS
+		// for an authoritative allow/deny decision before delegating to a peer.
+		r.Handle("/v1/governance", s.OrchestratorProxy)
+		r.Handle("/v1/governance/*", s.OrchestratorProxy)
+		// Phase 5: intelligent scheduling + cost + tenant policy
+		r.Handle("/v1/scheduling", s.OrchestratorProxy)
+		r.Handle("/v1/scheduling/*", s.OrchestratorProxy)
+		r.Handle("/v1/tenants", s.OrchestratorProxy)
+		r.Handle("/v1/tenants/*", s.OrchestratorProxy)
+		// Phase 3: agent lifecycle (gateway-safe path; /v1/agents/* is registry).
+		r.Handle("/v1/agent-runtime", s.OrchestratorProxy)
+		r.Handle("/v1/agent-runtime/*", s.OrchestratorProxy)
 		r.Handle("/v1/metrics", s.OrchestratorProxy)
 		r.Handle("/v1/metrics/*", s.OrchestratorProxy)
 		r.Handle("/v1/memory", taskProxy)

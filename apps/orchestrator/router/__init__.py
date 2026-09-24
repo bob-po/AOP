@@ -64,6 +64,8 @@ class AgentRouter:
         *,
         metrics_window_hours: float | None = None,
         scoring_policy: ScoringPolicy | None = None,
+        lifecycle_checker=None,
+        capacity_queue_depth=None,
     ):
         self.database_url = database_url or os.getenv(
             "DATABASE_URL",
@@ -77,6 +79,8 @@ class AgentRouter:
             else os.getenv("ROUTER_METRICS_HOURS", "24")
         )
         self.smart = os.getenv("ROUTER_SMART", "true").lower() not in {"0", "false", "no"}
+        self.lifecycle_checker = lifecycle_checker
+        self.capacity_queue_depth = capacity_queue_depth
         self._redis = None
         if redis is not None:
             try:
@@ -88,6 +92,18 @@ class AgentRouter:
         # Initialize scoring engine with configurable policy
         self._scoring_policy = scoring_policy or ScoringPolicy.from_env()
         self._scoring_engine = ScoringEngine(self._scoring_policy)
+
+    def set_lifecycle_hooks(
+        self,
+        *,
+        lifecycle_checker=None,
+        capacity_queue_depth=None,
+    ) -> None:
+        """P4.15: wire AgentLifecycle / capacity queue into CandidateFilter."""
+        if lifecycle_checker is not None:
+            self.lifecycle_checker = lifecycle_checker
+        if capacity_queue_depth is not None:
+            self.capacity_queue_depth = capacity_queue_depth
 
     @property
     def scoring_policy(self) -> ScoringPolicy:
@@ -190,6 +206,190 @@ class AgentRouter:
             ],
             "selected": ranked[0].agent_id if ranked else None,
         }
+
+    # ── A2A OS: open discovery & routing (callable by any Agent) ──────────
+
+    def _all_candidates_with_cards(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        """Fetch every agent for the tenant with card_json + skills + endpoint.
+
+        Used by :meth:`discover` so the capability/IO/resource filters in
+        ``router.filter`` can read the full Agent Card, not just the skill index.
+        """
+        tid = tenant_id or self.tenant_id
+        sql = """
+            SELECT a.id::text AS agent_id,
+                   a.agent_key,
+                   a.name,
+                   a.status,
+                   a.priority,
+                   a.tenant_id::text AS tenant_id,
+                   a.card_json,
+                   COALESCE((
+                     SELECT e.url FROM agent_endpoints e
+                     WHERE e.agent_id = a.id AND e.is_primary = true
+                     ORDER BY e.updated_at DESC LIMIT 1
+                   ), '') AS endpoint,
+                   COALESCE((
+                     SELECT array_agg(s.skill_id ORDER BY s.skill_id)
+                     FROM agent_skills s WHERE s.agent_id = a.id
+                   ), '{}') AS skills
+            FROM agents a
+            WHERE a.tenant_id = %s::uuid
+        """
+        with connect(self.database_url) as conn:
+            rows = conn.execute(sql, (tid,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def discover(
+        self,
+        *,
+        required_skills: list[str] | None = None,
+        capabilities: dict[str, Any] | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+        match_all_skills: bool = False,
+        exclude_agent_ids: set[str] | list[str] | None = None,
+        include_offline: bool = False,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Capability-aware discovery over the Agent Registry.
+
+        This is the infrastructure entry point any Agent can call to find peers
+        (``POST /v1/discover``). It runs the full Router v3 filter pipeline
+        (skill → capability → IO compatibility → health → resource → tenant →
+        policy) and scores the survivors. The caller — not a central
+        orchestrator — decides which candidate to invoke.
+        """
+        skills = [str(s).strip() for s in (required_skills or []) if str(s).strip()]
+        caps = capabilities or {}
+        inp = input or {}
+        out = output or {}
+        tid = tenant_id or self.tenant_id
+
+        candidates = self._all_candidates_with_cards(tenant_id=tid)
+
+        # Stage 1: skill match (union by default, intersection when match_all_skills)
+        if skills:
+            wanted = set(skills)
+            if match_all_skills:
+                candidates = [c for c in candidates if wanted.issubset(set(c.get("skills") or []))]
+            else:
+                candidates = [c for c in candidates if wanted & set(c.get("skills") or [])]
+
+        if not include_offline:
+            candidates = [c for c in candidates if c.get("status") in ONLINE_STATUSES and c.get("endpoint")]
+
+        resources = caps.get("resources") or {}
+        excluded = {str(x) for x in (exclude_agent_ids or []) if x}
+        if HAS_FILTER:
+            reqs = TaskRequirements(
+                skill=skills[0] if skills else "",
+                input_modes=(inp.get("modes") or ([inp["type"]] if inp.get("type") else ["text"])),
+                output_modes=(out.get("modes") or ([out["type"]] if out.get("type") else ["text"])),
+                requires_streaming=bool(caps.get("streaming")),
+                requires_web_browsing=bool(caps.get("web_browsing") or caps.get("webBrowsing")),
+                requires_code_execution=bool(caps.get("code_execution") or caps.get("codeExecution")),
+                required_cpu=caps.get("cpu_cores") or resources.get("cpuCores"),
+                required_memory_mb=caps.get("memory_mb") or resources.get("memoryMb"),
+                requires_gpu=bool(caps.get("gpu") or resources.get("gpuRequired")),
+                gpu_type=caps.get("gpu_type") or resources.get("gpuType"),
+                tenant_id=tid,
+            )
+            candidate_filter = CandidateFilter(
+                lifecycle_checker=self.lifecycle_checker,
+                capacity_queue_depth=self.capacity_queue_depth,
+            )
+            filtered, stats = candidate_filter.filter_candidates(
+                candidates, reqs, exclude_agent_ids=excluded or None
+            )
+            filter_stats = stats.to_dict()
+        else:  # pragma: no cover - filter module always present
+            filtered = [c for c in candidates if c["agent_id"] not in excluded]
+            filter_stats = {}
+
+        metrics = self._load_metrics([c["agent_id"] for c in filtered])
+        scored: list[RoutedAgent] = []
+        for c in filtered:
+            breakdown = self._score(c, metrics.get(c["agent_id"]) or {})
+            scored.append(
+                RoutedAgent(
+                    agent_id=c["agent_id"],
+                    agent_key=c["agent_key"],
+                    name=c["name"],
+                    endpoint=normalize_endpoint(c.get("endpoint") or ""),
+                    status=c["status"],
+                    skills=list(c.get("skills") or []),
+                    priority=int(c["priority"]),
+                    source="registry",
+                    score=round(float(breakdown["total"]), 4),
+                    score_breakdown={k: round(v, 4) for k, v in breakdown.items()},
+                )
+            )
+
+        if self.smart:
+            scored.sort(key=lambda a: (-a.score, a.priority, a.name))
+        else:
+            scored.sort(key=lambda a: (a.priority, a.name))
+        scored = scored[: max(1, min(limit, 100))]
+
+        return {
+            "required_skills": skills,
+            "match_all_skills": match_all_skills,
+            "capabilities": caps,
+            "input": inp,
+            "output": out,
+            "tenant_id": tid,
+            "candidates": [
+                {
+                    "agent_id": a.agent_id,
+                    "agent_key": a.agent_key,
+                    "name": a.name,
+                    "status": a.status,
+                    "endpoint": a.endpoint,
+                    "skills": a.skills,
+                    "priority": a.priority,
+                    "score": a.score,
+                    "score_breakdown": a.score_breakdown,
+                    "source": a.source,
+                }
+                for a in scored
+            ],
+            "selected": scored[0].agent_id if scored else None,
+            "filter_stats": filter_stats,
+        }
+
+    def route(
+        self,
+        *,
+        skill: str | None = None,
+        required_skills: list[str] | None = None,
+        capabilities: dict[str, Any] | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+        exclude_agent_ids: set[str] | list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Pick the single best Agent for a request (``POST /v1/route``).
+
+        Runs the same capability-aware pipeline as :meth:`discover` and returns
+        the selected Agent plus the ranked candidate list. The calling Agent
+        still owns the decision of whether to actually invoke the result.
+        """
+        skills = [str(s).strip() for s in (required_skills or []) if str(s).strip()]
+        if skill and str(skill).strip():
+            skills.insert(0, str(skill).strip())
+        result = self.discover(
+            required_skills=skills,
+            capabilities=capabilities,
+            input=input,
+            output=output,
+            tenant_id=tenant_id,
+            exclude_agent_ids=exclude_agent_ids,
+        )
+        candidates = result["candidates"]
+        result["selected_agent"] = candidates[0] if candidates else None
+        return result
 
     def agent_performance(self, *, limit: int = 50) -> list[dict[str, Any]]:
         since = _utc_now() - timedelta(hours=self.metrics_window_hours)

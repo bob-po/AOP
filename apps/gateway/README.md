@@ -27,6 +27,9 @@ Env:
 POST /v1/agents/register   {"endpoint":"http://127.0.0.1:8001"}
 GET  /v1/agents?skill=web-search&status=online
 GET  /v1/agents/{id}
+GET  /v1/agents/{id}/capacity     (proxied → Orchestrator)
+GET  /v1/agents/{id}/reliability  (proxied → Orchestrator)
+GET  /v1/agents/{id}/health       (proxied → Orchestrator lifecycle; POST remains registry probe)
 POST /v1/agents/{id}/disable
 POST /v1/agents/{id}/enable
 POST /v1/agents/{id}/health

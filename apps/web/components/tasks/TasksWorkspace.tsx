@@ -8,6 +8,7 @@ import {
   cancelTask,
   createTask,
   evaluateTask,
+  listGovernanceDenials,
   listTasks,
   rejectTask,
   type TaskSummary,
@@ -16,6 +17,9 @@ import { useTaskLive } from "@/hooks/useTaskLive";
 import { TaskFlowDag } from "@/components/tasks/TaskFlowDag";
 import { TaskTrace } from "@/components/TaskTrace";
 import { PptPreview } from "@/components/tasks/PptPreview";
+import { CollaborationGraphView } from "@/components/tasks/CollaborationGraph";
+import { ExecutionPanel } from "@/components/tasks/ExecutionPanel";
+import { CostPanel } from "@/components/tasks/CostPanel";
 
 const FILTERS = [
   { key: "", label: "全部" },
@@ -67,6 +71,9 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [detailNodeId, setDetailNodeId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [canvasMode, setCanvasMode] = useState<"dag" | "collab">("dag");
+  const [detailTab, setDetailTab] = useState<"overview" | "execution" | "cost">("overview");
+  const [denialCount, setDenialCount] = useState(0);
 
   const { task, events, artifacts, evaluation, memories, error: liveError, reload, liveMode, wsConnected } =
     useTaskLive(selectedId);
@@ -93,6 +100,27 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   useEffect(() => {
     if (initialTaskId) setSelectedId(initialTaskId);
   }, [initialTaskId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDenialCount(0);
+      return;
+    }
+    const root =
+      task?.execution?.execute?.root_task_id ||
+      selectedId;
+    let alive = true;
+    listGovernanceDenials({ root_task_id: root, limit: 50 })
+      .then((r) => {
+        if (alive) setDenialCount(r.count ?? (r.denials || []).length);
+      })
+      .catch(() => {
+        if (alive) setDenialCount(0);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedId, task?.execution?.execute?.root_task_id]);
 
   useEffect(() => {
     if (!selectedId && tasks.length > 0) {
@@ -203,6 +231,10 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   }, [artifacts, detailNode]);
 
   const goal = task?.input_json?.content || task?.plan_json?.goal || task?.title || "";
+  const rootTaskId =
+    (typeof task?.execution?.execute?.root_task_id === "string" &&
+      task.execution.execute.root_task_id) ||
+    selectedId;
 
   function copyArtifactsToClipboard() {
     if (artifacts.length === 0) return;
@@ -303,11 +335,29 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
         </div>
       </aside>
 
-      {/* Center DAG */}
+      {/* Center canvas */}
       <section className="flex min-w-0 flex-1 flex-col p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-mist-400">
-            DAG 画布
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCanvasMode("dag")}
+              className={`font-mono text-[10px] uppercase tracking-[0.18em] ${
+                canvasMode === "dag" ? "text-signal" : "text-mist-400 hover:text-mist-200"
+              }`}
+            >
+              DAG 画布
+            </button>
+            <span className="text-mist-400">/</span>
+            <button
+              type="button"
+              onClick={() => setCanvasMode("collab")}
+              className={`font-mono text-[10px] uppercase tracking-[0.18em] ${
+                canvasMode === "collab" ? "text-signal" : "text-mist-400 hover:text-mist-200"
+              }`}
+            >
+              运行时协作图
+            </button>
           </div>
           {selectedId ? (
             <span className="font-mono text-[10px] text-mist-400">{selectedId}</span>
@@ -322,12 +372,25 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
           </span>
         </div>
         {selectedId ? (
-          <TaskFlowDag
-            plan={task?.plan_json}
-            nodes={task?.nodes || []}
-            selectedNodeId={selectedNodeId}
-            onSelectNode={setSelectedNodeId}
-          />
+          canvasMode === "dag" ? (
+            <TaskFlowDag
+              plan={task?.plan_json}
+              nodes={task?.nodes || []}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={setSelectedNodeId}
+            />
+          ) : (
+            <CollaborationGraphView
+              rootTaskId={rootTaskId}
+              denialCount={denialCount}
+              onOpenDenials={() => {
+                if (!rootTaskId) return;
+                router.push(
+                  `/settings?tab=governance&root_task_id=${encodeURIComponent(rootTaskId)}`,
+                );
+              }}
+            />
+          )
         ) : (
           <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/10 font-mono text-sm text-mist-400">
             选择左侧任务查看 DAG
@@ -411,6 +474,36 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
         </div>
 
         <div className="flex-1 space-y-4 overflow-auto p-4">
+          {selectedId ? (
+            <div className="flex gap-2 border-b border-white/10 pb-2">
+              {(
+                [
+                  ["overview", "概览"],
+                  ["execution", "执行"],
+                  ["cost", "成本"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setDetailTab(id)}
+                  className={`font-mono text-[10px] uppercase tracking-[0.14em] ${
+                    detailTab === id ? "text-signal" : "text-mist-400 hover:text-mist-200"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {detailTab === "execution" && selectedId ? (
+            <ExecutionPanel taskId={selectedId} busy={busy} onRecovered={() => reload()} />
+          ) : null}
+          {detailTab === "cost" && selectedId ? <CostPanel taskId={selectedId} /> : null}
+
+          {detailTab === "overview" ? (
+            <>
           {memories.length > 0 ? (
             <div className="rounded-xl border border-white/10 bg-ink-900/50 p-3">
               <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
@@ -563,6 +656,8 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                 {String(task.result_json.summary).slice(0, 1200)}
               </pre>
             </div>
+          ) : null}
+            </>
           ) : null}
         </div>
       </aside>

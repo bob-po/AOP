@@ -19,6 +19,9 @@ __all__ = [
     "Task",
     "TaskStatus",
     "fetch_agent_card",
+    "stream_tasks",
+    "cancel_task",
+    "delegate_task",
 ]
 
 __version__ = "0.1.0"

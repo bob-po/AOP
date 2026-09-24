@@ -17,7 +17,7 @@ class A2AError(RuntimeError):
 
 
 class A2AClient:
-    """Minimal A2A JSON-RPC client for Phase 1 (message/send)."""
+    """Enhanced A2A JSON-RPC client with streaming, cancellation, and delegation support."""
 
     def __init__(
         self,
@@ -40,21 +40,83 @@ class A2AClient:
         self._card = fetch_agent_card(self.base_url, timeout=self.timeout)
         return self._card
 
-    def send_text(self, text: str, *, skill_id: str | None = None, idempotency_key: str | None = None) -> Task:
+    def send_text(
+        self,
+        text: str,
+        *,
+        skill_id: str | None = None,
+        idempotency_key: str | None = None,
+        correlation_id: str | None = None,
+        parent_task_id: str | None = None,
+        root_task_id: str | None = None,
+        depth: int = 0,
+        caller_agent_id: str | None = None,
+        target_agent_id: str | None = None,
+        visited_agents: list[str] | None = None,
+        governance_policy_id: str | None = None,
+        deadline: str | None = None,
+        callback_url: str | None = None,
+    ) -> Task:
         message = Message(
             role="user",
             parts=[Part(type="text", text=text)],
             message_id=str(uuid.uuid4()),
             idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
+            parent_task_id=parent_task_id,
+            root_task_id=root_task_id,
+            depth=depth,
+            caller_agent_id=caller_agent_id,
+            target_agent_id=target_agent_id,
+            visited_agents=list(visited_agents or []),
+            governance_policy_id=governance_policy_id,
+            deadline=deadline,
+            callback_url=callback_url,
         )
         return self.send_message(message, skill_id=skill_id)
 
-    def send_message(self, message: Message, *, skill_id: str | None = None) -> Task:
+    def send_message(
+        self,
+        message: Message,
+        *,
+        skill_id: str | None = None,
+        correlation_id: str | None = None,
+        parent_task_id: str | None = None,
+        root_task_id: str | None = None,
+        depth: int = 0,
+    ) -> Task:
         params: dict[str, Any] = {"message": message.to_dict()}
         if skill_id:
             params["metadata"] = {"skillId": skill_id}
         if message.idempotency_key:
             params["idempotencyKey"] = message.idempotency_key
+        # Lineage/governance are also mirrored at the top level so OS-side and
+        # agent-side parsers that read params directly (not the nested message)
+        # still see them. Explicit kwargs win; otherwise fall back to the message.
+        correlation_id = correlation_id or message.correlation_id
+        parent_task_id = parent_task_id or message.parent_task_id
+        root_task_id = root_task_id or message.root_task_id
+        depth = depth or message.depth
+        if correlation_id:
+            params["correlationId"] = correlation_id
+        if parent_task_id:
+            params["parentTaskId"] = parent_task_id
+        if root_task_id:
+            params["rootTaskId"] = root_task_id
+        if depth > 0:
+            params["depth"] = depth
+        if message.caller_agent_id:
+            params["callerAgentId"] = message.caller_agent_id
+        if message.target_agent_id:
+            params["targetAgentId"] = message.target_agent_id
+        if message.visited_agents:
+            params["visitedAgents"] = list(message.visited_agents)
+        if message.governance_policy_id:
+            params["governancePolicyId"] = message.governance_policy_id
+        if message.deadline:
+            params["deadline"] = message.deadline
+        if message.callback_url:
+            params["callbackUrl"] = message.callback_url
 
         result = self._rpc("message/send", params)
         if not isinstance(result, dict):
@@ -65,6 +127,70 @@ class A2AClient:
         result = self._rpc("tasks/get", {"id": task_id})
         if not isinstance(result, dict):
             raise A2AError(f"Unexpected tasks/get result type: {type(result)}")
+        return Task.from_dict(result)
+
+    def stream_tasks(
+        self,
+        skill_id: str | None = None,
+        correlation_id: str | None = None,
+        parent_task_id: str | None = None,
+        root_task_id: str | None = None,
+        depth: int = 0,
+    ):
+        """Stream tasks as they are created or updated."""
+        params: dict[str, Any] = {}
+        if skill_id:
+            params["metadata"] = {"skillId": skill_id}
+        if correlation_id:
+            params["correlationId"] = correlation_id
+        if parent_task_id:
+            params["parentTaskId"] = parent_task_id
+        if root_task_id:
+            params["rootTaskId"] = root_task_id
+        if depth > 0:
+            params["depth"] = depth
+
+        endpoint = self._rpc_endpoint()
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            with client.stream("POST", endpoint, json={"jsonrpc": "2.0", "method": "tasks/subscribe", "params": params}) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if line:
+                        yield line
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a task."""
+        result = self._rpc("tasks/cancel", {"id": task_id})
+        if not isinstance(result, bool):
+            raise A2AError(f"Unexpected tasks/cancel result type: {type(result)}")
+        return result
+
+    def delegate_task(
+        self,
+        task_id: str,
+        target_agent_id: str,
+        skill_id: str | None = None,
+        correlation_id: str | None = None,
+        parent_task_id: str | None = None,
+        root_task_id: str | None = None,
+        depth: int = 0,
+    ) -> Task:
+        """Delegate a task to another agent."""
+        params: dict[str, Any] = {"taskId": task_id, "targetAgentId": target_agent_id}
+        if skill_id:
+            params["metadata"] = {"skillId": skill_id}
+        if correlation_id:
+            params["correlationId"] = correlation_id
+        if parent_task_id:
+            params["parentTaskId"] = parent_task_id
+        if root_task_id:
+            params["rootTaskId"] = root_task_id
+        if depth > 0:
+            params["depth"] = depth
+
+        result = self._rpc("tasks/delegate", params)
+        if not isinstance(result, dict):
+            raise A2AError(f"Unexpected tasks/delegate result type: {type(result)}")
         return Task.from_dict(result)
 
     def _rpc(self, method: str, params: dict[str, Any]) -> Any:
@@ -87,7 +213,10 @@ class A2AClient:
                 code=err.get("code"),
                 data=err.get("data"),
             )
-        return body.get("result")
+        # Always extract result from the body
+        if isinstance(body, dict):
+            return body.get("result")
+        return body
 
     def _rpc_endpoint(self) -> str:
         # Prefer card.url when present; fall back to base_url root.
@@ -121,4 +250,7 @@ __all__ = [
     "TaskStatus",
     "first_data_artifact",
     "first_text_artifact",
+    "stream_tasks",
+    "cancel_task",
+    "delegate_task",
 ]

@@ -15,6 +15,25 @@ from fastapi.responses import JSONResponse
 
 from browse import playwright_available, resolve_backend, run_browse
 
+# A2A OS: make this Agent a first-class citizen — Server *and* Client.
+try:
+    from agent_runtime.agent_collab import AgentCollaborator
+    from agent_runtime.a2a_server import cancel_task as _a2a_cancel
+    _COLLAB = AgentCollaborator(agent_id="browser-agent")
+except ImportError:  # pragma: no cover - agent-runtime not installed
+    _COLLAB = None
+
+    def _a2a_cancel(store, tid):
+        if tid and tid in store:
+            t = store[tid]
+            s = t.get("status")
+            if isinstance(s, dict):
+                s["state"] = "canceled"
+            else:
+                t["status"] = {"state": "canceled"}
+            return True, t
+        return False, None
+
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
 app = FastAPI(title="AOP Browser Agent", version="0.2.0")
@@ -120,6 +139,12 @@ async def a2a_rpc(request: Request) -> JSONResponse:
     method = body.get("method")
     params = body.get("params") or {}
     try:
+        if method in {"tasks/get", "tasks/cancel", "tasks/subscribe"}:
+            if _COLLAB is not None:
+                handled = _COLLAB.handle_control(method, params, _TASKS, req_id)
+                if handled is not None:
+                    return JSONResponse(handled)
+
         if method == "message/send":
             # P36.1: Extract idempotency key if present
             idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
@@ -131,16 +156,40 @@ async def a2a_rpc(request: Request) -> JSONResponse:
             
             instruction = _extract_query(params)
             payload = await asyncio.to_thread(run_browse, instruction)
-            result = _completed_task(str(uuid.uuid4()), instruction, payload)
+
+            task_id = str(uuid.uuid4())
+            # A2A OS: inbound lineage + optional autonomous peer delegation.
+            delegated = None
+            if _COLLAB is not None:
+                ctx = _COLLAB.context(params, task_id=task_id)
+                delegated = _COLLAB.fetch(instruction, ctx)
+
+            result = _completed_task(task_id, instruction, payload)
+            if delegated:
+                result.setdefault("metadata", {})["autonomous_delegation"] = delegated[:500]
             
             # P36.1: Cache result for idempotency
             if idempotency_key:
                 _IDEMPOTENCY_CACHE[idempotency_key] = result
-            
+
+            if _COLLAB is not None:
+                _COLLAB.after_complete(params, result)
+
             return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
         if method == "tasks/get":
             task = _TASKS.get(params.get("id"))
             if not task:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32001, "message": "Task not found"},
+                    }
+                )
+            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": task})
+        if method == "tasks/cancel":
+            ok, task = _a2a_cancel(_TASKS, params.get("id"))
+            if not ok:
                 return JSONResponse(
                     {
                         "jsonrpc": "2.0",

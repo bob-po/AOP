@@ -9,6 +9,7 @@ import sys
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 # Add parent directory to path for imports
@@ -201,8 +202,10 @@ async def main():
     
     print(f"\nTotal: {success_count}/{total_count} agents passed")
     
-    # Save results
-    output_file = "phase37_e2e_validation_results.json"
+    # Save results under docs/phases/phase-37/ (not repo root)
+    out_dir = Path(__file__).resolve().parents[3] / "docs" / "phases" / "phase-37"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_file = out_dir / "e2e-validation-results.json"
     with open(output_file, "w") as f:
         json.dump({
             "timestamp": datetime.now().isoformat(),

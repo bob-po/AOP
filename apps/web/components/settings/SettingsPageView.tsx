@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   createApiKey,
   createCheckout,
@@ -31,9 +32,12 @@ import {
   type QuotaStatus,
   type RbacRole,
 } from "@/lib/api";
+import { TenantPanel } from "@/components/settings/TenantPanel";
+import { GovernancePanel } from "@/components/settings/GovernancePanel";
 
 const TABS = [
   { id: "tenant", label: "租户" },
+  { id: "governance", label: "治理" },
   { id: "keys", label: "API Keys" },
   { id: "rbac", label: "权限" },
   { id: "billing", label: "用量" },
@@ -67,7 +71,13 @@ function usd(n: number | undefined) {
 }
 
 export function SettingsPageView() {
-  const [tab, setTab] = useState<TabId>("keys");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const tabFromUrl = searchParams.get("tab") as TabId | null;
+  const rootFromUrl = searchParams.get("root_task_id");
+  const [tab, setTab] = useState<TabId>(
+    tabFromUrl && TABS.some((t) => t.id === tabFromUrl) ? tabFromUrl : "keys",
+  );
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [roles, setRoles] = useState<RbacRole[]>(FALLBACK_ROLES);
   const [me, setMe] = useState<Record<string, unknown> | null>(null);
@@ -107,6 +117,19 @@ export function SettingsPageView() {
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (tabFromUrl && TABS.some((t) => t.id === tabFromUrl)) {
+      setTab(tabFromUrl);
+    }
+  }, [tabFromUrl]);
+
+  function selectTab(id: TabId) {
+    setTab(id);
+    const q = new URLSearchParams(searchParams.toString());
+    q.set("tab", id);
+    router.replace(`/settings?${q.toString()}`);
+  }
 
   async function loadKeys() {
     try {
@@ -321,7 +344,7 @@ export function SettingsPageView() {
           <button
             key={t.id}
             type="button"
-            onClick={() => setTab(t.id)}
+            onClick={() => selectTab(t.id)}
             className={`rounded-lg px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] ${
               tab === t.id ? "bg-signal/15 text-signal" : "text-mist-400"
             }`}
@@ -334,16 +357,10 @@ export function SettingsPageView() {
       {error ? <div className="mt-4 font-mono text-xs text-signal-warm">{error}</div> : null}
 
       <div className="mt-6 max-w-3xl">
-        {tab === "tenant" ? (
-          <div className="rounded-2xl border border-white/10 bg-ink-900/50 p-5">
-            <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-              Default Tenant
-            </div>
-            <div className="mt-2 font-mono text-sm text-mist-100">
-              00000000-0000-0000-0000-000000000001
-            </div>
-            <p className="mt-3 text-sm text-mist-400">名称：Default（只读）</p>
-          </div>
+        {tab === "tenant" ? <TenantPanel /> : null}
+
+        {tab === "governance" ? (
+          <GovernancePanel initialRootTaskId={rootFromUrl} />
         ) : null}
 
         {tab === "keys" ? (

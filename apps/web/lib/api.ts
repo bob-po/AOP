@@ -74,6 +74,14 @@ export type TaskDetail = {
   created_at?: string;
   updated_at?: string;
   finished_at?: string;
+  /** Phase 3+ execution snapshot when returned by orchestrator */
+  execution?: {
+    execute?: { root_task_id?: string; state?: string; [key: string]: unknown } | null;
+    delegate?: { root_task_id?: string; [key: string]: unknown } | null;
+    [key: string]: unknown;
+  } | null;
+  collaboration_graph?: unknown;
+  runtime_graph?: unknown;
 };
 
 export type TaskEvent = {
@@ -194,8 +202,9 @@ export function listTasks(params?: { status?: string; limit?: number }) {
   return request<{ tasks: TaskSummary[] }>(`/v1/tasks${qs ? `?${qs}` : ""}`);
 }
 
-export function getTask(taskId: string) {
-  return request<TaskDetail>(`/v1/tasks/${taskId}`);
+export function getTask(taskId: string, opts?: { include_graph?: boolean }) {
+  const q = opts?.include_graph ? "?include_graph=true" : "";
+  return request<TaskDetail>(`/v1/tasks/${taskId}${q}`);
 }
 
 export function cancelTask(taskId: string) {
@@ -837,4 +846,671 @@ export function updateEgress(body: {
   });
 }
 
-export { API_BASE, API_KEY };
+// ─── A2A OS (Phase 1–6) ───────────────────────────────────────────────────
+
+const ORCHESTRATOR_BASE =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_ORCHESTRATOR_BASE) || "";
+
+const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+
+/** Human-readable API error (403 cross-tenant, 404/503, etc.). */
+export function apiErrorMessage(err: unknown, fallback = "请求失败"): string {
+  const raw = err instanceof Error ? err.message : String(err || fallback);
+  if (/^403\b/.test(raw) || /\b403\b/.test(raw)) {
+    return "无权访问其他租户数据";
+  }
+  if (/^404\b/.test(raw)) return "资源不存在或接口未部署";
+  if (/^503\b/.test(raw)) return "服务暂不可用";
+  if (/failed to fetch|network|timeout|AbortError/i.test(raw)) {
+    return "网络超时或无法连接网关";
+  }
+  // Strip leading status code for display
+  const m = raw.match(/^\d{3}\s+([\s\S]*)/);
+  if (m) {
+    const body = m[1].trim();
+    if (body.length > 180) return body.slice(0, 180) + "…";
+    return body || fallback;
+  }
+  return raw || fallback;
+}
+
+export function getDefaultTenantId() {
+  return (
+    (typeof process !== "undefined" && process.env.NEXT_PUBLIC_DEFAULT_TENANT_ID) ||
+    DEFAULT_TENANT_ID
+  );
+}
+
+async function requestAbsolute<T>(
+  base: string,
+  path: string,
+  init?: RequestInit & { __sessionRetried?: boolean },
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  const token = authHeader();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${base.replace(/\/$/, "")}${path}`, {
+    ...init,
+    headers,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    if (
+      res.status === 401 &&
+      token &&
+      isSessionToken(token) &&
+      !init?.__sessionRetried
+    ) {
+      setSessionToken(null);
+      const { __sessionRetried: _ignored, ...rest } = init || {};
+      return requestAbsolute<T>(base, path, { ...rest, __sessionRetried: true });
+    }
+    throw new Error(`${res.status} ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Prefer Orchestrator direct base when set (local dev for capacity/reliability). */
+function requestOrchPreferred<T>(path: string, init?: RequestInit) {
+  if (ORCHESTRATOR_BASE) {
+    return requestAbsolute<T>(ORCHESTRATOR_BASE, path, init);
+  }
+  return request<T>(path, init);
+}
+
+// Discover / Route
+export type DiscoverCandidate = {
+  agent_id: string;
+  agent_key?: string;
+  name?: string;
+  status?: string;
+  endpoint?: string;
+  skills?: string[];
+  priority?: number;
+  score?: number;
+  score_breakdown?: Record<string, number>;
+  source?: string;
+  [key: string]: unknown;
+};
+
+export type DiscoverResult = {
+  required_skills?: string[];
+  match_all_skills?: boolean;
+  capabilities?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  tenant_id?: string;
+  candidates: DiscoverCandidate[];
+  selected?: string | null;
+  selected_agent?: DiscoverCandidate | null;
+  filter_stats?: Record<string, unknown>;
+};
+
+export type DiscoverRequest = {
+  required_skills?: string[];
+  capabilities?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  match_all_skills?: boolean;
+  exclude_agent_ids?: string[];
+  limit?: number;
+};
+
+export function discoverAgents(body: DiscoverRequest) {
+  return request<DiscoverResult>("/v1/discover", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function routeRequest(body: DiscoverRequest & { skill?: string }) {
+  return request<DiscoverResult>("/v1/route", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Runtime / Collaboration
+export type RuntimeEdgeInput = {
+  caller_agent_id: string;
+  target_agent_id: string;
+  root_task_id?: string;
+  parent_task_id?: string;
+  task_id?: string;
+  correlation_id?: string;
+  skill?: string;
+  depth?: number;
+  status?: string;
+  tenant_id?: string;
+};
+
+export type CollaborationNode = {
+  id: string;
+  type: "agent" | "task" | string;
+  label?: string;
+  role?: "caller" | "target" | string;
+  task_id?: string;
+  status?: string;
+  skill?: string;
+  depth?: number;
+  agent_id?: string;
+  state?: string;
+  active_tasks?: number;
+  last_seen?: string;
+  task_count?: number;
+  [key: string]: unknown;
+};
+
+export type CollaborationLink = {
+  id: string;
+  source: string;
+  target: string;
+  task_id?: string;
+  parent_task_id?: string;
+  skill?: string;
+  depth?: number;
+  status?: string;
+  correlation_id?: string;
+  created_at?: string;
+  [key: string]: unknown;
+};
+
+export type CollaborationGraph = {
+  root_task_id: string;
+  kind?: string;
+  node_count?: number;
+  link_count?: number;
+  max_depth?: number;
+  agents?: string[];
+  nodes: CollaborationNode[];
+  links: CollaborationLink[];
+  tree?: unknown[];
+  edges?: unknown[];
+};
+
+export type RuntimeGraph = {
+  root_task_id: string;
+  edges?: unknown[];
+  nodes?: unknown[];
+  tree?: unknown[];
+  agents?: string[];
+  max_depth?: number;
+};
+
+export type ExecutionEventDict = {
+  event_type?: string;
+  event_id?: string;
+  timestamp?: string;
+  root_task_id?: string;
+  correlation_id?: string;
+  task_id?: string;
+  agent_id?: string;
+  parent_task_id?: string;
+  payload?: Record<string, unknown>;
+  sequence?: number;
+  [key: string]: unknown;
+};
+
+export function recordRuntimeEdge(body: RuntimeEdgeInput) {
+  return request<Record<string, unknown>>("/v1/runtime/edges", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getRuntimeGraph(rootTaskId: string) {
+  return request<RuntimeGraph>(`/v1/runtime/graph/${encodeURIComponent(rootTaskId)}`);
+}
+
+export function getCollaborationGraph(rootTaskId: string) {
+  return request<CollaborationGraph>(
+    `/v1/collaboration/graph/${encodeURIComponent(rootTaskId)}`,
+  );
+}
+
+export function getTaskCollaborationGraph(taskId: string) {
+  return request<CollaborationGraph>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/collaboration-graph`,
+  );
+}
+
+export function getCollaborationEvents(rootTaskId: string) {
+  return request<{ root_task_id: string; events: ExecutionEventDict[]; count: number }>(
+    `/v1/collaboration/events/${encodeURIComponent(rootTaskId)}`,
+  );
+}
+
+// Governance
+export type GovernanceCheckRequest = {
+  root_task_id?: string;
+  caller_agent_id: string;
+  target_agent_id: string;
+  caller_task_id?: string;
+  correlation_id?: string;
+  tenant_id?: string;
+  requested_units?: number;
+  units_estimated?: number;
+  deadline?: string;
+  claimed_depth?: number;
+};
+
+export type GovernanceCheckResult = {
+  allowed: boolean;
+  code?: string;
+  reason?: string;
+  context?: Record<string, unknown>;
+  queued?: boolean;
+  queue?: Record<string, unknown>;
+};
+
+export type GovernanceDenial = {
+  code?: string;
+  reason?: string;
+  root_task_id?: string;
+  caller_agent_id?: string;
+  target_agent_id?: string;
+  created_at?: string;
+  timestamp?: string;
+  context?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export function governanceCheck(body: GovernanceCheckRequest) {
+  return request<GovernanceCheckResult>("/v1/governance/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function governanceRelease(body?: Record<string, unknown>) {
+  return request<{ released: boolean }>("/v1/governance/release", {
+    method: "POST",
+    body: JSON.stringify(body || {}),
+  });
+}
+
+export function listGovernanceDenials(params?: {
+  root_task_id?: string;
+  code?: string;
+  limit?: number;
+}) {
+  const q = new URLSearchParams();
+  if (params?.root_task_id) q.set("root_task_id", params.root_task_id);
+  if (params?.code) q.set("code", params.code);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return request<{ denials: GovernanceDenial[]; count: number }>(
+    `/v1/governance/denials${qs ? `?${qs}` : ""}`,
+  );
+}
+
+// Execution
+export type ExecutionRecord = {
+  state?: string;
+  attempt?: number;
+  max_retries?: number;
+  agent_id?: string;
+  operation?: string;
+  idempotency_key?: string;
+  ownership_token?: string;
+  error?: string | null;
+  branch_lineage?: unknown;
+  visited_agents?: string[];
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  [key: string]: unknown;
+};
+
+export type TaskExecutionView = {
+  task_id: string;
+  execute: ExecutionRecord | null;
+  delegate: ExecutionRecord | null;
+  events?: ExecutionEventDict[];
+  recovery?: { class?: string; [key: string]: unknown } | string | null;
+};
+
+export function getTaskExecution(taskId: string) {
+  return request<TaskExecutionView>(`/v1/tasks/${encodeURIComponent(taskId)}/execution`);
+}
+
+export function recoverTask(taskId: string) {
+  return request<Record<string, unknown>>(`/v1/tasks/${encodeURIComponent(taskId)}/recover`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+// Agent runtime lifecycle (gateway-safe path for health/heartbeat/drain)
+export type AgentRuntimeHealth = {
+  agent_id?: string;
+  state?: string;
+  active_tasks?: number;
+  last_seen?: string;
+  load?: number;
+  version?: string;
+  max_concurrency?: number;
+  [key: string]: unknown;
+};
+
+export type AgentCapacity = {
+  agent_id: string;
+  health?: AgentRuntimeHealth | Record<string, unknown>;
+  queue_depth?: number;
+  quota?: Record<string, unknown>;
+  accepts?: boolean;
+  reason?: string;
+};
+
+export type AgentReliability = {
+  agent_id: string;
+  sample_size?: number;
+  availability?: number;
+  success_rate?: number;
+  note?: string;
+};
+
+export function getAgentRuntimeHealth(agentId: string) {
+  return request<AgentRuntimeHealth>(
+    `/v1/agent-runtime/${encodeURIComponent(agentId)}/health`,
+  );
+}
+
+/** Prefer Gateway; optional NEXT_PUBLIC_ORCHESTRATOR_BASE for local bypass. */
+export function getAgentCapacity(agentId: string) {
+  return requestOrchPreferred<AgentCapacity>(
+    `/v1/agents/${encodeURIComponent(agentId)}/capacity`,
+  );
+}
+
+export function getAgentReliability(agentId: string) {
+  return requestOrchPreferred<AgentReliability>(
+    `/v1/agents/${encodeURIComponent(agentId)}/reliability`,
+  );
+}
+
+export function heartbeatAgent(agentId: string, body?: Record<string, unknown>) {
+  return request<AgentRuntimeHealth>(
+    `/v1/agent-runtime/${encodeURIComponent(agentId)}/heartbeat`,
+    { method: "POST", body: JSON.stringify(body || {}) },
+  );
+}
+
+export function drainAgent(agentId: string) {
+  return request<AgentRuntimeHealth>(
+    `/v1/agent-runtime/${encodeURIComponent(agentId)}/drain`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+// Scheduling
+export type ScheduleRequirement = {
+  skill?: string;
+  version_constraint?: string;
+  input_types?: string[];
+  output_types?: string[];
+  require_gpu?: boolean;
+  require_streaming?: boolean;
+  [key: string]: unknown;
+};
+
+export type ScheduleDecision = {
+  selected?: DiscoverCandidate | null;
+  candidates?: DiscoverCandidate[];
+  excluded?: Array<{ agent_id?: string; reason?: string }>;
+  reason?: string;
+  scores?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type SchedulePreviewResult = {
+  preview?: boolean;
+  decision?: ScheduleDecision;
+  budget?: Record<string, unknown>;
+  tenant_id?: string;
+  selected?: DiscoverCandidate | null;
+  reason?: string;
+};
+
+export type RecoveryPlan = {
+  classification?: string;
+  action?: "abort" | "reselect" | "retry_same" | string;
+  exclude_agent_ids?: string[];
+  reason?: string;
+  [key: string]: unknown;
+};
+
+export function listSchedulingCandidates(skill: string, limit = 20) {
+  const q = new URLSearchParams({ skill, limit: String(limit) });
+  return request<{
+    candidates: DiscoverCandidate[];
+    excluded: Array<{ agent_id?: string; reason?: string }>;
+    count: number;
+    tenant_id?: string;
+  }>(`/v1/scheduling/candidates?${q}`);
+}
+
+export function previewSchedule(body: {
+  agents?: DiscoverCandidate[];
+  requirement?: ScheduleRequirement;
+  exclude_agent_ids?: string[];
+  estimated_cost?: number;
+  skill?: string;
+}) {
+  return request<SchedulePreviewResult>("/v1/scheduling/preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function selectSchedule(body: {
+  agents?: DiscoverCandidate[];
+  requirement?: ScheduleRequirement;
+  exclude_agent_ids?: string[];
+  estimated_cost?: number;
+  skill?: string;
+}) {
+  return request<SchedulePreviewResult>("/v1/scheduling/select", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function simulateSchedule(body: Record<string, unknown>) {
+  return request<Record<string, unknown>>("/v1/scheduling/simulate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getRecoveryPlan(body: {
+  error_code?: string;
+  error?: string;
+  agent_id?: string;
+  agent_state?: string;
+  exclude_agent_ids?: string[];
+}) {
+  return request<RecoveryPlan>("/v1/scheduling/recovery-plan", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Cost
+export type CostAggregate = {
+  task_id?: string;
+  root_task_id?: string;
+  tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  gpu_seconds?: number;
+  cpu_seconds?: number;
+  wall_time_ms?: number;
+  estimated_cost?: number;
+  count?: number;
+  [key: string]: unknown;
+};
+
+export type CostItem = {
+  agent_id?: string;
+  attempt?: number;
+  tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  gpu_seconds?: number;
+  cpu_seconds?: number;
+  wall_time_ms?: number;
+  estimated_cost?: number;
+  [key: string]: unknown;
+};
+
+export type CostBreakdown = {
+  root_task_id?: string;
+  total?: CostAggregate;
+  by_agent?: Record<string, CostAggregate>;
+  items?: CostItem[];
+};
+
+export function getTaskCost(taskId: string) {
+  return request<CostAggregate & { items?: CostItem[] }>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/cost`,
+  );
+}
+
+export function getTaskCostBreakdown(taskId: string) {
+  return request<CostBreakdown>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/cost/breakdown`,
+  );
+}
+
+// Tenants
+export type TenantBudgetScope = {
+  limit?: number;
+  spent?: number;
+  remaining?: number;
+  [key: string]: unknown;
+};
+
+export type TenantBudget = {
+  tenant?: TenantBudgetScope;
+  day?: TenantBudgetScope;
+  month?: TenantBudgetScope;
+  task?: TenantBudgetScope;
+  [key: string]: TenantBudgetScope | undefined;
+};
+
+export type SchedulingPolicyDoc = {
+  max_cost?: number;
+  max_latency_ms?: number;
+  require_gpu?: boolean;
+  require_streaming?: boolean;
+  priority?: number;
+  tenant_weight?: number;
+  [key: string]: unknown;
+};
+
+export function getTenantQuota(tenantId: string) {
+  return request<QuotaStatus | Record<string, unknown>>(
+    `/v1/tenants/${encodeURIComponent(tenantId)}/quota`,
+  );
+}
+
+export function getTenantBudget(tenantId: string) {
+  return request<TenantBudget>(`/v1/tenants/${encodeURIComponent(tenantId)}/budget`);
+}
+
+export function getTenantCost(tenantId: string) {
+  return request<CostAggregate & { tenant_id?: string; trend?: Array<{ day: string; cost: number }> }>(
+    `/v1/tenants/${encodeURIComponent(tenantId)}/cost`,
+  );
+}
+
+export function getTenantPolicy(tenantId: string) {
+  return request<{ tenant_id: string; policy: SchedulingPolicyDoc }>(
+    `/v1/tenants/${encodeURIComponent(tenantId)}/policy`,
+  );
+}
+
+export function setTenantPolicy(tenantId: string, policy: SchedulingPolicyDoc) {
+  return request<{ tenant_id: string; policy: SchedulingPolicyDoc }>(
+    `/v1/tenants/${encodeURIComponent(tenantId)}/policy`,
+    { method: "POST", body: JSON.stringify({ policy }) },
+  );
+}
+
+// Skills
+export type SkillManifest = {
+  name: string;
+  version?: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  dependencies?: Record<string, unknown>;
+  tags?: string[];
+  status?: string;
+  providers?: string[];
+  [key: string]: unknown;
+};
+
+export function listSkills() {
+  return request<{ skills: SkillManifest[] }>("/v1/skills");
+}
+
+export function getSkill(name: string) {
+  return request<SkillManifest>(`/v1/skills/${encodeURIComponent(name)}`);
+}
+
+export function registerSkill(body: Partial<SkillManifest> & { name: string }) {
+  return request<SkillManifest>("/v1/skills", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function searchSkills(body: {
+  skill?: string;
+  name?: string;
+  q?: string;
+  capability?: string;
+  input?: string;
+  output?: string;
+  modality?: string;
+  resource?: string;
+  version?: string;
+  tags?: string[];
+}) {
+  return request<{ skills: SkillManifest[]; count: number }>("/v1/skills/search", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function discoverBySkill(body: {
+  skill: string;
+  version?: string;
+  version_constraint?: string;
+}) {
+  return request<Record<string, unknown>>("/v1/discover/skill", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function invokeBySkill(body: {
+  skill: string;
+  version?: string;
+  version_constraint?: string;
+}) {
+  return request<Record<string, unknown>>("/v1/invoke/skill", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export { API_BASE, API_KEY, ORCHESTRATOR_BASE };

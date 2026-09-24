@@ -77,6 +77,12 @@ class A2AExecutor:
         *,
         skill_id: str | None = None,
         idempotency_key: str | None = None,
+        task_id: str | None = None,
+        correlation_id: str | None = None,
+        caller_agent_id: str | None = None,
+        target_agent_id: str | None = None,
+        depth: int = 0,
+        visited_agents: list[str] | None = None,
     ) -> ExecutionResult:
         # P36.1: Use provided idempotency key or generate one
         if idempotency_key is None:
@@ -100,8 +106,22 @@ class A2AExecutor:
             )
             client = A2AClient(agent_url, timeout=timeout)
             card = client.card
-            # P36.1: Pass idempotency key to Agent
-            task = client.send_text(q, skill_id=skill_id, idempotency_key=idempotency_key)
+            # Seed A2A lineage from the central OS task so Agent networks inherit
+            # the orchestrator task as root_task_id (Phase 2 Task↔Runtime Graph).
+            root = task_id
+            corr = correlation_id or task_id
+            task = client.send_text(
+                q,
+                skill_id=skill_id,
+                idempotency_key=idempotency_key,
+                correlation_id=corr,
+                parent_task_id=None,
+                root_task_id=root,
+                depth=depth,
+                caller_agent_id=caller_agent_id or "orchestrator",
+                target_agent_id=target_agent_id,
+                visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
+            )
             text = clamp_output(first_text_artifact(task), self.policy)
             result = ExecutionResult(
                 agent_name=card.name,

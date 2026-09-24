@@ -14,6 +14,7 @@ const NAV = [
   { href: "/", label: "首页", hint: "Dashboard" },
   { href: "/tasks", label: "任务", hint: "Tasks" },
   { href: "/agents", label: "Agent", hint: "Agents" },
+  { href: "/scheduling", label: "调度", hint: "Scheduling" },
   { href: "/workflows", label: "工作流", hint: "Workflows" },
   { href: "/artifacts", label: "产物", hint: "Artifacts" },
   { href: "/settings", label: "设置", hint: "Settings" },

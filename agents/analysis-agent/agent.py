@@ -29,6 +29,23 @@ try:
 except ImportError:
     ENHANCED_CONTEXT_AVAILABLE = False
 
+# A2A OS: client half (autonomous peer discovery/delegation) + inbound lineage.
+import collab
+try:
+    from agent_runtime.a2a_server import inbound_context, cancel_task
+    from agent_runtime.agent_collab import AgentCollaborator
+    A2A_SERVER_AVAILABLE = True
+    _COLLAB = AgentCollaborator(agent_id=collab.AGENT_ID)
+except ImportError:  # pragma: no cover - agent-runtime not installed
+    A2A_SERVER_AVAILABLE = False
+    _COLLAB = None
+
+    def inbound_context(params, *, agent_id, task_id=None):  # type: ignore
+        return None
+
+    def cancel_task(tasks, task_id):  # type: ignore
+        return False, None
+
 ROOT = Path(__file__).resolve().parent
 CARD_PATH = ROOT / "agent-card.json"
 app = FastAPI(title="AOP Analysis Agent", version="0.1.0")
@@ -133,10 +150,14 @@ def _deterministic_analysis(goal: str, upstream: dict[str, Any]) -> dict[str, An
     return {"query": goal, "summary": summary, "insights": insights}
 
 
-def run_analysis(query: str) -> dict[str, Any]:
+def run_analysis(query: str, *, extra_knowledge: str | None = None) -> dict[str, Any]:
     parsed = parse_composed_query(query)
     goal = parsed["goal"]
     upstream = parsed["upstream"]
+
+    # A2A OS: knowledge autonomously fetched from a discovered peer Agent.
+    if extra_knowledge and not upstream.get("rag"):
+        upstream["rag"] = extra_knowledge
 
     if llm_available():
         llm = _llm_analysis(goal, upstream)
@@ -188,6 +209,12 @@ async def a2a_rpc(request: Request) -> JSONResponse:
     method = body.get("method")
     params = body.get("params") or {}
     try:
+        if method in {"tasks/get", "tasks/cancel", "tasks/subscribe"}:
+            if _COLLAB is not None:
+                handled = _COLLAB.handle_control(method, params, _TASKS, req_id)
+                if handled is not None:
+                    return JSONResponse(handled)
+
         if method == "message/send":
             # P36.1: Extract idempotency key if present
             idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
@@ -198,17 +225,49 @@ async def a2a_rpc(request: Request) -> JSONResponse:
                 return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": cached})
             
             query = _extract_query(params)
-            payload = run_analysis(query)
-            result = _completed_task(str(uuid.uuid4()), query, payload)
-            
+
+            # A2A OS: build inbound lineage so this Agent can delegate onward
+            # as a Client while acting as a Server.
+            task_id = str(uuid.uuid4())
+            ctx = inbound_context(params, agent_id=collab.AGENT_ID, task_id=task_id)
+
+            # Autonomous decision: ground the analysis via a discovered peer.
+            extra_knowledge = None
+            if ctx is not None and collab.autonomous_enabled():
+                extra_knowledge = collab.fetch_knowledge(query, ctx)
+
+            payload = run_analysis(query, extra_knowledge=extra_knowledge)
+            result = _completed_task(task_id, query, payload)
+            if extra_knowledge:
+                result["metadata"]["autonomous_delegation"] = {
+                    "skill": collab.KNOWLEDGE_SKILL,
+                    "correlation_id": getattr(ctx, "correlation_id", None),
+                    "root_task_id": getattr(ctx, "root_task_id", None),
+                    "depth": getattr(ctx, "depth", 0) + 1,
+                }
+
             # P36.1: Cache result for idempotency
             if idempotency_key:
                 _IDEMPOTENCY_CACHE[idempotency_key] = result
-            
+
+            if _COLLAB is not None:
+                _COLLAB.after_complete(params, result)
+
             return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
         if method == "tasks/get":
             task = _TASKS.get(params.get("id"))
             if not task:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32001, "message": "Task not found"},
+                    }
+                )
+            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": task})
+        if method == "tasks/cancel":
+            ok, task = cancel_task(_TASKS, params.get("id"))
+            if not ok:
                 return JSONResponse(
                     {
                         "jsonrpc": "2.0",

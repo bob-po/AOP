@@ -51,6 +51,18 @@ class Message:
     parts: list[Part]
     message_id: str | None = None
     idempotency_key: str | None = None
+    correlation_id: str | None = None
+    parent_task_id: str | None = None
+    root_task_id: str | None = None
+    depth: int = 0
+    # Phase 2.1: cross-process governance context carried on the A2A wire.
+    caller_agent_id: str | None = None
+    target_agent_id: str | None = None
+    visited_agents: list[str] = field(default_factory=list)
+    governance_policy_id: str | None = None
+    deadline: str | None = None  # ISO-8601; absolute, so it survives clock skew
+    # Phase 2: async completion webhook for long-running / non-blocking tasks.
+    callback_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -61,16 +73,49 @@ class Message:
             payload["messageId"] = self.message_id
         if self.idempotency_key:
             payload["idempotencyKey"] = self.idempotency_key
+        if self.correlation_id:
+            payload["correlationId"] = self.correlation_id
+        if self.parent_task_id:
+            payload["parentTaskId"] = self.parent_task_id
+        if self.root_task_id:
+            payload["rootTaskId"] = self.root_task_id
+        if self.depth > 0:
+            payload["depth"] = self.depth
+        if self.caller_agent_id:
+            payload["callerAgentId"] = self.caller_agent_id
+        if self.target_agent_id:
+            payload["targetAgentId"] = self.target_agent_id
+        if self.visited_agents:
+            payload["visitedAgents"] = list(self.visited_agents)
+        if self.governance_policy_id:
+            payload["governancePolicyId"] = self.governance_policy_id
+        if self.deadline:
+            payload["deadline"] = self.deadline
+        if self.callback_url:
+            payload["callbackUrl"] = self.callback_url
         return payload
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Message:
         parts = [Part.from_dict(p) for p in raw.get("parts", [])]
+        visited = raw.get("visitedAgents") or raw.get("visited_agents") or []
+        if isinstance(visited, str):
+            visited = [v for v in visited.split(",") if v]
         return cls(
             role=raw.get("role", "agent"),
             parts=parts,
             message_id=raw.get("messageId") or raw.get("message_id"),
             idempotency_key=raw.get("idempotencyKey") or raw.get("idempotency_key"),
+            correlation_id=raw.get("correlationId") or raw.get("correlation_id"),
+            parent_task_id=raw.get("parentTaskId") or raw.get("parent_task_id"),
+            root_task_id=raw.get("rootTaskId") or raw.get("root_task_id"),
+            depth=raw.get("depth", 0),
+            caller_agent_id=raw.get("callerAgentId") or raw.get("caller_agent_id"),
+            target_agent_id=raw.get("targetAgentId") or raw.get("target_agent_id"),
+            visited_agents=list(visited),
+            governance_policy_id=raw.get("governancePolicyId") or raw.get("governance_policy_id"),
+            deadline=raw.get("deadline"),
+            callback_url=raw.get("callbackUrl") or raw.get("callback_url"),
         )
 
 
@@ -109,16 +154,23 @@ class Task:
     history: list[Message] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    parent_task_id: str | None = None
+    root_task_id: str | None = None
+    correlation_id: str | None = None
+    caller_agent_id: str | None = None
+    target_agent_id: str | None = None
+    depth: int = 0
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Task:
-        status_raw = raw.get("status", {})
+        # Simplified status parsing - directly use the status value
+        status_raw = raw.get("status", "submitted")
         if isinstance(status_raw, dict):
-            state = status_raw.get("state", "submitted")
+            status_value = status_raw.get("state", "submitted")
         else:
-            state = str(status_raw)
+            status_value = str(status_raw)
         try:
-            status = TaskStatus(state)
+            status = TaskStatus(status_value)
         except ValueError:
             status = TaskStatus.WORKING
 
@@ -139,4 +191,10 @@ class Task:
             history=history,
             metadata=raw.get("metadata") or {},
             error=error,
+            parent_task_id=raw.get("parentTaskId") or raw.get("parent_task_id"),
+            root_task_id=raw.get("rootTaskId") or raw.get("root_task_id"),
+            correlation_id=raw.get("correlationId") or raw.get("correlation_id"),
+            caller_agent_id=raw.get("callerAgentId") or raw.get("caller_agent_id"),
+            target_agent_id=raw.get("targetAgentId") or raw.get("target_agent_id"),
+            depth=raw.get("depth", 0),
         )
