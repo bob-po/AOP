@@ -75,8 +75,11 @@ class SchedulingEngine:
         task_id: str,
         *,
         node_key: str | None = None,
+        human_input: str | None = None,
     ) -> dict[str, Any]:
-        result = self.scheduler.approve_node(task_id, node_key)
+        result = self.scheduler.approve_node(
+            task_id, node_key, human_input=human_input
+        )
         enqueued = self.enqueue_jobs(result.get("ready_jobs") or [], task_id=task_id)
         result["enqueued_nodes"] = enqueued
         if result.get("status") == "completed":
@@ -95,6 +98,31 @@ class SchedulingEngine:
         result = self.scheduler.reject_node(task_id, node_key=node_key, reason=reason)
         side_effects = self.event_publisher.publish_task_failed(task_id)
         result["evaluation"] = side_effects.get("evaluation")
+        return result
+
+    def list_checkpoints(
+        self,
+        task_id: str,
+        *,
+        node_key: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.scheduler.list_checkpoints(
+            task_id, node_key=node_key, limit=limit
+        )
+
+    def replay_from_node(
+        self,
+        task_id: str,
+        node_key: str,
+        *,
+        clear_downstream: bool = True,
+    ) -> dict[str, Any]:
+        result = self.scheduler.replay_from_node(
+            task_id, node_key, clear_downstream=clear_downstream
+        )
+        enqueued = self.enqueue_jobs(result.get("ready_jobs") or [], task_id=task_id)
+        result["enqueued_nodes"] = enqueued
         return result
 
     def get_task(self, task_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:

@@ -173,8 +173,16 @@ class RunWorkflowRequest(BaseModel):
 
 
 class HitlDecisionRequest(BaseModel):
+    """HITL decision — LangGraph-style resume with optional human content.
+
+    ``input`` is injected into the approved node's ``output_json.hitl`` and
+    surfaces in downstream ``_compose_query`` as human guidance.
+    """
+
     node_key: str | None = None
     reason: str = "rejected by user"
+    input: str | None = None
+
 
 
 class MemoryPutRequest(BaseModel):
@@ -1284,6 +1292,58 @@ def recover_task(task_id: str) -> dict[str, Any]:
         ) from exc
 
 
+class NodeReplayRequest(BaseModel):
+    clear_downstream: bool = True
+
+
+@app.get("/v1/tasks/{task_id}/checkpoints")
+def list_task_checkpoints(
+    task_id: str,
+    node_key: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """List node-level checkpoints for time-travel / replay UI."""
+    row = tasks.get(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "task not found"})
+    try:
+        items = tasks.list_checkpoints(task_id, node_key=node_key, limit=limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "checkpoint_error", "message": str(exc)},
+        ) from exc
+    return {"task_id": task_id, "checkpoints": items, "count": len(items)}
+
+
+@app.post("/v1/tasks/{task_id}/nodes/{node_key}/replay")
+def replay_task_node(
+    task_id: str,
+    node_key: str,
+    body: NodeReplayRequest | None = None,
+) -> dict[str, Any]:
+    """Replay a plan node from its latest checkpoint (retry_same)."""
+    row = tasks.get(task_id)
+    if not row:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "task not found"})
+    try:
+        return tasks.replay_from_node(
+            task_id,
+            node_key,
+            clear_downstream=True if body is None else bool(body.clear_downstream),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "replay_error", "message": str(exc)},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "replay_error", "message": str(exc)},
+        ) from exc
+
+
 @app.get("/v1/tasks/{task_id}/collaboration-graph")
 def task_collaboration_graph(task_id: str) -> dict[str, Any]:
     """A2A OS: collaboration graph rooted at a central Task id.
@@ -1410,7 +1470,11 @@ def approve_task(task_id: str, body: HitlDecisionRequest | None = None) -> dict[
     if not row:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "task not found"})
     try:
-        return tasks.approve(task_id, node_key=(body.node_key if body else None))
+        return tasks.approve(
+            task_id,
+            node_key=(body.node_key if body else None),
+            human_input=(body.input if body else None),
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=409,

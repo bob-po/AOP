@@ -37,6 +37,12 @@ export type TaskNode = {
   agent_id?: string | null;
   attempt?: number;
   error_message?: string | null;
+  handoff?: Record<string, unknown> | null;
+  checkpoint_at?: string | null;
+  checkpoint_attempt?: number | null;
+  checkpoint_artifact_ids?: string[] | null;
+  checkpoint_error?: string | null;
+  checkpoint_status?: string | null;
 };
 
 export type TaskPlan = {
@@ -565,16 +571,24 @@ export function getMetrics(hours = 24) {
   return request<MetricsSnapshot>(`/v1/metrics?hours=${hours}`);
 }
 
-export function approveTask(taskId: string, nodeKey?: string) {
+export function approveTask(
+  taskId: string,
+  nodeKey?: string,
+  humanInput?: string,
+) {
   return request<{
     task_id: string;
     node_key: string;
     approved: boolean;
+    has_human_input?: boolean;
     status?: string;
     enqueued_nodes?: string[];
   }>(`/v1/tasks/${taskId}/approve`, {
     method: "POST",
-    body: JSON.stringify({ node_key: nodeKey || null }),
+    body: JSON.stringify({
+      node_key: nodeKey || null,
+      input: humanInput?.trim() || null,
+    }),
   });
 }
 
@@ -1012,6 +1026,8 @@ export type CollaborationLink = {
   task_id?: string;
   parent_task_id?: string;
   skill?: string;
+  /** Structured handoff reason: why this call happened */
+  reason?: string;
   depth?: number;
   status?: string;
   correlation_id?: string;
@@ -1022,6 +1038,7 @@ export type CollaborationLink = {
 export type CollaborationGraph = {
   root_task_id: string;
   kind?: string;
+  source?: string;
   node_count?: number;
   link_count?: number;
   max_depth?: number;
@@ -1183,6 +1200,51 @@ export function recoverTask(taskId: string) {
   return request<Record<string, unknown>>(`/v1/tasks/${encodeURIComponent(taskId)}/recover`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export type NodeCheckpoint = {
+  id?: number;
+  task_id?: string;
+  node_id?: string;
+  node_key: string;
+  attempt: number;
+  status: string;
+  snapshot_json?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export function listTaskCheckpoints(
+  taskId: string,
+  params?: { node_key?: string; limit?: number },
+) {
+  const q = new URLSearchParams();
+  if (params?.node_key) q.set("node_key", params.node_key);
+  if (params?.limit) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return request<{ task_id: string; checkpoints: NodeCheckpoint[]; count: number }>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/checkpoints${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export function replayTaskNode(
+  taskId: string,
+  nodeKey: string,
+  opts?: { clear_downstream?: boolean },
+) {
+  return request<{
+    task_id: string;
+    node_key: string;
+    replayed: boolean;
+    next_attempt?: number;
+    cleared_downstream?: string[];
+    enqueued_nodes?: string[];
+    status?: string;
+  }>(`/v1/tasks/${encodeURIComponent(taskId)}/nodes/${encodeURIComponent(nodeKey)}/replay`, {
+    method: "POST",
+    body: JSON.stringify({
+      clear_downstream: opts?.clear_downstream !== false,
+    }),
   });
 }
 

@@ -118,8 +118,11 @@ class TaskManager:
         task_id: str,
         *,
         node_key: str | None = None,
+        human_input: str | None = None,
     ) -> dict[str, Any]:
-        return self.scheduling.approve(task_id, node_key=node_key)
+        return self.scheduling.approve(
+            task_id, node_key=node_key, human_input=human_input
+        )
 
     def reject(
         self,
@@ -129,6 +132,28 @@ class TaskManager:
         reason: str = "rejected by user",
     ) -> dict[str, Any]:
         return self.scheduling.reject(task_id, node_key=node_key, reason=reason)
+
+    def list_checkpoints(
+        self,
+        task_id: str,
+        *,
+        node_key: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.scheduling.list_checkpoints(
+            task_id, node_key=node_key, limit=limit
+        )
+
+    def replay_from_node(
+        self,
+        task_id: str,
+        node_key: str,
+        *,
+        clear_downstream: bool = True,
+    ) -> dict[str, Any]:
+        return self.scheduling.replay_from_node(
+            task_id, node_key, clear_downstream=clear_downstream
+        )
 
     def overview(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         return self.scheduling.overview_stats(tenant_id=tenant_id)

@@ -97,6 +97,14 @@ def _extract_goal(query: str) -> str:
     return query.strip()
 
 
+def _extract_search_query(query: str) -> str:
+    """Goal → focused topic for web search (drops '生成 PPT' etc.)."""
+    from search import extract_search_topic
+
+    goal = _extract_goal(query)
+    return extract_search_topic(goal) or goal
+
+
 def _looks_like_url(text: str) -> bool:
     return bool(re.match(r"^https?://\S+$", (text or "").strip(), flags=re.I))
 
@@ -138,19 +146,24 @@ def _run_url_fetch(url: str) -> dict[str, Any]:
 
 
 def _completed_task(task_id: str, query: str, payload: dict[str, Any], *, skill: str) -> dict[str, Any]:
+    status = str(payload.get("status") or "ok")
+    failed = status in {"no_relevant_results", "error", "failed"}
+    state = "failed" if failed else "completed"
+    message = payload.get("summary") or payload.get("error") or ""
     task = {
         "id": task_id,
         "contextId": task_id,
         "status": {
-            "state": "completed",
+            "state": state,
             "timestamp": _utc_now(),
+            "message": {"role": "agent", "parts": [_text_part(str(message)[:2000])]} if failed else None,
         },
         "artifacts": [
             {
                 "artifactId": str(uuid.uuid4()),
                 "name": "search-summary",
                 "description": "Human-readable search summary",
-                "parts": [_text_part(payload["summary"])],
+                "parts": [_text_part(payload.get("summary") or "")],
             },
             {
                 "artifactId": str(uuid.uuid4()),
@@ -159,18 +172,30 @@ def _completed_task(task_id: str, query: str, payload: dict[str, Any], *, skill:
                 "parts": [
                     _data_part(
                         {
-                            "query": payload["query"],
-                            "source": payload["source"],
+                            "query": payload.get("query") or query,
+                            "source": payload.get("source"),
+                            "status": status,
+                            "confidence": payload.get("confidence"),
                             "tried": payload.get("tried") or [],
                             "answer": payload.get("answer") or "",
-                            "results": payload["results"],
+                            "results": payload.get("results") or [],
+                            "error": payload.get("error"),
                         }
                     )
                 ],
             },
         ],
-        "metadata": {"skillId": skill, "query": query, "source": payload.get("source")},
+        "metadata": {
+            "skillId": skill,
+            "query": query,
+            "source": payload.get("source"),
+            "status": status,
+            "confidence": payload.get("confidence"),
+        },
     }
+    # Drop null message to keep payload tidy
+    if task["status"].get("message") is None:
+        del task["status"]["message"]
     _TASKS[task_id] = task
     return task
 
@@ -218,7 +243,7 @@ async def a2a_rpc(request: Request) -> JSONResponse:
                 return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": cached})
             
             query = _extract_query(params)
-            query = _extract_goal(query)
+            query = _extract_search_query(query)
             skill = _skill_id(params)
 
             if skill == "url-fetch" or _looks_like_url(query):

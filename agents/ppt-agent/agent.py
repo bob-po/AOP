@@ -62,10 +62,13 @@ def _extract_query(params: dict[str, Any]) -> str:
 
 
 def _completed_task(task_id: str, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload.get("status") or "ok")
+    failed = status in {"insufficient_research", "error", "failed"}
+    state = "failed" if failed else "completed"
     task = {
         "id": task_id,
         "contextId": task_id,
-        "status": {"state": "completed", "timestamp": _utc_now()},
+        "status": {"state": state, "timestamp": _utc_now()},
         "artifacts": [
             {
                 "artifactId": str(uuid.uuid4()),
@@ -83,6 +86,8 @@ def _completed_task(task_id: str, prompt: str, payload: dict[str, Any]) -> dict[
             "skillId": "ppt-generation",
             "prompt": prompt,
             "source": payload.get("source"),
+            "status": status,
+            "confidence": payload.get("confidence"),
         },
     }
     _TASKS[task_id] = task

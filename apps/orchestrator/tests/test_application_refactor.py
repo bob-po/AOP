@@ -89,9 +89,12 @@ def test_scheduling_engine_approve_enqueues_ready_jobs():
     event_publisher = MagicMock()
     event_publisher.publish_node_enqueued.return_value = "event-id"
     engine = SchedulingEngine(scheduler=sched, job_queue=job_queue, event_publisher=event_publisher)
-    out = engine.approve("t1", node_key="hitl")
+    out = engine.approve("t1", node_key="hitl", human_input="补充定价分析")
     assert out["enqueued_nodes"] == ["b"]
     job_queue.enqueue.assert_called_once()
+    sched.approve_node.assert_called_once_with(
+        "t1", "hitl", human_input="补充定价分析"
+    )
 
 
 def test_artifact_manager_merges_by_uri():

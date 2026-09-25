@@ -436,12 +436,29 @@ class Scheduler:
                         updated_at = %s
                     WHERE task_id = %s::uuid AND node_key = %s
                       AND status IN ('ready', 'running', 'retrying')
-                    RETURNING id::text AS node_id, skill, assigned_agent_id::text AS agent_id, attempt
+                    RETURNING id::text AS node_id, skill, assigned_agent_id::text AS agent_id,
+                              attempt, input_json
                     """,
                     (target_status, Jsonb(output), now, now, task_id, node_key),
                 ).fetchone()
                 if not node:
                     return []
+
+                self._save_checkpoint(
+                    conn,
+                    task_id=task_id,
+                    node_id=node["node_id"],
+                    node_key=node_key,
+                    attempt=int(node.get("attempt") or 1),
+                    status=target_status,
+                    snapshot=self._build_checkpoint_snapshot(
+                        status=target_status,
+                        attempt=int(node.get("attempt") or 1),
+                        skill=node.get("skill"),
+                        output=output,
+                        input_json=node.get("input_json"),
+                    ),
+                )
 
                 self._append_event(
                     conn,
@@ -520,7 +537,7 @@ class Scheduler:
                 now = _utc_now()
                 row = conn.execute(
                     """
-                    SELECT id::text AS node_id, max_retry
+                    SELECT id::text AS node_id, max_retry, skill, attempt, input_json, output_json
                     FROM task_nodes
                     WHERE task_id = %s::uuid AND node_key = %s
                     """,
@@ -543,6 +560,32 @@ class Scheduler:
                         "agent_id": agent_id,
                     },
                     "task_events"
+                )
+
+                fail_status = "retrying" if attempt < max_retry else "failed"
+                out = row.get("output_json")
+                if isinstance(out, str):
+                    try:
+                        out = json.loads(out)
+                    except Exception:
+                        out = {}
+                if not isinstance(out, dict):
+                    out = {}
+                self._save_checkpoint(
+                    conn,
+                    task_id=task_id,
+                    node_id=row["node_id"],
+                    node_key=node_key,
+                    attempt=int(attempt or 1),
+                    status=fail_status,
+                    snapshot=self._build_checkpoint_snapshot(
+                        status=fail_status,
+                        attempt=int(attempt or 1),
+                        skill=row.get("skill"),
+                        output=out or None,
+                        error=error,
+                        input_json=row.get("input_json"),
+                    ),
                 )
                 
                 if attempt < max_retry:
@@ -641,15 +684,22 @@ class Scheduler:
         self,
         task_id: str,
         node_key: str | None = None,
+        *,
+        human_input: str | None = None,
     ) -> dict[str, Any]:
-        """Approve a waiting_for_user node and unlock dependents."""
+        """Approve a waiting_for_user node and unlock dependents.
+
+        Optional ``human_input`` is merged into ``output_json.hitl`` so
+        downstream ``_compose_query`` can resume with that content
+        (LangGraph Command(resume=value) analogue).
+        """
         with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 if node_key:
                     node = conn.execute(
                         """
-                        SELECT id::text AS node_id, node_key, skill, status
+                        SELECT id::text AS node_id, node_key, skill, status, output_json
                         FROM task_nodes
                         WHERE task_id = %s::uuid AND node_key = %s
                         """,
@@ -658,7 +708,7 @@ class Scheduler:
                 else:
                     node = conn.execute(
                         """
-                        SELECT id::text AS node_id, node_key, skill, status
+                        SELECT id::text AS node_id, node_key, skill, status, output_json
                         FROM task_nodes
                         WHERE task_id = %s::uuid AND status = 'waiting_for_user'
                         ORDER BY updated_at ASC
@@ -671,22 +721,61 @@ class Scheduler:
                 if node["status"] != "waiting_for_user":
                     raise ValueError(f"node status={node['status']} is not waiting_for_user")
 
+                text = (human_input or "").strip() or None
+                hitl_patch = {
+                    "hitl": {
+                        "approved": True,
+                        "input": text,
+                        "approved_at": now.isoformat(),
+                    }
+                }
                 conn.execute(
                     """
                     UPDATE task_nodes
-                    SET status = 'success', updated_at = %s,
-                        finished_at = COALESCE(finished_at, %s)
+                    SET status = 'success',
+                        updated_at = %s,
+                        finished_at = COALESCE(finished_at, %s),
+                        output_json = COALESCE(output_json, '{}'::jsonb) || %s::jsonb
                     WHERE id = %s::uuid
                     """,
-                    (now, now, node["node_id"]),
+                    (now, now, Jsonb(hitl_patch), node["node_id"]),
+                )
+                # Refresh checkpoint with HITL resume content
+                merged = node.get("output_json")
+                if isinstance(merged, str):
+                    try:
+                        merged = json.loads(merged)
+                    except Exception:
+                        merged = {}
+                if not isinstance(merged, dict):
+                    merged = {}
+                merged = {**merged, **hitl_patch}
+                self._save_checkpoint(
+                    conn,
+                    task_id=task_id,
+                    node_id=node["node_id"],
+                    node_key=node["node_key"],
+                    attempt=1,
+                    status="success",
+                    snapshot=self._build_checkpoint_snapshot(
+                        status="success",
+                        attempt=1,
+                        skill=node.get("skill"),
+                        output=merged,
+                    ),
                 )
                 self._append_event(
                     conn,
                     task_id,
                     node["node_id"],
                     "task.node.approved",
-                    f"Node {node['node_key']} approved",
-                    {"node_key": node["node_key"]},
+                    f"Node {node['node_key']} approved"
+                    + (" with human input" if text else ""),
+                    {
+                        "node_key": node["node_key"],
+                        "has_human_input": bool(text),
+                        "human_input_chars": len(text) if text else 0,
+                    },
                 )
                 plan = self._load_plan(conn, task_id)
                 ready_jobs = self._unlock_dependents(conn, task_id, plan, now)
@@ -694,6 +783,7 @@ class Scheduler:
                     "task_id": task_id,
                     "node_key": node["node_key"],
                     "approved": True,
+                    "has_human_input": bool(text),
                     "ready_jobs": ready_jobs,
                     "status": self._task_status(conn, task_id),
                 }
@@ -773,6 +863,191 @@ class Scheduler:
                     "node_key": node["node_key"],
                     "rejected": True,
                     "status": "failed",
+                }
+
+    def list_checkpoints(
+        self,
+        task_id: str,
+        *,
+        node_key: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List append-only node checkpoints for a task (newest first)."""
+        limit = max(1, min(int(limit or 50), 200))
+        with self._connect() as conn:
+            try:
+                if node_key:
+                    rows = conn.execute(
+                        """
+                        SELECT id, task_id::text AS task_id, node_id::text AS node_id,
+                               node_key, attempt, status, snapshot_json, created_at
+                        FROM task_node_checkpoints
+                        WHERE task_id = %s::uuid AND node_key = %s
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT %s
+                        """,
+                        (task_id, node_key, limit),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id, task_id::text AS task_id, node_id::text AS node_id,
+                               node_key, attempt, status, snapshot_json, created_at
+                        FROM task_node_checkpoints
+                        WHERE task_id = %s::uuid
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT %s
+                        """,
+                        (task_id, limit),
+                    ).fetchall()
+            except Exception:
+                return []
+            out = []
+            for r in rows:
+                d = dict(r)
+                if hasattr(d.get("created_at"), "isoformat"):
+                    d["created_at"] = d["created_at"].isoformat()
+                out.append(d)
+            return out
+
+    def replay_from_node(
+        self,
+        task_id: str,
+        node_key: str,
+        *,
+        clear_downstream: bool = True,
+    ) -> dict[str, Any]:
+        """Re-enqueue a plan node from its last checkpoint (retry_same).
+
+        Sets the node to ``retrying``, optionally resets transitive dependents
+        to ``pending``, and returns a ready job for the worker queue.
+        """
+        with self._connect() as conn:
+            with conn.transaction():
+                now = _utc_now()
+                node = conn.execute(
+                    """
+                    SELECT id::text AS node_id, node_key, skill, status, attempt,
+                           max_retry, checkpoint_json, checkpoint_attempt
+                    FROM task_nodes
+                    WHERE task_id = %s::uuid AND node_key = %s
+                    FOR UPDATE
+                    """,
+                    (task_id, node_key),
+                ).fetchone()
+                if not node:
+                    raise ValueError(f"node {node_key!r} not found")
+                st = node["status"]
+                if st not in ("failed", "retrying", "success", "cancelled", "waiting_for_user"):
+                    raise ValueError(
+                        f"node status={st} cannot replay (need failed/retrying/success/…)"
+                    )
+
+                next_attempt = int(node.get("attempt") or 0) + 1
+                max_retry = int(node.get("max_retry") or 3)
+                # Allow at least one forced replay even if retries exhausted
+                if next_attempt > max_retry:
+                    conn.execute(
+                        """
+                        UPDATE task_nodes SET max_retry = %s WHERE id = %s::uuid
+                        """,
+                        (next_attempt, node["node_id"]),
+                    )
+
+                cleared: list[str] = []
+                if clear_downstream:
+                    plan = self._load_plan(conn, task_id)
+                    # transitive dependents of node_key
+                    deps_of: dict[str, list[str]] = {
+                        n.id: list(n.depends_on or []) for n in plan.nodes
+                    }
+                    frontier = {node_key}
+                    affected: set[str] = set()
+                    changed = True
+                    while changed:
+                        changed = False
+                        for nid, deps in deps_of.items():
+                            if nid in affected or nid == node_key:
+                                continue
+                            if any(d in frontier for d in deps):
+                                affected.add(nid)
+                                frontier.add(nid)
+                                changed = True
+                    for dep_key in sorted(affected):
+                        upd = conn.execute(
+                            """
+                            UPDATE task_nodes
+                            SET status = 'pending',
+                                error_message = NULL,
+                                finished_at = NULL,
+                                attempt = 0,
+                                updated_at = %s
+                            WHERE task_id = %s::uuid AND node_key = %s
+                              AND status IN ('pending','ready','success','failed',
+                                             'retrying','waiting_for_user','running')
+                            RETURNING node_key
+                            """,
+                            (now, task_id, dep_key),
+                        ).fetchone()
+                        if upd:
+                            cleared.append(dep_key)
+
+                conn.execute(
+                    """
+                    UPDATE task_nodes
+                    SET status = 'retrying',
+                        attempt = %s,
+                        error_message = NULL,
+                        finished_at = NULL,
+                        updated_at = %s
+                    WHERE id = %s::uuid
+                    """,
+                    (next_attempt, now, node["node_id"]),
+                )
+                # Task must be runnable again
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'running',
+                        error_message = NULL,
+                        finished_at = NULL,
+                        updated_at = %s
+                    WHERE id = %s::uuid
+                      AND status IN ('failed', 'cancelled', 'completed',
+                                     'waiting_for_user', 'running', 'ready')
+                    """,
+                    (now, task_id),
+                )
+                self._append_event(
+                    conn,
+                    task_id,
+                    node["node_id"],
+                    "task.node.replayed",
+                    f"Node {node_key} replayed from checkpoint attempt="
+                    f"{node.get('checkpoint_attempt') or node.get('attempt')}",
+                    {
+                        "node_key": node_key,
+                        "next_attempt": next_attempt,
+                        "cleared_downstream": cleared,
+                        "checkpoint_attempt": node.get("checkpoint_attempt"),
+                    },
+                )
+                job = {
+                    "task_id": task_id,
+                    "node_id": node["node_id"],
+                    "node_key": node_key,
+                    "skill": node["skill"],
+                    "attempt": next_attempt,
+                }
+                return {
+                    "task_id": task_id,
+                    "node_key": node_key,
+                    "replayed": True,
+                    "next_attempt": next_attempt,
+                    "cleared_downstream": cleared,
+                    "checkpoint": node.get("checkpoint_json"),
+                    "ready_jobs": [job],
+                    "status": "running",
                 }
 
     def _unlock_dependents(
@@ -1073,14 +1348,26 @@ class Scheduler:
             """
             SELECT node_key AS id, skill, status,
                    assigned_agent_id::text AS agent_id,
-                   attempt, error_message
+                   attempt, error_message,
+                   output_json->'handoff' AS handoff,
+                   checkpoint_at,
+                   checkpoint_attempt,
+                   checkpoint_json->'artifact_ids' AS checkpoint_artifact_ids,
+                   checkpoint_json->'error' AS checkpoint_error,
+                   checkpoint_json->'status' AS checkpoint_status
             FROM task_nodes
             WHERE task_id = %s::uuid
             ORDER BY created_at ASC, node_key ASC
             """,
             (task_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            if hasattr(d.get("checkpoint_at"), "isoformat"):
+                d["checkpoint_at"] = d["checkpoint_at"].isoformat()
+            out.append(d)
+        return out
 
     def _append_event(
         self,
@@ -1105,6 +1392,108 @@ class Scheduler:
                 _utc_now(),
             ),
         )
+
+    def _save_checkpoint(
+        self,
+        conn: Any,
+        *,
+        task_id: str,
+        node_id: str,
+        node_key: str,
+        attempt: int,
+        status: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Persist latest checkpoint on the node + append history row + event."""
+        now = _utc_now()
+        snap = dict(snapshot or {})
+        snap.setdefault("status", status)
+        snap.setdefault("attempt", int(attempt or 1))
+        snap.setdefault("node_key", node_key)
+        conn.execute(
+            """
+            UPDATE task_nodes
+            SET checkpoint_json = %s::jsonb,
+                checkpoint_at = %s,
+                checkpoint_attempt = %s,
+                updated_at = %s
+            WHERE id = %s::uuid
+            """,
+            (Jsonb(snap), now, int(attempt or 1), now, node_id),
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO task_node_checkpoints (
+                  task_id, node_id, node_key, attempt, status, snapshot_json, created_at
+                ) VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s::jsonb, %s)
+                """,
+                (
+                    task_id,
+                    node_id,
+                    node_key,
+                    int(attempt or 1),
+                    status,
+                    Jsonb(snap),
+                    now,
+                ),
+            )
+        except Exception:
+            # Migration may not be applied yet in some envs; node columns still updated.
+            pass
+        self._append_event(
+            conn,
+            task_id,
+            node_id,
+            "task.node.checkpoint",
+            f"Checkpoint {node_key} attempt={attempt} status={status}",
+            {
+                "node_key": node_key,
+                "attempt": int(attempt or 1),
+                "status": status,
+                "artifact_ids": snap.get("artifact_ids") or [],
+                "error": snap.get("error"),
+            },
+        )
+
+    def _build_checkpoint_snapshot(
+        self,
+        *,
+        status: str,
+        attempt: int,
+        skill: str | None = None,
+        output: dict[str, Any] | None = None,
+        error: str | None = None,
+        input_json: Any = None,
+    ) -> dict[str, Any]:
+        out = output if isinstance(output, dict) else {}
+        arts: list[str] = []
+        handoff = out.get("handoff") if isinstance(out.get("handoff"), dict) else None
+        if handoff and isinstance(handoff.get("artifact_ids"), list):
+            arts = [str(a) for a in handoff["artifact_ids"] if a]
+        elif isinstance(out.get("artifacts"), list):
+            for a in out["artifacts"]:
+                if isinstance(a, dict) and a.get("uri") and a.get("name") != "meta.json":
+                    arts.append(str(a["uri"]))
+        input_summary = None
+        if isinstance(input_json, dict):
+            input_summary = str(input_json.get("goal") or input_json.get("content") or "")[:240] or None
+        elif isinstance(input_json, str):
+            input_summary = input_json[:240]
+        text = out.get("text")
+        text_preview = (str(text)[:240] + "…") if isinstance(text, str) and len(text) > 240 else text
+        return {
+            "status": status,
+            "attempt": int(attempt or 1),
+            "skill": skill,
+            "input_summary": input_summary,
+            "output_preview": text_preview,
+            "artifact_ids": arts,
+            "error": error,
+            "handoff": handoff,
+            "hitl": out.get("hitl") if isinstance(out.get("hitl"), dict) else None,
+            "has_output": bool(out),
+        }
 
     # P36.1: Request tracking methods for idempotency (lazy import to avoid circular dependency)
     def _get_request_tracking_service(self):

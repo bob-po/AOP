@@ -6,10 +6,10 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
 from db import connect
 from psycopg.types.json import Jsonb
+
+from handoff import parse_handoff, truncate_text
 
 
 def _utc_now() -> datetime:
@@ -57,11 +57,25 @@ class Aggregator:
                     out = json.loads(out)
                 text = None
                 arts: list[dict[str, Any]] = []
+                handoff = None
                 if isinstance(out, dict):
                     text = out.get("text")
                     arts = list(out.get("artifacts") or [])
-                    if text:
-                        texts.append(f"## {n['node_key']} ({n['skill']})\n{text}")
+                    handoff = parse_handoff(out.get("handoff"))
+                    # Summary prefers handoff slice (reason + artifact refs + short body)
+                    # over dumping an unbounded transcript into result_json.
+                    if text or handoff:
+                        reason = (handoff or {}).get("reason") or ""
+                        art_ids = (handoff or {}).get("artifact_ids") or []
+                        preview = truncate_text(str(text), 1200) if text else ""
+                        header = f"## {n['node_key']} ({n['skill']})"
+                        if reason:
+                            header += f"\nhandoff: {reason}"
+                        if art_ids:
+                            header += f"\nartifacts: {', '.join(str(a) for a in art_ids[:8])}"
+                        if preview:
+                            header += f"\n{preview}"
+                        texts.append(header)
                     for art in arts:
                         all_artifacts.append({**art, "node_id": n["node_key"]})
                 node_results.append(
@@ -71,6 +85,7 @@ class Aggregator:
                         "status": n["status"],
                         "agent_id": n["agent_id"],
                         "output": out,
+                        "handoff": handoff,
                         "artifacts": arts,
                         "error": n["error_message"],
                     }

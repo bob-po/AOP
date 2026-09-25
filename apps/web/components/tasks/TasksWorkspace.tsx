@@ -9,8 +9,11 @@ import {
   createTask,
   evaluateTask,
   listGovernanceDenials,
+  listTaskCheckpoints,
   listTasks,
   rejectTask,
+  replayTaskNode,
+  type NodeCheckpoint,
   type TaskSummary,
 } from "@/lib/api";
 import { useTaskLive } from "@/hooks/useTaskLive";
@@ -74,6 +77,10 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const [canvasMode, setCanvasMode] = useState<"dag" | "collab">("dag");
   const [detailTab, setDetailTab] = useState<"overview" | "execution" | "cost">("overview");
   const [denialCount, setDenialCount] = useState(0);
+  const [hitlInput, setHitlInput] = useState("");
+  const [checkpoints, setCheckpoints] = useState<NodeCheckpoint[]>([]);
+  const [ckptIndex, setCkptIndex] = useState(0);
+  const [ckptError, setCkptError] = useState<string | null>(null);
 
   const { task, events, artifacts, evaluation, memories, error: liveError, reload, liveMode, wsConnected } =
     useTaskLive(selectedId);
@@ -132,8 +139,47 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     setSelectedId(id);
     setSelectedNodeId(null);
     setDetailNodeId(null);
+    setHitlInput("");
+    setCheckpoints([]);
+    setCkptIndex(0);
+    setCkptError(null);
     router.replace(`/tasks/${id}${statusFilter ? `?status=${statusFilter}` : ""}`);
   }
+
+  useEffect(() => {
+    if (!selectedId) {
+      setCheckpoints([]);
+      setCkptIndex(0);
+      setCkptError(null);
+      return;
+    }
+    let alive = true;
+    listTaskCheckpoints(selectedId, { limit: 80 })
+      .then((r) => {
+        if (!alive) return;
+        const items = r.checkpoints || [];
+        setCheckpoints(items);
+        setCkptIndex(0);
+        setCkptError(null);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setCheckpoints([]);
+        setCkptError(err instanceof Error ? err.message : "checkpoints unavailable");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedId, task?.status, task?.progress]);
+
+  const selectedCkpt = checkpoints.length
+    ? checkpoints[Math.min(ckptIndex, checkpoints.length - 1)]
+    : null;
+  const highlightNodeKey =
+    (typeof selectedCkpt?.snapshot_json?.skill === "string" &&
+      selectedCkpt.snapshot_json.skill) ||
+    selectedCkpt?.node_key ||
+    selectedNodeId;
 
   async function onCancel() {
     if (!selectedId || busy) return;
@@ -182,7 +228,8 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     if (!selectedId || busy) return;
     setBusy(true);
     try {
-      await approveTask(selectedId);
+      await approveTask(selectedId, undefined, hitlInput);
+      setHitlInput("");
       reload();
       await loadList();
     } catch (err) {
@@ -201,6 +248,22 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       await loadList();
     } catch (err) {
       setListError(err instanceof Error ? err.message : "reject failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onReplayNode(nodeKey: string) {
+    if (!selectedId || busy) return;
+    setBusy(true);
+    try {
+      await replayTaskNode(selectedId, nodeKey, { clear_downstream: true });
+      reload();
+      await loadList();
+      const r = await listTaskCheckpoints(selectedId, { limit: 80 });
+      setCheckpoints(r.checkpoints || []);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : "replay failed");
     } finally {
       setBusy(false);
     }
@@ -383,6 +446,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
             <CollaborationGraphView
               rootTaskId={rootTaskId}
               denialCount={denialCount}
+              highlightNodeKey={highlightNodeKey}
               onOpenDenials={() => {
                 if (!rootTaskId) return;
                 router.push(
@@ -467,9 +531,18 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
             </button>
           </div>
           {task?.status === "waiting_for_user" ? (
-            <p className="mt-2 font-mono text-[10px] text-amber-200/90">
-              人工审批闸门：报告节点已产出，批准后继续下游或完成任务。
-            </p>
+            <div className="mt-2 space-y-2">
+              <p className="font-mono text-[10px] text-amber-200/90">
+                人工审批闸门：可补充指导后批准（下游节点会收到这段人类输入）。
+              </p>
+              <textarea
+                value={hitlInput}
+                onChange={(e) => setHitlInput(e.target.value)}
+                rows={3}
+                placeholder="可选：补充需求 / 修改意见 / 恢复时注入下游的上下文…"
+                className="w-full resize-y rounded-xl border border-amber-300/30 bg-ink-950/60 px-3 py-2 font-mono text-[11px] text-mist-100 placeholder:text-mist-400/60 focus:border-amber-300/60 focus:outline-none"
+              />
+            </div>
           ) : null}
         </div>
 
@@ -611,6 +684,88 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
             </div>
           ) : (
             <div className="space-y-2">
+              {checkpoints.length > 0 ? (
+                <div className="rounded-xl border border-white/10 bg-ink-900/40 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
+                      Checkpoint 时间轴
+                    </div>
+                    <span className="font-mono text-[10px] text-mist-400">
+                      {ckptIndex + 1}/{checkpoints.length}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, checkpoints.length - 1)}
+                    value={Math.min(ckptIndex, Math.max(0, checkpoints.length - 1))}
+                    onChange={(e) => {
+                      const i = Number(e.target.value);
+                      setCkptIndex(i);
+                      const ck = checkpoints[i];
+                      if (ck?.node_key) {
+                        setSelectedNodeId(ck.node_key);
+                        if (canvasMode !== "collab") setCanvasMode("collab");
+                      }
+                    }}
+                    className="w-full accent-signal"
+                  />
+                  {selectedCkpt ? (
+                    <div className="mt-2 space-y-1 font-mono text-[11px] text-mist-300">
+                      <div>
+                        <span className="text-signal">{selectedCkpt.node_key}</span>
+                        {" · "}
+                        {selectedCkpt.status}
+                        {" · attempt="}
+                        {selectedCkpt.attempt}
+                      </div>
+                      {selectedCkpt.created_at ? (
+                        <div className="text-mist-400">
+                          {new Date(selectedCkpt.created_at).toLocaleString()}
+                        </div>
+                      ) : null}
+                      {typeof selectedCkpt.snapshot_json?.error === "string" &&
+                      selectedCkpt.snapshot_json.error ? (
+                        <div className="text-red-300/90">
+                          {String(selectedCkpt.snapshot_json.error).slice(0, 160)}
+                        </div>
+                      ) : null}
+                      {typeof selectedCkpt.snapshot_json?.output_preview === "string" &&
+                      selectedCkpt.snapshot_json.output_preview ? (
+                        <div className="line-clamp-3 text-mist-200">
+                          {String(selectedCkpt.snapshot_json.output_preview)}
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          type="button"
+                          className="font-mono text-[10px] text-signal-dim underline underline-offset-2 hover:text-signal"
+                          onClick={() => {
+                            setCanvasMode("collab");
+                            setSelectedNodeId(selectedCkpt.node_key);
+                          }}
+                        >
+                          在协作图高亮
+                        </button>
+                        {["failed", "retrying", "success", "cancelled"].includes(
+                          selectedCkpt.status,
+                        ) ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onReplayNode(selectedCkpt.node_key)}
+                            className="font-mono text-[10px] text-amber-200/90 underline underline-offset-2 hover:text-amber-100 disabled:opacity-40"
+                          >
+                            从此外重放
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : ckptError ? (
+                <div className="font-mono text-[10px] text-mist-500">{ckptError}</div>
+              ) : null}
               {(task?.nodes || []).map((node) => (
                 <div
                   key={node.id}
@@ -618,19 +773,35 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                     selectedNodeId === node.id ? "border-signal/40" : "border-white/10"
                   }`}
                 >
-                  <button
-                    type="button"
-                    onClick={() => openNodeDetail(node.id)}
-                    className="absolute right-3 top-3 font-mono text-[10px] text-signal-dim underline underline-offset-2 hover:text-signal"
-                  >
-                    详情
-                  </button>
-                  <div className="pr-10 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
+                  <div className="absolute right-3 top-3 flex items-center gap-2">
+                    {["failed", "retrying", "success", "cancelled"].includes(node.status) ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => onReplayNode(node.id)}
+                        className="font-mono text-[10px] text-amber-200/90 underline underline-offset-2 hover:text-amber-100 disabled:opacity-40"
+                        title="从该节点 checkpoint 重放（下游会重置）"
+                      >
+                        重放
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => openNodeDetail(node.id)}
+                      className="font-mono text-[10px] text-signal-dim underline underline-offset-2 hover:text-signal"
+                    >
+                      详情
+                    </button>
+                  </div>
+                  <div className="pr-20 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
                     节点 {node.id}
                   </div>
                   <div className="mt-2 text-sm text-mist-100">{node.skill}</div>
                   <div className="mt-1 font-mono text-[11px] text-mist-400">
                     status={node.status} · attempt={node.attempt ?? 0}
+                    {node.checkpoint_at
+                      ? ` · ckpt@${new Date(node.checkpoint_at).toLocaleTimeString()}`
+                      : ""}
                   </div>
                   {node.error_message ? (
                     <p className="mt-2 text-xs text-red-300">{node.error_message}</p>

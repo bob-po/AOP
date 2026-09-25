@@ -12,6 +12,14 @@ from aggregator import Aggregator
 from artifacts import ArtifactStore
 from evaluation import EvaluationService
 from . import A2AExecutor
+from handoff import (
+    artifact_uris_from_refs,
+    build_handoff,
+    parse_handoff,
+    plan_dependents,
+    prune_upstream_slices,
+    select_upstream_nodes,
+)
 from memory import MemoryService
 from observability import record_agent_call, record_task_finished
 from router import RouterError, normalize_endpoint
@@ -334,8 +342,7 @@ class ExecutionEngine:
                             target_agent_id=routed.agent_id,
                         )
 
-                    if not result.ok:
-                        raise RuntimeError(f"a2a status={result.task.status.value}")
+                    # Persist first; quality gate may fail the node after artifacts land.
                     latency_ms = int((time.time() - started) * 1000)
 
                     if TRACING_AVAILABLE and exec_span:
@@ -350,6 +357,29 @@ class ExecutionEngine:
                     text=result.text,
                     data=result.data,
                 )
+                gate = self._quality_gate(skill=skill, text=result.text, data=result.data)
+                if not result.ok or not gate["ok"]:
+                    reason = gate.get("message") or f"a2a status={result.task.status.value}"
+                    raise RuntimeError(reason)
+
+                task_row = self.scheduler.get_task(task_id) or {}
+                to_nodes = plan_dependents(task_row.get("plan_json"), node_key)
+                conf = float(gate.get("confidence") or 0.5)
+                handoff = build_handoff(
+                    from_node=node_key,
+                    to_nodes=to_nodes,
+                    artifact_ids=artifact_uris_from_refs(refs),
+                    confidence=conf,
+                    skill=skill,
+                    agent_id=routed.agent_id,
+                    reason=(
+                        gate.get("reason")
+                        or (
+                            f"Completed {skill or node_key}"
+                            + (f"; unlock {', '.join(to_nodes)}" if to_nodes else "")
+                        )
+                    ),
+                )
                 output = {
                     "text": result.text,
                     "data": result.data,
@@ -360,6 +390,9 @@ class ExecutionEngine:
                         "endpoint": endpoint,
                     },
                     "a2a_task_id": result.task.id,
+                    "status": gate.get("status") or "ok",
+                    "confidence": conf,
+                    "handoff": handoff,
                 }
                 
                 # P36.1: Mark request as completed
@@ -581,6 +614,11 @@ class ExecutionEngine:
             print(f"[worker] evaluate skipped {task_id}: {exc}")
 
     def _compose_query(self, task_id: str, node_key: str, goal: str) -> str:
+        """Build the A2A text query with dependency-scoped upstream handoffs.
+
+        Prefer structured ``handoff.artifact_ids`` over dumping every success
+        node's full prose. Only inject nodes listed in ``depends_on``.
+        """
         task = self.scheduler.get_task(task_id)
         if not task:
             return goal
@@ -591,44 +629,231 @@ class ExecutionEngine:
                 parts.append(mem)
         except Exception as exc:  # noqa: BLE001
             print(f"[worker] memory read skipped: {exc}")
-        parts.append("Upstream results:")
-        has_upstream = False
-        for n in task.get("nodes") or []:
-            if n.get("status") != "success":
-                continue
-            detail = self.scheduler.get_node(task_id, n["id"])
+
+        upstream = select_upstream_nodes(
+            nodes=list(task.get("nodes") or []),
+            current_node_key=node_key,
+            plan_json=task.get("plan_json"),
+        )
+        if not upstream:
+            return goal if len(parts) <= 2 else "\n".join(parts)
+
+        # Collect dep-scoped slices, then reducer-prune under a shared budget.
+        raw_slices: list[dict[str, Any]] = []
+        for n in upstream:
+            nid = str(n.get("id") or "")
+            detail = self.scheduler.get_node(task_id, nid)
             if not detail:
                 continue
             out = detail.get("output_json") or {}
             if isinstance(out, str):
                 import json
 
-                out = json.loads(out)
+                try:
+                    out = json.loads(out)
+                except Exception:
+                    out = {}
             if not isinstance(out, dict):
                 continue
 
+            handoff = parse_handoff(out.get("handoff"))
             text = out.get("text")
-            # Prefer loading canonical text artifact from MinIO when available
+            primary_uri = ""
+
+            artifact_candidates: list[str] = []
+            if handoff and handoff.get("artifact_ids"):
+                artifact_candidates.extend(str(u) for u in handoff["artifact_ids"])
             for art in out.get("artifacts") or []:
                 if art.get("name") == "output.txt" and art.get("uri"):
-                    try:
-                        text = self.artifacts.get_text(art["uri"])
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[worker] warn load artifact {art['uri']}: {exc}")
-                    break
+                    uri = str(art["uri"])
+                    if uri not in artifact_candidates:
+                        artifact_candidates.insert(0, uri)
 
-            if text:
-                has_upstream = True
-                uri_hint = ""
+            for uri in artifact_candidates:
+                if not (uri.endswith(".txt") or "output.txt" in uri):
+                    continue
+                try:
+                    text = self.artifacts.get_text(uri)
+                    primary_uri = uri
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[worker] warn load handoff artifact {uri}: {exc}")
+
+            if not primary_uri:
                 for art in out.get("artifacts") or []:
-                    if art.get("name") == "output.json":
-                        uri_hint = f"\n(artifact: {art.get('uri')})"
+                    if art.get("name") == "output.json" and art.get("uri"):
+                        primary_uri = str(art.get("uri"))
+                        if primary_uri and primary_uri not in artifact_candidates:
+                            artifact_candidates.append(primary_uri)
                         break
-                parts.append(f"\n### {n['id']} ({n['skill']}){uri_hint}\n{text}")
-        if not has_upstream and len(parts) <= 3:
-            return goal
+
+            hitl = out.get("hitl") if isinstance(out.get("hitl"), dict) else None
+            human = (hitl or {}).get("input") if hitl else None
+            human_text = human.strip() if isinstance(human, str) else ""
+
+            if not text and not human_text:
+                continue
+            raw_slices.append(
+                {
+                    "node_key": nid,
+                    "skill": n.get("skill"),
+                    "reason": (handoff or {}).get("reason") or "",
+                    "confidence": (handoff or {}).get("confidence"),
+                    "artifact_ids": artifact_candidates,
+                    "primary_uri": primary_uri,
+                    "body": str(text) if text else "",
+                    "human": human_text,
+                }
+            )
+
+        pruned = prune_upstream_slices(raw_slices)
+        if not pruned:
+            return goal if len(parts) <= 2 else "\n".join(parts)
+
+        parts.append("Upstream results (via handoff):")
+        for sl in pruned:
+            nid = sl["node_key"]
+            conf = sl.get("confidence")
+            conf_line = (
+                f" (confidence={float(conf):.2f})"
+                if isinstance(conf, (int, float))
+                else ""
+            )
+            reason = sl.get("reason") or ""
+            reason_line = f"\nhandoff: {reason}" if reason else ""
+            uri_hint = f"\n(artifact: {sl['primary_uri']})" if sl.get("primary_uri") else ""
+            body = sl.get("body") or ""
+            if body:
+                parts.append(
+                    f"\n### {nid} ({sl.get('skill')}){conf_line}{reason_line}{uri_hint}\n{body}"
+                )
+            human_text = sl.get("human") or ""
+            if human_text:
+                parts.append(f"\n### Human guidance (from {nid})\n{human_text}")
+
         parts.append("\nPlease continue based on the upstream results.")
         return "\n".join(parts)
+
+    def _quality_gate(
+        self,
+        *,
+        skill: str | None,
+        text: str | None,
+        data: dict | None,
+    ) -> dict:
+        """Fail-fast before unlocking dependents when upstream research is unusable."""
+        skill_l = (skill or "").lower()
+        payload = data if isinstance(data, dict) else {}
+        status = str(payload.get("status") or "").lower()
+        conf_raw = payload.get("confidence")
+        try:
+            conf = float(conf_raw) if conf_raw is not None else None
+        except (TypeError, ValueError):
+            conf = None
+
+        # Explicit agent failure statuses
+        if status in {"no_relevant_results", "insufficient_research", "error", "failed"}:
+            msg = (
+                str(payload.get("error") or text or status)
+                [:400]
+            )
+            if "search" in skill_l or skill_l in {"web-search", "knowledge-search"}:
+                msg = (
+                    f"Search quality gate: {status}. "
+                    f"{msg or '未找到与主题相关的资料，请确认关键词后重试。'}"
+                )
+            elif "ppt" in skill_l:
+                msg = f"PPT quality gate: {status}. {msg}"
+            return {
+                "ok": False,
+                "status": status,
+                "confidence": conf if conf is not None else 0.0,
+                "message": msg,
+                "reason": msg,
+            }
+
+        # Search must return at least one non-empty result when claiming success
+        if skill_l in {"web-search", "knowledge-search"} or skill_l.endswith("-search"):
+            results = payload.get("results")
+            source = str(payload.get("source") or "").lower()
+            if isinstance(results, list) and not results and source not in {"mock"}:
+                return {
+                    "ok": False,
+                    "status": "no_relevant_results",
+                    "confidence": 0.0,
+                    "message": "Search returned zero results; refusing to unlock downstream nodes.",
+                    "reason": "search empty results",
+                }
+            if conf is not None and conf < 0.25:
+                return {
+                    "ok": False,
+                    "status": "low_confidence",
+                    "confidence": conf,
+                    "message": f"Search confidence too low ({conf:.2f}); refusing downstream unlock.",
+                    "reason": "search low confidence",
+                }
+            # Heuristic: classic junk SERP dump
+            blob = f"{text or ''} {payload.get('summary') or ''}".lower()
+            junk_hits = sum(
+                1
+                for h in (
+                    "sogou.com/",
+                    "cn.bing.com/",
+                    "so.com/",
+                    "17so.cn/",
+                    "hgcha.com",
+                    "zdic.net",
+                    "拼音",
+                    "组词",
+                    "笔画",
+                    "康熙字典",
+                )
+                if h in blob
+            )
+            topic_hint = str(payload.get("query") or "")
+            subject_missing = False
+            if topic_hint and len(topic_hint) >= 2:
+                # Subject must appear in the summary when we have a focused query
+                if topic_hint.lower() not in blob and not any(
+                    c.isascii() and c.isalpha() for c in topic_hint
+                ):
+                    # CJK topic absent from search output
+                    subject_missing = topic_hint not in (text or "") and topic_hint not in str(
+                        payload.get("summary") or ""
+                    )
+            if junk_hits >= 2 or (junk_hits >= 1 and subject_missing):
+                return {
+                    "ok": False,
+                    "status": "no_relevant_results",
+                    "confidence": 0.0,
+                    "message": "Search output looks like dictionary/portal junk, not the research subject.",
+                    "reason": "serp junk detected",
+                }
+            if subject_missing and conf is not None and conf < 0.7:
+                return {
+                    "ok": False,
+                    "status": "no_relevant_results",
+                    "confidence": conf,
+                    "message": f"Search results do not mention subject {topic_hint!r}.",
+                    "reason": "subject missing from results",
+                }
+
+        if "ppt" in skill_l and status == "insufficient_research":
+            return {
+                "ok": False,
+                "status": status,
+                "confidence": 0.0,
+                "message": str(payload.get("content") or "PPT blocked: insufficient research"),
+                "reason": "ppt insufficient research",
+            }
+
+        return {
+            "ok": True,
+            "status": status or "ok",
+            "confidence": conf if conf is not None else (0.85 if (text or payload) else 0.4),
+            "message": "",
+            "reason": "",
+        }
 
     def _with_task_lock(self, task_id: str, fn):
         # Best-effort lock; proceed even if lock busy after short wait.

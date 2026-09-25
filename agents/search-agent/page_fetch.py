@@ -19,6 +19,24 @@ USER_AGENT = (
     "Mozilla/5.0 (compatible; AOP-SearchAgent/0.4; +https://github.com/aop)"
 )
 
+# Keep in sync with search._SERP_JUNK_HOSTS — never open these as "citations".
+_SERP_JUNK_HOSTS = {
+    "www.sogou.com",
+    "sogou.com",
+    "www.baidu.com",
+    "baidu.com",
+    "cn.bing.com",
+    "www.bing.com",
+    "bing.com",
+    "www.so.com",
+    "so.com",
+    "www.google.com",
+    "www.google.com.hk",
+    "google.com",
+    "www.17so.cn",
+    "17so.cn",
+}
+
 _SCRIPT_STYLE = re.compile(
     r"<(script|style|noscript|svg|iframe)[\s\S]*?</\1>",
     re.IGNORECASE,
@@ -199,6 +217,15 @@ def enrich_results_with_pages(
     fetched = 0
     for item in results:
         row = dict(item)
+        host = ""
+        try:
+            host = (urlparse(str(row.get("url") or "")).hostname or "").lower()
+        except Exception:  # noqa: BLE001
+            host = ""
+        if host in _SERP_JUNK_HOSTS:
+            # Never open search-engine homepages / portal shells.
+            enriched.append(row)
+            continue
         url = str(row.get("url") or "").strip()
         if fetched < n and url and is_public_http_url(url):
             page = fetch_url_sync(url)

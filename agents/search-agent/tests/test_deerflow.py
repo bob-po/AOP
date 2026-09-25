@@ -87,4 +87,6 @@ def test_run_search_deerflow_mode_falls_back_without_url(monkeypatch):
     monkeypatch.delenv("DEERFLOW_URL", raising=False)
     monkeypatch.setenv("SEARCH_FETCH_PAGES", "0")
     payload = asyncio.run(run_search("offline"))
-    assert payload["source"] == "mock-fallback"
+    assert payload["status"] == "no_relevant_results"
+    assert payload["source"] == "none"
+    assert payload["confidence"] == 0.0

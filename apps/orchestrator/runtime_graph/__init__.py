@@ -24,6 +24,11 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _looks_like_uuid(value: str) -> bool:
+    parts = value.split("-")
+    return len(parts) == 5 and all(parts)
+
+
 class RuntimeGraphService:
     """Persist and query the runtime Agent-to-Agent execution graph."""
 
@@ -190,44 +195,105 @@ class RuntimeGraphService:
             "agent_visits": visits,
         }
 
+    def _agent_directory(self) -> dict[str, dict[str, str]]:
+        """Map agent_key and agent UUID → {id, key, name} for identity merge.
+
+        Runtime edges historically mix ``agent_key`` (callers) with UUID
+        (targets). Without a directory the collaboration graph shows the same
+        logical agent as two disconnected nodes.
+        """
+        out: dict[str, dict[str, str]] = {}
+        try:
+            with connect(self.database_url) as conn:
+                rows = conn.execute(
+                    "SELECT id::text AS id, agent_key, name FROM agents"
+                ).fetchall()
+        except Exception:
+            return out
+        for row in rows or []:
+            if isinstance(row, dict):
+                aid = str(row.get("id") or "")
+                key = str(row.get("agent_key") or "")
+                name = str(row.get("name") or key or aid)
+            else:
+                aid = str(row[0] or "")
+                key = str(row[1] or "")
+                name = str(row[2] or key or aid)
+            meta = {"id": aid, "key": key, "name": name}
+            if aid:
+                out[aid] = meta
+            if key:
+                out[key] = meta
+        return out
+
+    def _canonical_agent(
+        self,
+        raw: str | None,
+        directory: dict[str, dict[str, str]],
+    ) -> tuple[str, str, str]:
+        """Return (canonical_id, agent_key, display_name)."""
+        if not raw:
+            return "", "", ""
+        s = str(raw)
+        meta = directory.get(s)
+        if meta:
+            return meta["id"] or s, meta.get("key") or "", meta.get("name") or s
+        return s, s if not _looks_like_uuid(s) else "", s
+
     def collaboration_graph(self, root_task_id: str) -> dict[str, Any]:
         """Frontend-friendly collaboration graph (nodes + links + tree).
 
         Stabilizes the runtime execution graph into a schema suitable for
         React Flow / D3 without changing the underlying edge store.
+
+        Agent identities are canonicalized (key ↔ UUID) so call chains such as
+        ``search → analysis → rag`` render as one path through mid task nodes.
         """
         base = self.get_graph(root_task_id)
         edges = base.get("edges") or []
+        directory = self._agent_directory()
         nodes: list[dict[str, Any]] = []
         links: list[dict[str, Any]] = []
         seen_agents: set[str] = set()
+        seen_tasks: set[str] = set()
         for e in edges:
-            for role, key in (("caller", "caller_agent_id"), ("target", "target_agent_id")):
-                aid = e.get(key)
-                if aid and aid not in seen_agents:
-                    seen_agents.add(str(aid))
-                    nodes.append({
-                        "id": str(aid),
-                        "type": "agent",
-                        "label": str(aid),
-                        "role": role,
-                    })
+            caller_raw = e.get("caller_agent_id")
+            target_raw = e.get("target_agent_id")
+            caller_id, caller_key, caller_name = self._canonical_agent(caller_raw, directory)
+            target_id, target_key, target_name = self._canonical_agent(target_raw, directory)
+
+            for aid, key, name, role in (
+                (caller_id, caller_key, caller_name, "caller"),
+                (target_id, target_key, target_name, "target"),
+            ):
+                if not aid or aid in seen_agents:
+                    continue
+                seen_agents.add(aid)
+                nodes.append({
+                    "id": aid,
+                    "type": "agent",
+                    "label": name or key or aid,
+                    "agent_key": key or None,
+                    "role": role,
+                })
+
             tid = e.get("task_id")
-            if tid:
+            if tid and str(tid) not in seen_tasks:
+                seen_tasks.add(str(tid))
                 nodes.append({
                     "id": f"task:{tid}",
                     "type": "task",
-                    "label": str(tid),
+                    "label": e.get("skill") or str(tid),
                     "task_id": tid,
                     "status": e.get("status"),
                     "skill": e.get("skill"),
                     "depth": e.get("depth"),
-                    "agent_id": e.get("target_agent_id"),
+                    "agent_id": target_id or e.get("target_agent_id"),
                 })
             links.append({
                 "id": f"edge:{e.get('id')}",
-                "source": str(e.get("caller_agent_id") or ""),
-                "target": str(e.get("target_agent_id") or ""),
+                "source": caller_id,
+                "target": target_id,
                 "task_id": tid,
                 "parent_task_id": e.get("parent_task_id"),
                 "skill": e.get("skill"),
@@ -247,6 +313,188 @@ class RuntimeGraphService:
             "links": links,
             "tree": base.get("tree") or [],
             "edges": edges,
+        }
+
+    def collaboration_from_plan(self, task_row: dict[str, Any]) -> dict[str, Any]:
+        """Synthesize caller→task→target links from a plan DAG + assignments.
+
+        Used when ``a2a_runtime_edges`` is empty (orchestrator scheduled the
+        nodes itself). Upstream agents (or ``orchestrator``) call through a mid
+        task node into the assigned target agent — matching the React Flow layout.
+        """
+        task_id = str(task_row.get("id") or task_row.get("task_id") or "")
+        plan = task_row.get("plan_json") or {}
+        if isinstance(plan, str):
+            import json as _json
+            try:
+                plan = _json.loads(plan)
+            except Exception:
+                plan = {}
+        plan_nodes = plan.get("nodes") or []
+        exec_nodes = task_row.get("nodes") or []
+        if isinstance(exec_nodes, str):
+            import json as _json
+            try:
+                exec_nodes = _json.loads(exec_nodes)
+            except Exception:
+                exec_nodes = []
+
+        assigned: dict[str, dict[str, Any]] = {}
+        for n in exec_nodes:
+            if not isinstance(n, dict):
+                continue
+            key = str(n.get("id") or n.get("node_key") or "")
+            if not key:
+                continue
+            agent = n.get("agent_id") or n.get("assigned_agent_id")
+            assigned[key] = {
+                "agent_id": str(agent) if agent else "",
+                "skill": n.get("skill"),
+                "status": n.get("status"),
+                "handoff": n.get("handoff"),
+            }
+
+        # Topological depth from depends_on
+        deps_map: dict[str, list[str]] = {}
+        skills: dict[str, str] = {}
+        for pn in plan_nodes:
+            if not isinstance(pn, dict):
+                continue
+            nid = str(pn.get("id") or "")
+            if not nid:
+                continue
+            deps_map[nid] = [str(d) for d in (pn.get("depends_on") or [])]
+            skills[nid] = str(pn.get("skill") or assigned.get(nid, {}).get("skill") or nid)
+
+        depth_of: dict[str, int] = {}
+
+        def _depth(nid: str, stack: set[str]) -> int:
+            if nid in depth_of:
+                return depth_of[nid]
+            if nid in stack:
+                return 1
+            stack.add(nid)
+            deps = deps_map.get(nid) or []
+            d = 1 if not deps else 1 + max((_depth(x, stack) for x in deps), default=0)
+            stack.discard(nid)
+            depth_of[nid] = d
+            return d
+
+        for nid in deps_map:
+            _depth(nid, set())
+
+        directory = self._agent_directory()
+        orch_id, _, orch_name = self._canonical_agent("orchestrator", directory)
+        if not orch_id:
+            orch_id, orch_name = "orchestrator", "Orchestrator"
+
+        nodes: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        seen_agents: set[str] = set()
+        seen_tasks: set[str] = set()
+
+        def _add_agent(raw: str, role: str, label_hint: str | None = None) -> str:
+            aid, key, name = self._canonical_agent(raw, directory)
+            if not aid:
+                return ""
+            if aid not in seen_agents:
+                seen_agents.add(aid)
+                nodes.append({
+                    "id": aid,
+                    "type": "agent",
+                    "label": label_hint or name or key or aid,
+                    "agent_key": key or None,
+                    "role": role,
+                })
+            return aid
+
+        _add_agent(orch_id, "caller", orch_name)
+
+        link_i = 0
+        for nid, deps in deps_map.items():
+            info = assigned.get(nid) or {}
+            target_raw = info.get("agent_id") or ""
+            if not target_raw:
+                continue
+            target_id = _add_agent(target_raw, "target")
+            if not target_id:
+                continue
+            tid = f"{task_id}:{nid}" if task_id else nid
+            task_node_id = f"task:{tid}"
+            if tid not in seen_tasks:
+                seen_tasks.add(tid)
+                nodes.append({
+                    "id": task_node_id,
+                    "type": "task",
+                    "label": skills.get(nid) or nid,
+                    "task_id": tid,
+                    "status": info.get("status"),
+                    "skill": skills.get(nid) or info.get("skill"),
+                    "depth": depth_of.get(nid, 1),
+                    "agent_id": target_id,
+                    "plan_node_id": nid,
+                })
+
+            callers: list[str] = []
+            if not deps:
+                callers = [orch_id]
+            else:
+                for dep in deps:
+                    dep_agent = (assigned.get(dep) or {}).get("agent_id")
+                    if dep_agent:
+                        callers.append(_add_agent(str(dep_agent), "caller"))
+                    else:
+                        callers.append(orch_id)
+            if not callers:
+                callers = [orch_id]
+
+            for caller in callers:
+                if not caller:
+                    continue
+                link_i += 1
+                # Prefer upstream node's handoff.reason ("why call me"); fall back
+                # to the mid-task node's own handoff or skill.
+                reason = None
+                if deps:
+                    for dep in deps:
+                        dep_agent = (assigned.get(dep) or {}).get("agent_id")
+                        if dep_agent and self._canonical_agent(str(dep_agent), directory)[0] == caller:
+                            ho = (assigned.get(dep) or {}).get("handoff")
+                            if isinstance(ho, dict) and ho.get("reason"):
+                                reason = str(ho["reason"])
+                                break
+                if not reason:
+                    mid_ho = info.get("handoff")
+                    if isinstance(mid_ho, dict) and mid_ho.get("reason"):
+                        reason = str(mid_ho["reason"])
+                links.append({
+                    "id": f"plan-edge:{nid}:{link_i}",
+                    "source": caller,
+                    "target": target_id,
+                    "task_id": tid,
+                    "parent_task_id": None,
+                    "skill": skills.get(nid) or info.get("skill"),
+                    "reason": reason,
+                    "depth": depth_of.get(nid, 1),
+                    "status": info.get("status") or "completed",
+                    "correlation_id": task_id or None,
+                    "created_at": task_row.get("created_at"),
+                    "source_kind": "plan",
+                })
+
+        max_depth = max(depth_of.values(), default=0)
+        return {
+            "root_task_id": task_id,
+            "kind": "collaboration_graph",
+            "source": "plan_synthesis",
+            "node_count": len(nodes),
+            "link_count": len(links),
+            "max_depth": max_depth,
+            "agents": sorted(seen_agents),
+            "nodes": nodes,
+            "links": links,
+            "tree": [],
+            "edges": [],
         }
 
     def root_stats(self, root_task_id: str) -> dict[str, Any]:

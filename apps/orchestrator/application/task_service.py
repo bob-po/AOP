@@ -104,8 +104,11 @@ class TaskService:
         task_id: str,
         *,
         node_key: str | None = None,
+        human_input: str | None = None,
     ) -> dict[str, Any]:
-        return self.tasks.approve(task_id, node_key=node_key)
+        return self.tasks.approve(
+            task_id, node_key=node_key, human_input=human_input
+        )
 
     def reject(
         self,
@@ -115,6 +118,28 @@ class TaskService:
         reason: str = "rejected by user",
     ) -> dict[str, Any]:
         return self.tasks.reject(task_id, node_key=node_key, reason=reason)
+
+    def list_checkpoints(
+        self,
+        task_id: str,
+        *,
+        node_key: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.tasks.list_checkpoints(
+            task_id, node_key=node_key, limit=limit
+        )
+
+    def replay_from_node(
+        self,
+        task_id: str,
+        node_key: str,
+        *,
+        clear_downstream: bool = True,
+    ) -> dict[str, Any]:
+        return self.tasks.replay_from_node(
+            task_id, node_key, clear_downstream=clear_downstream
+        )
 
     def overview(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         return self.tasks.overview(tenant_id=tenant_id)
@@ -160,8 +185,22 @@ class TaskService:
         return self.runtime_graph.get_graph(root_task_id)
 
     def collaboration_graph_view(self, root_task_id: str) -> dict[str, Any]:
-        """A2A OS: frontend-friendly collaboration graph (nodes + links)."""
-        return self.runtime_graph.collaboration_graph(root_task_id)
+        """A2A OS: frontend-friendly collaboration graph (nodes + links).
+
+        Prefers recorded Agent→Agent runtime edges. When none exist (typical for
+        orchestrator-driven plan DAGs), synthesizes caller→task→target links from
+        the Task plan + assigned agents so the console still shows who ran what.
+        """
+        graph = self.runtime_graph.collaboration_graph(root_task_id)
+        if graph.get("links"):
+            return graph
+        row = self.get(root_task_id)
+        if not row:
+            return graph
+        synthesized = self.runtime_graph.collaboration_from_plan(row)
+        if synthesized.get("links"):
+            return synthesized
+        return graph
 
     def get_with_graph(self, task_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
         """Central Task plus associated runtime collaboration graph (Phase 2)."""
