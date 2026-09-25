@@ -117,6 +117,10 @@ class AgentRouter:
         exclude_agent_ids: set[str] | list[str] | None = None,
     ) -> RoutedAgent:
         ranked = self.rank(skill, exclude_agent_ids=exclude_agent_ids)
+        if not ranked and exclude_agent_ids:
+            # No alternate online agent — fall back to the excluded pool rather
+            # than failing with "no online agent after excluding …".
+            ranked = self.rank(skill, exclude_agent_ids=None)
         if not ranked:
             excluded = {str(x) for x in (exclude_agent_ids or []) if x}
             raise RouterError(
@@ -542,7 +546,7 @@ class AgentRouter:
 def normalize_endpoint(url: str) -> str:
     """Map docker service hostnames to localhost when running agents on the host.
 
-    Inside Compose set AOP_RUNTIME=docker so service DNS (search-agent, …) is kept.
+    Inside Compose set AOP_RUNTIME=docker so service DNS (claude-coder, …) is kept.
     """
     runtime = os.getenv("AOP_RUNTIME", "").lower()
     if runtime in {"docker", "compose", "container"}:
@@ -551,15 +555,13 @@ def normalize_endpoint(url: str) -> str:
     parsed = urlparse(url)
     host = parsed.hostname or ""
     mapped = {
-        "search-agent": 8001,
-        "rag-agent": 8002,
-        "report-agent": 8003,
-        "analysis-agent": 8004,
-        "image-agent": 8005,
-        "video-agent": 8006,
-        "code-agent": 8007,
-        "browser-agent": 8008,
-        "ppt-agent": 8009,
+        "claude-coder": 8011,
+        "claude-researcher": 8012,
+        "pi-coder": 8013,
+        "pi-researcher": 8014,
+        "deepseek-coder": 8015,
+        "deepseek-researcher": 8016,
+        "harness-agent": 8011,
     }
     if host in mapped:
         port = parsed.port or mapped[host]

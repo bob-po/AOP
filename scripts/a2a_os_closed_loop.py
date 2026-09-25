@@ -18,7 +18,7 @@ Usage:
 Env:
   A2A_OS_URL          OS base URL (default http://127.0.0.1:8090)
   A2A_OS_API_KEY      bearer key when going through an auth-required gateway
-  DEMO_ROOT_SKILL     skill the demo "root" agent delegates on (default business-analysis)
+  DEMO_ROOT_SKILL     skill the demo "root" agent delegates on (default web-research)
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import httpx
 
 OS_URL = (os.getenv("A2A_OS_URL") or "http://127.0.0.1:8090").rstrip("/")
 API_KEY = os.getenv("A2A_OS_API_KEY")
-ROOT_SKILL = os.getenv("DEMO_ROOT_SKILL", "business-analysis")
+ROOT_SKILL = os.getenv("DEMO_ROOT_SKILL", "web-research")
 
 
 def _headers() -> dict[str, str]:
@@ -83,9 +83,9 @@ def main() -> int:
     root = "demo-root-" + uuid.uuid4().hex[:8]
     print(f"\n[3] POST /v1/runtime/edges  (simulated A->B->C, root={root})")
     chain = [
-        ("user", "research-agent", None, "t-a", 0),
-        ("research-agent", "analysis-agent", "t-a", "t-b", 1),
-        ("analysis-agent", "rag-agent", "t-b", "t-c", 2),
+        ("user", "claude-researcher", None, "t-a", 0),
+        ("claude-researcher", "claude-coder", "t-a", "t-b", 1),
+        ("claude-coder", "deepseek-researcher", "t-b", "t-c", 2),
     ]
     for caller, target, parent, tid, depth in chain:
         _post(

@@ -1,0 +1,81 @@
+{
+  "name": "DeepSeek Researcher",
+  "description": "Virtual agent: DeepSeek Harness \u00d7 researcher role.",
+  "url": "http://127.0.0.1:8016/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "text"
+  ],
+  "defaultOutputModes": [
+    "text",
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "web-research",
+      "name": "Web Research",
+      "description": "Research synthesis via DeepSeek Harness",
+      "tags": [
+        "research",
+        "harness",
+        "deepseek"
+      ],
+      "examples": [
+        "compare RAG routing strategies"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    },
+    {
+      "id": "research-summarize",
+      "name": "Research Summarize",
+      "description": "Summarize sources into structured findings",
+      "tags": [
+        "research",
+        "summary",
+        "harness",
+        "deepseek"
+      ],
+      "examples": [
+        "one-page brief from these notes"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    },
+    {
+      "id": "web-search",
+      "name": "Web Search",
+      "description": "Research-oriented search/synthesis via harness (replaces retired search-agent)",
+      "tags": [
+        "research",
+        "search",
+        "harness"
+      ],
+      "examples": [
+        "latest news on agent orchestration"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    }
+  ]
+}

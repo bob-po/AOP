@@ -4,7 +4,7 @@ Where :mod:`agent_runtime.collaboration` is the low-level primitive, this module
 is the batteries-included helper an Agent drops into its JSON-RPC handler to
 become a first-class citizen (Server *and* Client) with one object:
 
-    collab = AgentCollaborator(agent_id="rag-agent", delegate_skill="business-analysis")
+    collab = AgentCollaborator(agent_id="claude-coder", delegate_skill="code-assist")
     ...
     ctx = inbound_context(params, agent_id=collab.agent_id, task_id=task_id)
     extra = collab.fetch(goal, ctx)          # autonomous peer delegation
@@ -18,7 +18,9 @@ Agent's own task.
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from typing import Any, Optional
 
 from .collaboration import A2ACollaborationRuntime, CallContext, GovernanceConfig
@@ -29,6 +31,8 @@ from .a2a_server import (  # re-export
     inbound_context,
     notify_callback,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AgentCollaborator:
@@ -54,6 +58,10 @@ class AgentCollaborator:
         self._enabled_override = enabled
         self.max_depth = max_depth
         self._runtime = runtime
+        self._heartbeat_stop: Optional[threading.Event] = None
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._active_tasks = 0
+        self._active_lock = threading.Lock()
 
     # ── availability / enablement ────────────────────────────────────────
 
@@ -166,6 +174,93 @@ class AgentCollaborator:
         """Fire optional ``callbackUrl`` after a task reaches a terminal state."""
         lin = extract_lineage(params)
         notify_callback(lin.get("callback_url"), task)
+
+    # ── lifecycle heartbeat ──────────────────────────────────────────────
+
+    def set_active_tasks(self, count: int) -> None:
+        with self._active_lock:
+            self._active_tasks = max(0, int(count))
+
+    def bump_active(self, delta: int = 1) -> None:
+        with self._active_lock:
+            self._active_tasks = max(0, self._active_tasks + int(delta))
+
+    def heartbeat_once(
+        self,
+        *,
+        active_tasks: Optional[int] = None,
+        load: float = 0.0,
+        version: Optional[str] = None,
+        capabilities: Optional[dict[str, Any]] = None,
+        timeout: float = 5.0,
+    ) -> bool:
+        """POST ``/v1/agent-runtime/{id}/heartbeat``. Returns True on success."""
+        if not self.available:
+            return False
+        with self._active_lock:
+            n = self._active_tasks if active_tasks is None else int(active_tasks)
+        body: dict[str, Any] = {
+            "active_tasks": n,
+            "load": float(load),
+        }
+        if version:
+            body["version"] = version
+        if capabilities:
+            body["capabilities"] = capabilities
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+            headers["X-API-Key"] = self.api_key
+        url = f"{self.os_url}/v1/agent-runtime/{self.agent_id}/heartbeat"
+        try:
+            import httpx
+
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(url, json=body, headers=headers)
+                if resp.status_code >= 400:
+                    # Fallback path used by some gateways
+                    alt = f"{self.os_url}/v1/agents/{self.agent_id}/heartbeat"
+                    resp = client.post(alt, json=body, headers=headers)
+                return resp.status_code < 400
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[%s] heartbeat failed: %s", self.agent_id, exc)
+            return False
+
+    def start_heartbeat(
+        self,
+        *,
+        interval_s: float = 15.0,
+        version: Optional[str] = None,
+        capabilities: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Background heartbeat loop. No-op (returns False) without OS URL."""
+        if not self.available:
+            return False
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return True
+        stop = threading.Event()
+        self._heartbeat_stop = stop
+
+        def _loop() -> None:
+            while not stop.wait(max(1.0, float(interval_s))):
+                self.heartbeat_once(version=version, capabilities=capabilities)
+
+        t = threading.Thread(
+            target=_loop,
+            name=f"a2a-heartbeat-{self.agent_id}",
+            daemon=True,
+        )
+        self._heartbeat_thread = t
+        t.start()
+        # Immediate first beat so registry does not mark us stale before interval.
+        self.heartbeat_once(version=version, capabilities=capabilities)
+        return True
+
+    def stop_heartbeat(self) -> None:
+        if self._heartbeat_stop is not None:
+            self._heartbeat_stop.set()
+        self._heartbeat_stop = None
+        self._heartbeat_thread = None
 
 
 __all__ = ["AgentCollaborator", "inbound_context"]

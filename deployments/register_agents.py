@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Register all in-cluster agents to Gateway (docker single-node)."""
+"""Register harness virtual agents to Gateway (docker single-node)."""
 
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ API_KEY = (
     or os.getenv("NEXT_PUBLIC_API_KEY")
     or ""
 )
+
+# (name, endpoint env, default URL)
 AGENTS = [
-    ("search-agent", os.getenv("AOP_AGENT_SEARCH_URL", "http://search-agent:8001")),
-    ("rag-agent", os.getenv("AOP_AGENT_RAG_URL", "http://rag-agent:8002")),
-    ("report-agent", os.getenv("AOP_AGENT_REPORT_URL", "http://report-agent:8003")),
-    ("analysis-agent", os.getenv("AOP_AGENT_ANALYSIS_URL", "http://analysis-agent:8004")),
-    ("image-agent", os.getenv("AOP_AGENT_IMAGE_URL", "http://image-agent:8005")),
-    ("video-agent", os.getenv("AOP_AGENT_VIDEO_URL", "http://video-agent:8006")),
-    ("code-agent", os.getenv("AOP_AGENT_CODE_URL", "http://code-agent:8007")),
-    ("browser-agent", os.getenv("AOP_AGENT_BROWSER_URL", "http://browser-agent:8008")),
+    ("claude-coder", "AOP_AGENT_CLAUDE_CODER_URL", "http://claude-coder:8011"),
+    ("claude-researcher", "AOP_AGENT_CLAUDE_RESEARCHER_URL", "http://claude-researcher:8012"),
+    ("pi-coder", "AOP_AGENT_PI_CODER_URL", "http://pi-coder:8013"),
+    ("pi-researcher", "AOP_AGENT_PI_RESEARCHER_URL", "http://pi-researcher:8014"),
+    ("deepseek-coder", "AOP_AGENT_DEEPSEEK_CODER_URL", "http://deepseek-coder:8015"),
+    ("deepseek-researcher", "AOP_AGENT_DEEPSEEK_RESEARCHER_URL", "http://deepseek-researcher:8016"),
 ]
 
 
@@ -50,14 +50,15 @@ def _headers() -> dict[str, str]:
 def main() -> int:
     print(f"gateway={GATEWAY} auth={'on' if API_KEY else 'off'}")
     wait(f"{GATEWAY}/health")
-    for name, ep in AGENTS:
-        wait(f"{ep.rstrip('/')}/health")
+    for name, env_key, default in AGENTS:
+        ep = (os.getenv(env_key) or default).rstrip("/")
+        wait(f"{ep}/health")
         print(f"register {name} -> {ep}")
         for attempt in range(8):
             try:
                 r = httpx.post(
                     f"{GATEWAY}/v1/agents/register",
-                    json={"endpoint": ep.rstrip("/")},
+                    json={"endpoint": ep},
                     headers=_headers(),
                     timeout=30,
                 )

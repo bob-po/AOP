@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { MarketplacePanel } from "@/components/MarketplacePanel";
 
-export default function MarketplaceRedirectPage() {
-  redirect("/agents");
+export default function MarketplacePage() {
+  return <MarketplacePanel />;
 }

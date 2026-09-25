@@ -16,7 +16,7 @@ real governance/runtime code hermetically in ``test_collaboration.py`` and
 
 The whole module SKIPS when the OS is not reachable, so it never breaks a normal
 offline ``pytest`` run. To execute it, bring up the stack with autonomous
-delegation enabled (see scripts/a2a_autonomous_demo.py header) and run:
+delegation enabled (see scripts/a2a_os_closed_loop.py header) and run:
 
     pytest packages/agent-runtime/tests/test_a2a_live_integration.py -v
 """

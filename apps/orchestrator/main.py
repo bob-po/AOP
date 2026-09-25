@@ -14,6 +14,13 @@ from service import TaskService
 from governance import GovernanceService
 from workflows import WorkflowService
 from marketplace import MarketplaceService
+from marketplace.bundle import (
+    BundleError,
+    attach_bundle_meta,
+    build_agent_bundle,
+    render_install_ps1,
+    render_install_sh,
+)
 from marketplace.manifest import ManifestValidationError
 from health_monitor import HealthMonitor
 from observability import start_metrics_server, get_metrics_text
@@ -1380,10 +1387,43 @@ def task_collaboration_graph(task_id: str) -> dict[str, Any]:
 
 @app.post("/v1/tasks/{task_id}/cancel")
 def cancel_task(task_id: str) -> dict[str, Any]:
+    # Resolve A2A cancel targets before OS marks nodes cancelled (status flips).
+    agent_endpoints: dict[str, str] = {}
+    try:
+        if hasattr(marketplace, "list_agents"):
+            for a in marketplace.list_agents() or []:
+                aid = a.get("agent_id") or a.get("id")
+                ep = a.get("endpoint") or a.get("url")
+                if aid and ep:
+                    agent_endpoints[str(aid)] = str(ep)
+    except Exception:  # noqa: BLE001
+        pass
+
+    extra_a2a_targets: list[dict[str, str]] = []
+    try:
+        sched = getattr(tasks, "scheduler", None)
+        if sched is not None and hasattr(sched, "list_a2a_cancel_targets"):
+            for item in sched.list_a2a_cancel_targets(task_id) or []:
+                aid = item.get("agent_id")
+                ep = agent_endpoints.get(str(aid)) if aid else None
+                if not ep:
+                    continue
+                # OS task id is rootTaskId/correlationId on harness agents.
+                extra_a2a_targets.append(
+                    {"endpoint": ep, "task_id": task_id, "agent_id": str(aid)}
+                )
+                a2a_id = item.get("a2a_task_id")
+                if a2a_id and str(a2a_id) != task_id:
+                    extra_a2a_targets.append(
+                        {"endpoint": ep, "task_id": str(a2a_id), "agent_id": str(aid)}
+                    )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("list_a2a_cancel_targets skipped: %s", exc)
+
     row = tasks.cancel(task_id)
     if not row:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "task not found"})
-    # Phase 4: cancel fan-out along runtime graph + optional A2A tasks/cancel.
+
     def _a2a_cancel(endpoint: str, child_task_id: str) -> bool:
         try:
             from a2a_sdk import A2AClient
@@ -1394,24 +1434,13 @@ def cancel_task(task_id: str) -> dict[str, Any]:
             logger.warning("A2A cancel failed endpoint=%s task=%s: %s", endpoint, child_task_id, exc)
             return False
 
-    agent_endpoints: dict[str, str] = {}
-    try:
-        # Best-effort: discover endpoints from marketplace/registry if available
-        if hasattr(marketplace, "list_agents"):
-            for a in marketplace.list_agents() or []:
-                aid = a.get("agent_id") or a.get("id")
-                ep = a.get("endpoint") or a.get("url")
-                if aid and ep:
-                    agent_endpoints[str(aid)] = str(ep)
-    except Exception:  # noqa: BLE001
-        pass
-
     cascade = cancel_fanout(
         root_task_id=task_id,
         execution_service=execution,
         runtime_graph=tasks.runtime_graph,
-        a2a_cancel=_a2a_cancel if agent_endpoints else None,
+        a2a_cancel=_a2a_cancel if (agent_endpoints or extra_a2a_targets) else None,
         agent_endpoints=agent_endpoints or None,
+        extra_a2a_targets=extra_a2a_targets or None,
     )
     capacity_queue.cancel(task_id)
     out = dict(row)
@@ -1783,14 +1812,33 @@ class DiscoverSkillRequest(BaseModel):
     version_constraint: str | None = None
 
 
+def _public_base_url(request: Request) -> str:
+    """Prefer reverse-proxy headers so install one-liners point at the reachable host."""
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+    if not host:
+        return str(request.base_url).rstrip("/")
+    return f"{proto}://{host}".rstrip("/")
+
+
 @app.get("/v1/marketplace")
-def marketplace_catalog(q: str | None = None) -> dict[str, Any]:
-    return {"packages": marketplace.catalog(q=q)}
+def marketplace_catalog(request: Request, q: str | None = None) -> dict[str, Any]:
+    base = _public_base_url(request)
+    pkgs = [
+        attach_bundle_meta(p, base_url=base, catalog=marketplace.catalog())
+        for p in marketplace.catalog(q=q)
+    ]
+    return {"packages": pkgs}
 
 
 @app.get("/v1/marketplace/agents")
-def marketplace_agents(q: str | None = None) -> dict[str, Any]:
-    return {"packages": marketplace.catalog(q=q)}
+def marketplace_agents(request: Request, q: str | None = None) -> dict[str, Any]:
+    base = _public_base_url(request)
+    pkgs = [
+        attach_bundle_meta(p, base_url=base, catalog=marketplace.catalog())
+        for p in marketplace.catalog(q=q)
+    ]
+    return {"packages": pkgs}
 
 
 @app.post("/v1/marketplace/agents", status_code=201)
@@ -1807,11 +1855,111 @@ def marketplace_publish_agent(body: MarketplacePublishRequest) -> dict[str, Any]
 
 
 @app.get("/v1/marketplace/agents/{package_id}")
-def marketplace_agent_get(package_id: str) -> dict[str, Any]:
+def marketplace_agent_get(package_id: str, request: Request) -> dict[str, Any]:
     pkg = marketplace.get_package(package_id)
     if not pkg:
+        # Allow lookup by agent_key / profile (e.g. claude-coder)
+        for item in marketplace.catalog():
+            if item.get("agent_key") == package_id or item.get("package_id") == package_id:
+                pkg = marketplace.get_package(str(item["package_id"])) or item
+                break
+    if not pkg:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": package_id})
-    return pkg
+    return attach_bundle_meta(pkg, base_url=_public_base_url(request), catalog=marketplace.catalog())
+
+
+def _marketplace_packages_map() -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for p in marketplace.catalog():
+        pid = p.get("package_id")
+        if pid:
+            out[str(pid)] = p
+    return out
+
+
+@app.get("/v1/marketplace/agents/{package_id}/download")
+def marketplace_agent_download(package_id: str) -> Response:
+    """Download standalone zip: profile + vendored runtime (remote-host deploy)."""
+    try:
+        data, meta = build_agent_bundle(
+            package_id,
+            catalog=marketplace.catalog(),
+            packages=_marketplace_packages_map(),
+        )
+    except BundleError as exc:
+        raise HTTPException(status_code=404, detail={"code": "bundle_error", "message": str(exc)}) from exc
+    filename = meta.get("filename") or f"{package_id}.zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-AOP-Package-Id": str(meta.get("package_id") or package_id),
+            "X-AOP-Profile": str(meta.get("profile") or ""),
+            "X-AOP-Harness": str(meta.get("harness") or ""),
+        },
+    )
+
+
+@app.get("/v1/marketplace/agents/{package_id}/install.ps1")
+def marketplace_agent_install_ps1(package_id: str, request: Request) -> Response:
+    """Claude Code–style Windows installer: ``irm <url>/install.ps1 | iex``."""
+    try:
+        script, meta = render_install_ps1(
+            package_id,
+            base_url=_public_base_url(request),
+            catalog=marketplace.catalog(),
+            packages=_marketplace_packages_map(),
+        )
+    except BundleError as exc:
+        raise HTTPException(status_code=404, detail={"code": "bundle_error", "message": str(exc)}) from exc
+    return Response(
+        content=script,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'inline; filename="{meta["profile"]}-install.ps1"',
+            "X-AOP-Install": "windows",
+        },
+    )
+
+
+@app.get("/v1/marketplace/agents/{package_id}/install.sh")
+def marketplace_agent_install_sh(package_id: str, request: Request) -> Response:
+    """Unix one-liner: ``curl -fsSL <url>/install.sh | bash``."""
+    try:
+        script, meta = render_install_sh(
+            package_id,
+            base_url=_public_base_url(request),
+            catalog=marketplace.catalog(),
+            packages=_marketplace_packages_map(),
+        )
+    except BundleError as exc:
+        raise HTTPException(status_code=404, detail={"code": "bundle_error", "message": str(exc)}) from exc
+    return Response(
+        content=script,
+        media_type="text/x-shellscript; charset=utf-8",
+        headers={
+            "Content-Disposition": f'inline; filename="{meta["profile"]}-install.sh"',
+            "X-AOP-Install": "unix",
+        },
+    )
+
+
+# Short aliases (Claude-like): /install/claude-coder.ps1
+@app.get("/install/{name}")
+def install_alias(name: str, request: Request) -> Response:
+    lower = name.lower()
+    if lower.endswith(".ps1"):
+        return marketplace_agent_install_ps1(name[: -len(".ps1")], request)
+    if lower.endswith(".sh"):
+        return marketplace_agent_install_sh(name[: -len(".sh")], request)
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "code": "not_found",
+            "message": f"use /install/<profile>.ps1 or .sh (got {name!r})",
+        },
+    )
 
 
 @app.post("/v1/marketplace/agents/{package_id}/publish")

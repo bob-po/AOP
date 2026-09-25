@@ -316,6 +316,16 @@ export function runWorkflow(workflowId: string, content: string, title?: string)
   });
 }
 
+export type MarketplaceInstallMeta = {
+  download?: string;
+  install_ps1?: string;
+  install_sh?: string;
+  windows?: string;
+  unix?: string;
+  windows_full?: string;
+  unix_full?: string;
+};
+
 export type MarketplacePackage = {
   package_id: string;
   name: string;
@@ -327,6 +337,13 @@ export type MarketplacePackage = {
   agent_key?: string;
   tags?: string[];
   installed?: boolean;
+  /** Virtual agent: harness × role profile */
+  harness?: string;
+  profile?: string;
+  default_port?: number;
+  bundle?: boolean;
+  download_url?: string;
+  install?: MarketplaceInstallMeta;
   agent?: {
     agent_id: string;
     agent_key: string;
@@ -335,6 +352,59 @@ export type MarketplacePackage = {
     skills?: string[];
   } | null;
 };
+
+/** Prefer Gateway-reachable one-liners (same host as NEXT_PUBLIC_API_BASE). */
+export function marketplaceDeployCommands(pkg: MarketplacePackage) {
+  const base = API_BASE.replace(/\/$/, "");
+  const id = pkg.package_id;
+  const profile = pkg.profile || pkg.agent_key || id.replace(/^pkg-/, "");
+  const fromApi = pkg.install;
+  return {
+    windows:
+      fromApi?.windows_full ||
+      `irm ${base}/v1/marketplace/agents/${id}/install.ps1 | iex`,
+    unix:
+      fromApi?.unix_full ||
+      `curl -fsSL ${base}/v1/marketplace/agents/${id}/install.sh | bash`,
+    windowsShort: fromApi?.windows || `irm ${base}/install/${profile}.ps1 | iex`,
+    unixShort: fromApi?.unix || `curl -fsSL ${base}/install/${profile}.sh | bash`,
+    download:
+      fromApi?.download ||
+      pkg.download_url ||
+      `${base}/v1/marketplace/agents/${id}/download`,
+  };
+}
+
+export async function downloadMarketplaceBundle(
+  packageId: string,
+  filename?: string,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = authHeader();
+  if (token) {
+    headers.Authorization = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
+  }
+  const res = await fetch(
+    `${API_BASE}/v1/marketplace/agents/${encodeURIComponent(packageId)}/download`,
+    { headers, cache: "no-store" },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${text}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const match = /filename="?([^";]+)"?/i.exec(cd);
+  const name = filename || match?.[1] || `${packageId}.zip`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 
 export function listMarketplace(q?: string) {
   const qs = q ? `?q=${encodeURIComponent(q)}` : "";

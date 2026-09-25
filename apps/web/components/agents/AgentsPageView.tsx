@@ -47,7 +47,7 @@ export function AgentsPageView() {
   const [view, setView] = useState<ViewMode>("cards");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [perf, setPerf] = useState<AgentPerformance[]>([]);
-  const [routerSkill, setRouterSkill] = useState("web-search");
+  const [routerSkill, setRouterSkill] = useState("web-research");
   const [routerPreview, setRouterPreview] = useState<{
     smart: boolean;
     selected: string | null;
@@ -244,7 +244,7 @@ export function AgentsPageView() {
         <div>
           <h1 className="font-display text-3xl text-mist-100">Agent 注册中心</h1>
           <p className="mt-1 text-sm text-mist-400">
-            注册、健康检测、智能路由评分与运行指标。
+            虚拟 Agent = harness × 角色。注册表、市场一键部署、智能路由与运行指标。
           </p>
         </div>
         <button

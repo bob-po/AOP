@@ -150,6 +150,9 @@ func (s *Server) Handler() http.Handler {
 		r.Handle("/v1/workflows/*", taskProxy)
 		r.Handle("/v1/marketplace", s.OrchestratorProxy)
 		r.Handle("/v1/marketplace/*", s.OrchestratorProxy)
+		// Claude-style short install aliases: /install/claude-coder.ps1
+		r.Handle("/install", s.OrchestratorProxy)
+		r.Handle("/install/*", s.OrchestratorProxy)
 		r.Handle("/v1/skills", s.OrchestratorProxy)
 		r.Handle("/v1/skills/*", s.OrchestratorProxy)
 		r.Handle("/v1/discover/skill", s.OrchestratorProxy)

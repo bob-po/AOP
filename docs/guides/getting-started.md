@@ -21,9 +21,7 @@
 | **Outbox Processor** | Python | 无（轮询 PG） | P36.2 outbox 投递（**必需**） |
 | **Gateway** | Go | `8080` | 注册中心 + 反向代理 + 鉴权 |
 | **Web Console** | Next.js 15 | `3000` | 前端 |
-| Agents × 9 | Python | `8001`–`8009` | search/rag/report/analysis/image/video/code/browser/**ppt** |
-| **DeerFlow**（可选） | 容器 | `8020` | search-agent 的 Deep Research 后端（`--profile deerflow` / `agents`） |
-| **DeepPresenter**（可选） | 容器 | `8021` | ppt-agent 的 PPTAgent 后端（`--profile pptagent`） |
+| **Harness virtual agents** | Python | `8011`–`8016` | Claude/Pi/DeepSeek × coder|researcher（`agents/harness-agent`） |
 
 启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → Agents → Web**。
 
@@ -51,16 +49,6 @@
 
 ```bash
 docker compose -f deployments/docker-compose.yml up -d postgres redis minio
-# 可选：DeerFlow 深度研究后端（search-agent 设 DEERFLOW_URL=http://127.0.0.1:8020）
-# 前置：git clone --depth 1 --branch main-1.x https://github.com/bytedance/deer-flow.git third_party/deer-flow
-#       cp deployments/deerflow/.env.example deployments/deerflow/.env
-#       cp deployments/deerflow/conf.yaml.example deployments/deerflow/conf.yaml  # 填入 LLM / 搜索密钥
-docker compose -f deployments/docker-compose.yml --profile deerflow up -d deerflow
-# 可选：DeepPresenter / PPTAgent v1.1.38（ppt-agent 默认 stub；要高质量 PPT 再启）
-# 前置：见 deployments/pptagent/README.md
-#       git clone --depth 1 --branch v1.1.38 https://github.com/icip-cas/PPTAgent.git third_party/PPTAgent
-#       cp deployments/pptagent/config.yaml.example deployments/pptagent/config.yaml
-# docker compose -f deployments/docker-compose.yml --profile pptagent up -d deeppresenter
 ```
 
 确认三个容器健康：
@@ -137,9 +125,13 @@ pip install -e packages/a2a-sdk      # 确保已装
 python scripts/start_and_register_agents.py
 ```
 
-脚本会用 `uvicorn` 在 `8001`–`8009` 拉起 9 个 agent（含 **ppt-agent**），健康检查通过后向 Gateway 注册，最后打印注册数量与 `ALL AGENTS READY`。
+脚本会按 profile 在 `8011`–`8016` 拉起 harness 虚拟 Agent（claude/pi/deepseek × coder|researcher），健康检查通过后向 Gateway 注册。远端主机可用 Marketplace 一键安装（`irm …/install.ps1 | iex`），见 [harness-migration.md](../architecture/harness-migration.md)。
 
-ppt-agent 默认 `PPT_MODE=auto`：无 DeepPresenter 容器时自动用 `python-pptx` stub 产出真实 `.pptx`。启用 DeepPresenter 后见 [deployments/pptagent/README.md](../deployments/pptagent/README.md)。
+```powershell
+# 仅启动部分 profile（可选）
+$env:HARNESS_PROFILES="claude-coder,deepseek-coder"
+python scripts/start_and_register_agents.py
+```
 
 ### 3.7 启动 Web Console
 
@@ -173,8 +165,7 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess -ErrorActio
 | `6379` | Redis | `9091` | 指标服务（orchestrator & worker 默认都抢） |
 | `9000/9001` | MinIO | `8080` | Gateway |
 | `9090` | Prometheus | `3000` | Web |
-| `3001` | Grafana | `8001–8009` | Agents |
-| `8020` | DeerFlow（可选） | `8021` | DeepPresenter / PPTAgent（可选） |
+| `3001` | Grafana | `8011–8016` | Harness virtual agents |
 | `9093` | Alertmanager | `5000` | Webhook |
 
 ---
@@ -261,7 +252,7 @@ docker compose -f deployments/docker-compose.yml logs postgres
 - Postgres：确认 `5432` 未被本机自装 PG 占用，或改 `docker-compose.yml` 端口映射。
 - 首次启动会执行 `infrastructure/postgres/init/*.sql`，其中 `001_init.sql` 有 `CREATE EXTENSION pgcrypto`，需 Postgres 支持（官方镜像自带）。
 
-### 7.4 端口被占用（5432 / 6379 / 8080 / 3000 / 8001…）
+### 7.4 端口被占用（5432 / 6379 / 8080 / 3000 / 8011…）
 
 ```bash
 # Windows（PowerShell）查占用
@@ -269,7 +260,7 @@ netstat -ano | findstr :8080
 taskkill /PID <PID> /F
 ```
 
-本地常见：已装了 Postgres/Redis 服务 → 与容器端口冲突，停掉其一或改映射。Agent 端口冲突则 `start_and_register_agents.py` 会自动跳过已健康实例。
+本地常见：已装了 Postgres/Redis 服务 → 与容器端口冲突，停掉其一或改映射。Harness Agent 端口冲突则 `start_and_register_agents.py` 会自动跳过已健康实例。
 
 ### 7.5 Python 版本过低（< 3.11）
 
@@ -342,15 +333,11 @@ docker exec aop-redis redis-cli XLEN a2a.execution.queue
 
 本地未配 `STRIPE_SECRET_KEY` 时，`/v1/billing/*` 相关接口会返回 500 或 dry-run 提示，属预期。完整走 Stripe Checkout 需配 `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`（见 [billing-invoice.md](./billing-invoice.md)）。
 
-### 7.15 browser-agent 需要真实浏览器
-
-默认是 stub。要 Chromium：`pip install -r agents/browser-agent/requirements-playwright.txt && playwright install chromium`，或用 `docker-compose.browser-chromium.yml` 起带 Chromium 的镜像。
-
-### 7.16 改了 `NEXT_PUBLIC_*` 不生效
+### 7.15 改了 `NEXT_PUBLIC_*` 不生效
 
 `NEXT_PUBLIC_*` 在 **构建期**注入。dev 模式改 `.env.local` 后重启 `npm run dev`；部署镜像需 `./deploy.sh rebuild`。
 
-### 7.17 登录失败 / 没有管理员账号
+### 7.16 登录失败 / 没有管理员账号
 
 Gateway 启动时 `EnsureDevUser` 会自动种入 `admin@aop.local`；也可手动：
 

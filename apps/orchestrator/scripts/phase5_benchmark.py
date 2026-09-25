@@ -22,7 +22,7 @@ OUT_MD = OUT_DIR / "benchmark.md"
 
 
 def _agents(n: int = 10) -> list[dict]:
-    skills = ["web-search", "analysis", "knowledge-search", "report-generation"]
+    skills = ["web-research", "research-summarize", "code-execution", "code-assist"]
     out = []
     for i in range(n):
         out.append(
@@ -42,7 +42,7 @@ def _agents(n: int = 10) -> list[dict]:
 
 
 def _tasks(n: int = 100) -> list[dict]:
-    skills = ["web-search", "analysis", "knowledge-search", "report-generation", "research"]
+    skills = ["web-research", "research-summarize", "code-execution", "code-assist", "web-search"]
     prios = ["CRITICAL", "HIGH", "NORMAL", "LOW"]
     return [
         {
@@ -75,7 +75,7 @@ def main() -> int:
         plan = svc.recovery_plan(error_code="TIMEOUT", agent_id="agent-1")
         out = svc.select(
             agents,
-            requirement={"skill": "web-search"},
+            requirement={"skill": "web-research"},
             exclude_agent_ids=plan["exclude_agent_ids"],
             estimated_cost=0.1,
         )

@@ -1,0 +1,81 @@
+{
+  "name": "Claude Researcher",
+  "description": "Virtual agent: Claude harness \u00d7 researcher role. Structured research and summarization (does not replace web-search skill).",
+  "url": "http://127.0.0.1:8012/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": [
+    "text"
+  ],
+  "defaultOutputModes": [
+    "text",
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "web-research",
+      "name": "Web Research",
+      "description": "Plan research questions, synthesize findings, and cite uncertainty; pair with search tools when available",
+      "tags": [
+        "research",
+        "harness",
+        "claude"
+      ],
+      "examples": [
+        "compare RAG architectures for multi-tenant SaaS"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    },
+    {
+      "id": "research-summarize",
+      "name": "Research Summarize",
+      "description": "Summarize source material into structured findings with confidence notes",
+      "tags": [
+        "research",
+        "summary",
+        "harness",
+        "claude"
+      ],
+      "examples": [
+        "summarize these notes into a one-page brief"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    },
+    {
+      "id": "web-search",
+      "name": "Web Search",
+      "description": "Research-oriented search/synthesis via harness (replaces retired search-agent)",
+      "tags": [
+        "research",
+        "search",
+        "harness"
+      ],
+      "examples": [
+        "latest news on agent orchestration"
+      ],
+      "inputModes": [
+        "text"
+      ],
+      "outputModes": [
+        "text",
+        "application/json"
+      ]
+    }
+  ]
+}

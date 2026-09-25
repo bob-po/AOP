@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Start all AOP sample agents (Windows-friendly) and register to Gateway."""
+"""Start harness virtual agents (Windows-friendly) and register to Gateway.
+
+Specialty agents under agents/* were removed; only ``agents/harness-agent`` remains.
+"""
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -12,17 +16,17 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENTS = [
-    ("search-agent", 8001),
-    ("rag-agent", 8002),
-    ("report-agent", 8003),
-    ("analysis-agent", 8004),
-    ("image-agent", 8005),
-    ("video-agent", 8006),
-    ("code-agent", 8007),
-    ("browser-agent", 8008),
-    ("ppt-agent", 8009),
+
+# harness-agent is one codebase; profiles are virtual agent identities.
+HARNESS_PROFILES = [
+    ("claude-coder", 8011),
+    ("claude-researcher", 8012),
+    ("pi-coder", 8013),
+    ("pi-researcher", 8014),
+    ("deepseek-coder", 8015),
+    ("deepseek-researcher", 8016),
 ]
+
 GATEWAY = os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")
 API_KEY = (
     os.getenv("GATEWAY_API_KEY")
@@ -52,44 +56,54 @@ def wait_health(port: int, timeout: float = 20.0) -> bool:
     return False
 
 
+def _harness_enabled() -> bool:
+    flag = os.getenv("HARNESS_ENABLED", "1").lower()
+    if flag in {"0", "false", "off", "no"}:
+        return False
+    return True
+
+
+def _selected_harness_profiles() -> list[tuple[str, int]]:
+    raw = os.getenv("HARNESS_PROFILES", "").strip()
+    if not raw:
+        return list(HARNESS_PROFILES)
+    wanted = {p.strip() for p in raw.split(",") if p.strip()}
+    return [(n, p) for n, p in HARNESS_PROFILES if n in wanted]
+
+
 def main() -> int:
     procs: list[subprocess.Popen] = []
     print(f"Python: {PYTHON}")
-    print(f"Phase 37.2: Enhanced modes will be enabled for agents with LLM support")
-    if not os.getenv("OPENAI_API_KEY"):
-        print("Note: Set OPENAI_API_KEY to enable full LLM capabilities")
-    
-    for name, port in AGENTS:
-        cwd = ROOT / "agents" / name
-        if not (cwd / "agent.py").exists():
-            print(f"skip missing {name}")
-            continue
-        # skip if already healthy
+    if not _harness_enabled():
+        print("HARNESS_ENABLED=0 — nothing to start")
+        return 0
+
+    selected = _selected_harness_profiles()
+    if not selected:
+        print("No harness profiles selected")
+        return 1
+
+    print(f"Harness profiles: {', '.join(n for n, _ in selected)}")
+    cwd = ROOT / "agents" / "harness-agent"
+    if not (cwd / "agent.py").exists():
+        print("agents/harness-agent missing")
+        return 1
+
+    health_targets: list[tuple[str, int]] = []
+    for profile, port in selected:
+        label = f"harness-agent:{profile}"
+        health_targets.append((label, port))
         if wait_health(port, timeout=1.0):
-            print(f"[skip] {name} already up on :{port}")
+            print(f"[skip] {label} already up on :{port}")
             continue
         env = os.environ.copy()
         env["PORT"] = str(port)
         env["AGENT_URL"] = f"http://127.0.0.1:{port}/"
-        
-        # Phase 37.2: Enable enhanced modes for agents with LLM support
-        if name == "search-agent":
-            env["SEARCH_USE_ENHANCED"] = "true"
-            env["SEARCH_USE_LLM"] = "true" if os.getenv("OPENAI_API_KEY") else "false"
-        elif name == "analysis-agent":
-            env["ANALYSIS_USE_ENHANCED"] = "true"
-        elif name == "report-agent":
-            env["REPORT_USE_ENHANCED"] = "true"
-        elif name == "rag-agent":
-            env["RAG_USE_ENHANCED"] = "true"
-            env["RAG_USE_LLM"] = "true" if os.getenv("OPENAI_API_KEY") else "false"
-        
-        elif name == "ppt-agent":
-            env["PPT_MODE"] = os.getenv("PPT_MODE") or "auto"
-            if os.getenv("PPTAGENT_CONTAINER"):
-                env["PPTAGENT_CONTAINER"] = os.environ["PPTAGENT_CONTAINER"]
-        
-        print(f"[start] {name} :{port}")
+        env["HARNESS_PROFILE"] = profile
+        env["AGENT_ID"] = profile
+        env["HARNESS_HEARTBEAT"] = env.get("HARNESS_HEARTBEAT") or "1"
+
+        print(f"[start] {label} :{port}")
         log_path = cwd / f".uvicorn-{port}.log"
         log_f = open(log_path, "w", encoding="utf-8")
         procs.append(
@@ -105,12 +119,12 @@ def main() -> int:
 
     print("Waiting for health ...")
     failed = []
-    for name, port in AGENTS:
+    for label, port in health_targets:
         ok = wait_health(port, timeout=25.0)
-        print(f"  {name}:{port} -> {'OK' if ok else 'FAIL'}")
+        print(f"  {label}:{port} -> {'OK' if ok else 'FAIL'}")
         if not ok:
-            failed.append(name)
-            log_path = ROOT / "agents" / name / f".uvicorn-{port}.log"
+            failed.append(label)
+            log_path = cwd / f".uvicorn-{port}.log"
             if log_path.exists():
                 print(log_path.read_text(encoding="utf-8", errors="ignore")[-500:])
 
@@ -119,7 +133,7 @@ def main() -> int:
         return 1
 
     print(f"Registering to {GATEWAY} ...")
-    for name, port in AGENTS:
+    for label, port in health_targets:
         endpoint = f"http://127.0.0.1:{port}"
         try:
             r = httpx.post(
@@ -128,9 +142,9 @@ def main() -> int:
                 headers=_headers(),
                 timeout=20,
             )
-            print(f"  register {name} -> {r.status_code}")
+            print(f"  register {label} -> {r.status_code}")
         except Exception as exc:  # noqa: BLE001
-            print(f"  register {name} error: {exc}")
+            print(f"  register {label} error: {exc}")
             return 1
 
     listed = httpx.get(f"{GATEWAY}/v1/agents", headers=_headers(), timeout=10)
@@ -138,8 +152,7 @@ def main() -> int:
     print(f"Registry count: {len(agents)}")
     for a in agents:
         print(f"  - {a.get('name')} [{a.get('status')}] skills={a.get('skills')}")
-    print("ALL AGENTS READY")
-    # keep children running if we spawned any; otherwise exit
+    print("ALL HARNESS AGENTS READY")
     if procs:
         print(f"Spawned {len(procs)} process(es); exiting without waiting (agents run detached).")
     return 0

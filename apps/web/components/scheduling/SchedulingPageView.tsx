@@ -34,7 +34,7 @@ const SCORE_KEYS = [
 ] as const;
 
 export function SchedulingPageView() {
-  const [skill, setSkill] = useState("web-search");
+  const [skill, setSkill] = useState("web-research");
   const [candidates, setCandidates] = useState<DiscoverCandidate[]>([]);
   const [excluded, setExcluded] = useState<Array<{ agent_id?: string; reason?: string }>>([]);
   const [candError, setCandError] = useState<string | null>(null);
@@ -52,7 +52,7 @@ export function SchedulingPageView() {
   const [recovery, setRecovery] = useState<RecoveryPlan | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
 
-  const [simBody, setSimBody] = useState('{"skill":"web-search","estimated_cost":0.1}');
+  const [simBody, setSimBody] = useState('{"skill":"web-research","estimated_cost":0.1}');
   const [simResult, setSimResult] = useState<Record<string, unknown> | null>(null);
   const [simError, setSimError] = useState<string | null>(null);
 

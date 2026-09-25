@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import traceback
 from enum import Enum
@@ -353,7 +354,12 @@ _circuit_breakers: Dict[str, CircuitBreaker] = {}
 def get_circuit_breaker(service: str) -> CircuitBreaker:
     """Get or create circuit breaker for a service."""
     if service not in _circuit_breakers:
-        _circuit_breakers[service] = CircuitBreaker()
+        threshold = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "8"))
+        recovery = float(os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEOUT", "60"))
+        _circuit_breakers[service] = CircuitBreaker(
+            failure_threshold=threshold,
+            recovery_timeout=recovery,
+        )
     return _circuit_breakers[service]
 
 

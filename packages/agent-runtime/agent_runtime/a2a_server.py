@@ -90,17 +90,50 @@ def jsonrpc_error(req_id: Any, code: int, message: str, data: Any = None) -> dic
     return {"jsonrpc": "2.0", "id": req_id, "error": err}
 
 
+def find_cancel_targets(tasks: dict[str, Any], task_id: Optional[str]) -> list[str]:
+    """Resolve cancel targets by exact id, or by rootTaskId / correlationId."""
+    if not task_id:
+        return []
+    if task_id in tasks:
+        return [task_id]
+    matched: list[str] = []
+    for tid, task in tasks.items():
+        if not isinstance(task, dict):
+            continue
+        meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        roots = {
+            task.get("rootTaskId"),
+            task.get("correlationId"),
+            meta.get("rootTaskId"),
+            meta.get("correlationId"),
+        }
+        if task_id in {str(x) for x in roots if x}:
+            matched.append(tid)
+    return matched
+
+
 def cancel_task(tasks: dict[str, Any], task_id: Optional[str]) -> tuple[bool, Optional[dict[str, Any]]]:
-    """Mark a locally-tracked task canceled. Returns (ok, task_or_none)."""
-    if not task_id or task_id not in tasks:
+    """Mark matching locally-tracked task(s) canceled. Returns (ok, primary_task).
+
+    Matches exact ``task_id`` first; otherwise cancels every in-memory task whose
+    ``rootTaskId`` / ``correlationId`` equals the cancel id (OS → harness bridge).
+    """
+    targets = find_cancel_targets(tasks, task_id)
+    if not targets:
         return False, None
-    task = tasks[task_id]
-    status = task.get("status")
-    if isinstance(status, dict):
-        status["state"] = "canceled"
-    else:
-        task["status"] = {"state": "canceled"}
-    return True, task
+    primary: Optional[dict[str, Any]] = None
+    for tid in targets:
+        task = tasks.get(tid)
+        if not isinstance(task, dict):
+            continue
+        status = task.get("status")
+        if isinstance(status, dict):
+            status["state"] = "canceled"
+        else:
+            task["status"] = {"state": "canceled"}
+        if primary is None:
+            primary = task
+    return primary is not None, primary
 
 
 def _task_state(task: dict[str, Any]) -> str:
@@ -236,6 +269,7 @@ __all__ = [
     "inbound_context",
     "jsonrpc_result",
     "jsonrpc_error",
+    "find_cancel_targets",
     "cancel_task",
     "subscribe_events",
     "notify_callback",

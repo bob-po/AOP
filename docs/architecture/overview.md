@@ -25,7 +25,7 @@ Orchestrator (Python :8090)
         └── MinIO (Artifacts)
                 │
                 ▼
-        A2A Agents :8001–8008 (+ start-agent)
+        Harness virtual agents :8011–8016 (claude/pi/deepseek × coder/researcher)
 ```
 
 ## 专项设计

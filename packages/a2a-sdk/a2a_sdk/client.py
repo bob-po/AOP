@@ -56,6 +56,7 @@ class A2AClient:
         governance_policy_id: str | None = None,
         deadline: str | None = None,
         callback_url: str | None = None,
+        task_id: str | None = None,
     ) -> Task:
         message = Message(
             role="user",
@@ -73,7 +74,7 @@ class A2AClient:
             deadline=deadline,
             callback_url=callback_url,
         )
-        return self.send_message(message, skill_id=skill_id)
+        return self.send_message(message, skill_id=skill_id, task_id=task_id)
 
     def send_message(
         self,
@@ -84,8 +85,11 @@ class A2AClient:
         parent_task_id: str | None = None,
         root_task_id: str | None = None,
         depth: int = 0,
+        task_id: str | None = None,
     ) -> Task:
         params: dict[str, Any] = {"message": message.to_dict()}
+        if task_id:
+            params["id"] = task_id
         if skill_id:
             params["metadata"] = {"skillId": skill_id}
         if message.idempotency_key:
@@ -159,11 +163,21 @@ class A2AClient:
                         yield line
 
     def cancel_task(self, task_id: str) -> bool:
-        """Cancel a task."""
+        """Cancel a task. Accepts bool or Task-shaped dict from the agent."""
         result = self._rpc("tasks/cancel", {"id": task_id})
-        if not isinstance(result, bool):
-            raise A2AError(f"Unexpected tasks/cancel result type: {type(result)}")
-        return result
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, dict):
+            status = result.get("status")
+            if isinstance(status, dict):
+                state = str(status.get("state") or "").lower()
+            else:
+                state = str(status or "").lower()
+            # Successful cancel returns the Task; treat known cancel states as True.
+            if state in {"canceled", "cancelled"} or result.get("id"):
+                return True
+            return False
+        raise A2AError(f"Unexpected tasks/cancel result type: {type(result)}")
 
     def delegate_task(
         self,

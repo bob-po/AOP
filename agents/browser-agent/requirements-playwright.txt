@@ -1,3 +1,0 @@
-# Optional Chromium backend (Phase 29)
--r requirements.txt
-playwright>=1.40

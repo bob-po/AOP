@@ -3,9 +3,6 @@
 
 name: aop
 
-x-agent-env: &agent-env
-  SEARCH_MODE: ${SEARCH_MODE:-auto}
-
 x-agent-resources: &agent-resources
   deploy:
     resources:
@@ -16,7 +13,7 @@ x-agent-resources: &agent-resources
         cpus: "0.1"
         memory: 64M
 
-# Phase 27: baseline container hardening for all agents
+# Phase 27: baseline container hardening for harness agents
 x-agent-security: &agent-security
   security_opt:
     - no-new-privileges:true
@@ -30,20 +27,10 @@ x-code-security: &code-security
     - seccomp=./seccomp/code-agent.json
   cap_drop:
     - ALL
-  read_only: true
-  tmpfs:
-    - /tmp:size=64M,mode=1777
-    - /tmp/aop:size=32M,mode=1777
 
-x-browser-security: &browser-security
-  security_opt:
-    - no-new-privileges:true
-    - seccomp=./seccomp/browser-agent.json
-  cap_drop:
-    - ALL
-  tmpfs:
-    - /tmp:size=128M,mode=1777
-    - /tmp/aop:size=64M,mode=1777
+x-harness-build: &harness-build
+  context: ..
+  dockerfile: agents/harness-agent/Dockerfile
 
 services:
   postgres:
@@ -106,127 +93,135 @@ services:
       "
     restart: "no"
 
-  search-agent:
-    build:
-      context: ../agents/search-agent
-    container_name: aop-search-agent
+  claude-coder:
+    build: *harness-build
+    container_name: aop-claude-coder
     environment:
-      <<: *agent-env
-      PORT: "8001"
-      AGENT_URL: http://search-agent:8001/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  rag-agent:
-    build:
-      context: ../agents/rag-agent
-    container_name: aop-rag-agent
-    environment:
-      PORT: "8002"
-      AGENT_URL: http://rag-agent:8002/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  report-agent:
-    build:
-      context: ../agents/report-agent
-    container_name: aop-report-agent
-    environment:
-      PORT: "8003"
-      AGENT_URL: http://report-agent:8003/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  analysis-agent:
-    build:
-      context: ../agents/analysis-agent
-    container_name: aop-analysis-agent
-    environment:
-      PORT: "8004"
-      AGENT_URL: http://analysis-agent:8004/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8004/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  image-agent:
-    build:
-      context: ../agents/image-agent
-    container_name: aop-image-agent
-    environment:
-      PORT: "8005"
-      AGENT_URL: http://image-agent:8005/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  video-agent:
-    build:
-      context: ../agents/video-agent
-    container_name: aop-video-agent
-    environment:
-      PORT: "8006"
-      AGENT_URL: http://video-agent:8006/
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  code-agent:
-    build:
-      context: ../agents/code-agent
-    container_name: aop-code-agent
-    environment:
-      PORT: "8007"
-      AGENT_URL: http://code-agent:8007/
-      AOP_SECCOMP_PROFILE: code-agent
+      HARNESS_PROFILE: claude-coder
+      AGENT_ID: claude-coder
+      PORT: "8011"
+      AGENT_URL: http://claude-coder:8011/
+      A2A_OS_URL: http://gateway:8080
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8011:8011"
     <<: [*agent-resources, *code-security]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8007/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/health')"]
       interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
 
-  browser-agent:
-    build:
-      context: ../agents/browser-agent
-    container_name: aop-browser-agent
+  claude-researcher:
+    build: *harness-build
+    container_name: aop-claude-researcher
     environment:
-      PORT: "8008"
-      AGENT_URL: http://browser-agent:8008/
-      AOP_SECCOMP_PROFILE: browser-agent
-      BROWSER_MODE: ${BROWSER_MODE:-stub}
-      BROWSER_EGRESS_ALLOWLIST: ${BROWSER_EGRESS_ALLOWLIST:-}
-      BROWSER_TIMEOUT_MS: ${BROWSER_TIMEOUT_MS:-15000}
-    <<: [*agent-resources, *browser-security]
+      HARNESS_PROFILE: claude-researcher
+      AGENT_ID: claude-researcher
+      PORT: "8012"
+      AGENT_URL: http://claude-researcher:8012/
+      A2A_OS_URL: http://gateway:8080
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8012:8012"
+    <<: [*agent-resources, *agent-security]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  pi-coder:
+    build: *harness-build
+    container_name: aop-pi-coder
+    environment:
+      HARNESS_PROFILE: pi-coder
+      AGENT_ID: pi-coder
+      PORT: "8013"
+      AGENT_URL: http://pi-coder:8013/
+      A2A_OS_URL: http://gateway:8080
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8013:8013"
+    <<: [*agent-resources, *code-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8013/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  pi-researcher:
+    build: *harness-build
+    container_name: aop-pi-researcher
+    environment:
+      HARNESS_PROFILE: pi-researcher
+      AGENT_ID: pi-researcher
+      PORT: "8014"
+      AGENT_URL: http://pi-researcher:8014/
+      A2A_OS_URL: http://gateway:8080
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8014:8014"
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  deepseek-coder:
+    build: *harness-build
+    container_name: aop-deepseek-coder
+    environment:
+      HARNESS_PROFILE: deepseek-coder
+      AGENT_ID: deepseek-coder
+      PORT: "8015"
+      AGENT_URL: http://deepseek-coder:8015/
+      A2A_OS_URL: http://gateway:8080
+      DSH_RUNNER_MODE: ${DSH_RUNNER_MODE:-tool_loop}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${OPENAI_BASE_URL:-https://api.deepseek.com}}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-${OPENAI_MODEL:-deepseek-chat}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8015:8015"
+    <<: [*agent-resources, *code-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  deepseek-researcher:
+    build: *harness-build
+    container_name: aop-deepseek-researcher
+    environment:
+      HARNESS_PROFILE: deepseek-researcher
+      AGENT_ID: deepseek-researcher
+      PORT: "8016"
+      AGENT_URL: http://deepseek-researcher:8016/
+      A2A_OS_URL: http://gateway:8080
+      DSH_RUNNER_MODE: ${DSH_RUNNER_MODE:-tool_loop}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${OPENAI_BASE_URL:-https://api.deepseek.com}}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-${OPENAI_MODEL:-deepseek-chat}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8016:8016"
+    <<: [*agent-resources, *agent-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8016/health')"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -276,14 +271,12 @@ services:
       MINIO_BUCKET: aop-artifacts
       MINIO_SECURE: "false"
       MINIO_PUBLIC_BASE: ${AOP_PUBLIC_SCHEME:-http}://${AOP_PUBLIC_HOST:-127.0.0.1}:9000/aop-artifacts
-      AOP_AGENT_SEARCH_URL: http://search-agent:8001
-      AOP_AGENT_RAG_URL: http://rag-agent:8002
-      AOP_AGENT_REPORT_URL: http://report-agent:8003
-      AOP_AGENT_ANALYSIS_URL: http://analysis-agent:8004
-      AOP_AGENT_IMAGE_URL: http://image-agent:8005
-      AOP_AGENT_VIDEO_URL: http://video-agent:8006
-      AOP_AGENT_CODE_URL: http://code-agent:8007
-      AOP_AGENT_BROWSER_URL: http://browser-agent:8008
+      AOP_AGENT_CLAUDE_CODER_URL: http://claude-coder:8011
+      AOP_AGENT_CLAUDE_RESEARCHER_URL: http://claude-researcher:8012
+      AOP_AGENT_PI_CODER_URL: http://pi-coder:8013
+      AOP_AGENT_PI_RESEARCHER_URL: http://pi-researcher:8014
+      AOP_AGENT_DEEPSEEK_CODER_URL: http://deepseek-coder:8015
+      AOP_AGENT_DEEPSEEK_RESEARCHER_URL: http://deepseek-researcher:8016
       METRICS_PORT: "9091"
       ORCHESTRATOR_PORT: "8090"
       AOP_RUNTIME: docker
@@ -295,7 +288,8 @@ services:
       STRIPE_WEBHOOK_ALLOW_UNSIGNED: ${STRIPE_WEBHOOK_ALLOW_UNSIGNED:-1}
       AGENT_MAX_INPUT_CHARS: "50000"
       AGENT_MAX_OUTPUT_CHARS: "200000"
-      AGENT_SKILL_TIMEOUTS: "code-execution:30,browser-automation:60"
+      AGENT_SKILL_TIMEOUTS: "code-execution:300,web-research:300"
+      HITL_SKILLS: ${HITL_SKILLS:-}
       AOP_SECCOMP_DIR: /seccomp
     ports:
       - "8090:8090"
@@ -379,32 +373,26 @@ services:
     environment:
       GATEWAY_URL: http://gateway:8080
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-aop_sk_dev_local_0000000000000001}
-      AOP_AGENT_SEARCH_URL: http://search-agent:8001
-      AOP_AGENT_RAG_URL: http://rag-agent:8002
-      AOP_AGENT_REPORT_URL: http://report-agent:8003
-      AOP_AGENT_ANALYSIS_URL: http://analysis-agent:8004
-      AOP_AGENT_IMAGE_URL: http://image-agent:8005
-      AOP_AGENT_VIDEO_URL: http://video-agent:8006
-      AOP_AGENT_CODE_URL: http://code-agent:8007
-      AOP_AGENT_BROWSER_URL: http://browser-agent:8008
+      AOP_AGENT_CLAUDE_CODER_URL: http://claude-coder:8011
+      AOP_AGENT_CLAUDE_RESEARCHER_URL: http://claude-researcher:8012
+      AOP_AGENT_PI_CODER_URL: http://pi-coder:8013
+      AOP_AGENT_PI_RESEARCHER_URL: http://pi-researcher:8014
+      AOP_AGENT_DEEPSEEK_CODER_URL: http://deepseek-coder:8015
+      AOP_AGENT_DEEPSEEK_RESEARCHER_URL: http://deepseek-researcher:8016
     depends_on:
       gateway:
         condition: service_healthy
-      search-agent:
+      claude-coder:
         condition: service_started
-      rag-agent:
+      claude-researcher:
         condition: service_started
-      report-agent:
+      pi-coder:
         condition: service_started
-      analysis-agent:
+      pi-researcher:
         condition: service_started
-      image-agent:
+      deepseek-coder:
         condition: service_started
-      video-agent:
-        condition: service_started
-      code-agent:
-        condition: service_started
-      browser-agent:
+      deepseek-researcher:
         condition: service_started
     restart: "no"
 

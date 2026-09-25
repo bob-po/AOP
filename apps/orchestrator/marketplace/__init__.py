@@ -15,6 +15,15 @@ from marketplace.service import (
     VERSION_INACTIVE,
     VERSION_REVOKED,
 )
+from marketplace.bundle import (
+    BundleError,
+    attach_bundle_meta,
+    build_agent_bundle,
+    harness_for_profile,
+    install_urls,
+    render_install_ps1,
+    render_install_sh,
+)
 from marketplace.manifest import AgentManifest, ManifestValidationError, validate_manifest, parse_manifest
 from marketplace.skills import SkillManifest, SkillRegistry, SkillSearchQuery, parse_skill
 from marketplace.deps import DependencyResolver, Dependency, parse_dependencies, satisfies
@@ -33,6 +42,13 @@ __all__ = [
     "CATALOG",
     "DEFAULT_TENANT_ID",
     "MarketplaceService",
+    "BundleError",
+    "build_agent_bundle",
+    "attach_bundle_meta",
+    "harness_for_profile",
+    "install_urls",
+    "render_install_ps1",
+    "render_install_sh",
     "AgentManifest",
     "ManifestValidationError",
     "validate_manifest",

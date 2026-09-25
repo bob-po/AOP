@@ -31,9 +31,9 @@ import {
 } from "@/lib/api";
 
 const TEMPLATES = [
-  { label: "产品调研", text: "帮我调研一款AI产品，搜索资料，RAG分析，生成宣传图，输出报告" },
-  { label: "PPT生成", text: "搜索并检索知识库后，生成一份产品发布演示 PPT" },
-  { label: "视频制作", text: "搜索 A2A Agent Orchestration 的公开资料并总结成宣传文案" },
+  { label: "产品调研", text: "用 researcher agent 调研一款 AI 产品，整理公开资料并输出研究摘要" },
+  { label: "代码协助", text: "用 coder agent 帮我检查 A2A cancel 链路并给出修复建议" },
+  { label: "部署清单", text: "给出在远端主机用 install.ps1 部署 claude-coder 并注册到 OS 的步骤" },
 ];
 
 function Kpi({

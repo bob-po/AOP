@@ -49,13 +49,16 @@ SDK 负责 Internal ↔ A2A 消息转换；规范升级时只改 SDK。
 ## 验收命令
 
 ```bash
-# 单 Agent
-cd agents/search-agent && uvicorn agent:app --port 8001
-cd apps/orchestrator && python scripts/call_search_agent.py --query "A2A"
+# 单虚拟 Agent（示例：claude-coder）
+$env:HARNESS_PROFILE="claude-coder"; $env:PORT="8011"
+uvicorn agent:app --app-dir agents/harness-agent --port 8011
 
 # 全套注册
 python scripts/start_and_register_agents.py
 
 # 智能路由预览
-curl "http://127.0.0.1:8080/v1/router/preview?skill=web-search"
+curl "http://127.0.0.1:8080/v1/router/preview?skill=web-research"
+
+# Marketplace 一键安装（远端）
+# irm http://127.0.0.1:8090/install/claude-coder.ps1 | iex
 ```

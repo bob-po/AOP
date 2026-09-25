@@ -12,28 +12,27 @@ from urllib.parse import urlparse
 HIGH_RISK_SKILLS: frozenset[str] = frozenset(
     {
         "code-execution",
-        "browser-automation",
     }
 )
 
 # Endpoint hostnames permitted for high-risk skills
 HIGH_RISK_HOSTS: frozenset[str] = frozenset(
     {
-        "code-agent",
-        "browser-agent",
+        "claude-coder",
+        "pi-coder",
+        "deepseek-coder",
+        "harness-agent",
         "127.0.0.1",
         "localhost",
     }
 )
 
 SKILL_TO_HOST: dict[str, str] = {
-    "code-execution": "code-agent",
-    "browser-automation": "browser-agent",
+    "code-execution": "claude-coder",
 }
 
 SKILL_TO_PROFILE: dict[str, str] = {
     "code-execution": "code-agent.json",
-    "browser-automation": "browser-agent.json",
 }
 
 DEFAULT_PROFILE = "agent-hardened.json"
@@ -97,8 +96,11 @@ def check_high_risk_endpoint(skill: str | None, endpoint: str) -> None:
         )
     host = (urlparse(endpoint).hostname or "").lower()
     expected = SKILL_TO_HOST.get(skill)
-    allowed = {expected, "127.0.0.1", "localhost"} if expected else set(HIGH_RISK_HOSTS)
+    # Any HIGH_RISK_HOSTS entry is acceptable for code-execution (multi-harness).
+    allowed = set(HIGH_RISK_HOSTS)
+    if expected:
+        allowed.add(expected)
     if host not in allowed:
         raise SandboxViolation(
-            f"high-risk skill {skill} requires host {expected}/localhost, got {host}"
+            f"high-risk skill {skill} requires host in {sorted(allowed)}, got {host}"
         )

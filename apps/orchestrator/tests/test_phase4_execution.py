@@ -107,6 +107,30 @@ def test_cancel_fanout_walks_graph():
     assert {t for _, t in cancelled_a2a} >= {"b", "c"}
 
 
+def test_cancel_fanout_extra_a2a_targets():
+    svc = ExecutionService(config=ExecutionConfig(store="memory", outbox_enabled=False))
+    svc.create(task_id="root-x", root_task_id="root-x")
+    svc.start("root-x")
+    seen = []
+
+    def a2a_cancel(ep, tid):
+        seen.append((ep, tid))
+        return True
+
+    result = cancel_fanout(
+        root_task_id="root-x",
+        execution_service=svc,
+        a2a_cancel=a2a_cancel,
+        extra_a2a_targets=[
+            {"endpoint": "http://harness", "task_id": "root-x", "agent_id": "H"},
+            {"endpoint": "http://harness", "task_id": "a2a-uuid", "agent_id": "H"},
+        ],
+    )
+    assert ("http://harness", "root-x") in seen
+    assert ("http://harness", "a2a-uuid") in seen
+    assert all(r["ok"] for r in result["a2a_cancel"])
+
+
 def test_capacity_queue_fifo_and_depth():
     q = CapacityQueue(max_depth=2)
     a = q.enqueue(task_id="t1", agent_id="B", priority=100)

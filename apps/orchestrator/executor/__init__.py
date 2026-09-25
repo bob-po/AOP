@@ -108,8 +108,10 @@ class A2AExecutor:
             card = client.card
             # Seed A2A lineage from the central OS task so Agent networks inherit
             # the orchestrator task as root_task_id (Phase 2 Task↔Runtime Graph).
+            # Stable a2a task id lets OS cancel in-flight work before completion.
             root = task_id
             corr = correlation_id or task_id
+            a2a_task_id = str(uuid.uuid4())
             task = client.send_text(
                 q,
                 skill_id=skill_id,
@@ -121,6 +123,7 @@ class A2AExecutor:
                 caller_agent_id=caller_agent_id or "orchestrator",
                 target_agent_id=target_agent_id,
                 visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
+                task_id=a2a_task_id,
             )
             text = clamp_output(first_text_artifact(task), self.policy)
             result = ExecutionResult(

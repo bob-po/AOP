@@ -240,6 +240,44 @@ class Scheduler:
             ).fetchone()
             return dict(row) if row else None
 
+    def list_a2a_cancel_targets(self, task_id: str) -> list[dict[str, Any]]:
+        """Nodes that may still hold in-flight harness work (for A2A tasks/cancel)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT node_key, status,
+                       assigned_agent_id::text AS agent_id,
+                       output_json
+                FROM task_nodes
+                WHERE task_id = %s::uuid
+                  AND status IN ('running', 'ready', 'retrying', 'waiting_for_user')
+                  AND assigned_agent_id IS NOT NULL
+                ORDER BY updated_at ASC NULLS LAST, node_key ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            output = d.get("output_json") or {}
+            if isinstance(output, str):
+                try:
+                    output = json.loads(output)
+                except Exception:  # noqa: BLE001
+                    output = {}
+            a2a_id = None
+            if isinstance(output, dict):
+                a2a_id = output.get("a2a_task_id") or output.get("a2aTaskId")
+            out.append(
+                {
+                    "node_key": d.get("node_key"),
+                    "status": d.get("status"),
+                    "agent_id": d.get("agent_id"),
+                    "a2a_task_id": a2a_id,
+                }
+            )
+        return out
+
     def get_task_goal(self, task_id: str) -> str:
         with self._connect() as conn:
             row = conn.execute(
@@ -388,10 +426,12 @@ class Scheduler:
                 )
                 conn.execute(
                     """
-                    UPDATE tasks SET status = 'running', updated_at = %s
+                    UPDATE tasks SET status = 'running',
+                        progress = GREATEST(COALESCE(progress, 0), %s),
+                        updated_at = %s
                     WHERE id = %s::uuid AND status IN ('ready', 'planning', 'running')
                     """,
-                    (now, task_id),
+                    (15 if attempt >= 1 else 5, now, task_id),
                 )
                 return True
 

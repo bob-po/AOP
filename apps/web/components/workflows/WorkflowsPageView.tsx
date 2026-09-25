@@ -82,14 +82,14 @@ export function WorkflowsPageView() {
   const [items, setItems] = useState<Workflow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [goal, setGoal] = useState(
-    "帮我研究一个 AI 产品，搜索资料并结合知识库分析，然后生成一份报告",
+    "用 researcher agent 调研一个 AI 产品，整理公开资料并给出研究摘要",
   );
   const [running, setRunning] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("Custom Workflow");
   const [desc, setDesc] = useState("");
-  const [skillInput, setSkillInput] = useState("web-search");
-  const [nodeId, setNodeId] = useState("search");
+  const [skillInput, setSkillInput] = useState("web-research");
+  const [nodeId, setNodeId] = useState("research");
   const [busy, setBusy] = useState(false);
 
   const initial = useMemo(
@@ -97,9 +97,9 @@ export function WorkflowsPageView() {
       dagToFlow({
         title: "Custom",
         nodes: [
-          { id: "search", skill: "web-search" },
-          { id: "rag", skill: "knowledge-search" },
-          { id: "report", skill: "report-generation", depends_on: ["search", "rag"] },
+          { id: "research", skill: "web-research" },
+          { id: "summarize", skill: "research-summarize", depends_on: ["research"] },
+          { id: "code", skill: "code-assist", depends_on: ["summarize"] },
         ],
       }),
     [],

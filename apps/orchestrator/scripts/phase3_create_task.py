@@ -27,7 +27,7 @@ def main() -> int:
     parser.add_argument("--skip-register", action="store_true")
     parser.add_argument(
         "--goal",
-        default="帮我研究一个 AI 产品，搜索资料并结合知识库分析，然后生成一份报告",
+        default="用 researcher 调研一个 AI 产品，整理公开资料并给出研究摘要",
     )
     args = parser.parse_args()
     gateway = args.gateway.rstrip("/")
@@ -35,9 +35,9 @@ def main() -> int:
     if not args.skip_register:
         print("[1/4] Registering agents ...")
         for ep in (
-            "http://127.0.0.1:8001",
-            "http://127.0.0.1:8002",
-            "http://127.0.0.1:8003",
+            "http://127.0.0.1:8011",
+            "http://127.0.0.1:8012",
+            "http://127.0.0.1:8015",
         ):
             try:
                 data = register(gateway, ep)

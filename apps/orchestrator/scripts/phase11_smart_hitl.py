@@ -19,8 +19,8 @@ def main() -> int:
         if r.status_code != 200:
             return 1
 
-    print("[2/4] GET /v1/router/preview?skill=web-search ...")
-    prev = httpx.get(f"{GATEWAY}/v1/router/preview", params={"skill": "web-search"}, timeout=10)
+    print("[2/4] GET /v1/router/preview?skill=web-research ...")
+    prev = httpx.get(f"{GATEWAY}/v1/router/preview", params={"skill": "web-research"}, timeout=10)
     print(f"      status={prev.status_code}")
     if prev.status_code != 200:
         print(prev.text)

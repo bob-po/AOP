@@ -21,9 +21,9 @@ Open http://127.0.0.1:3000
 |-------|---------|
 | `/` | Central dialog — create Task |
 | `/tasks/[id]` | DAG + Live Trace (1s poll) + Artifacts |
-| `/marketplace` | Agent catalog — install / enable / health probe |
+| `/marketplace` | Virtual agents (harness × role) — Register / Deploy (`irm … \| iex`) / zip download |
 | `/workflows` | Workflow templates — Run skips Planner |
-| `/agents` | Registry list (skill / status) |
+| `/agents` | Registry + market tab + router preview |
 
 ## Stack
 

@@ -16,16 +16,16 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument(
         "--goal",
-        default="帮我研究一个 AI 产品，搜索资料并结合知识库分析，然后生成一份报告",
+        default="用 researcher 调研一个 AI 产品，整理公开资料并给出研究摘要",
     )
     args = parser.parse_args()
     gateway = args.gateway.rstrip("/")
 
     print("[1/4] Register agents ...")
     for ep in (
-        "http://127.0.0.1:8001",
-        "http://127.0.0.1:8002",
-        "http://127.0.0.1:8003",
+        "http://127.0.0.1:8011",
+        "http://127.0.0.1:8012",
+        "http://127.0.0.1:8015",
     ):
         r = httpx.post(f"{gateway}/v1/agents/register", json={"endpoint": ep}, timeout=30)
         print(f"      {ep} -> {r.status_code}")
@@ -46,15 +46,19 @@ def main() -> int:
             f"{gateway}/v1/workflows",
             json={
                 "name": "Research Pipeline",
-                "description": "search || rag -> report",
+                "description": "web-research -> research-summarize -> code-assist",
                 "dag": {
                     "nodes": [
-                        {"id": "search", "skill": "web-search"},
-                        {"id": "rag", "skill": "knowledge-search"},
+                        {"id": "research", "skill": "web-research"},
                         {
-                            "id": "report",
-                            "skill": "report-generation",
-                            "depends_on": ["search", "rag"],
+                            "id": "summarize",
+                            "skill": "research-summarize",
+                            "depends_on": ["research"],
+                        },
+                        {
+                            "id": "code",
+                            "skill": "code-assist",
+                            "depends_on": ["summarize"],
                         },
                     ]
                 },

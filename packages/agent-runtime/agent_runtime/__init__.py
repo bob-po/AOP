@@ -41,6 +41,16 @@ from .a2a_server import (
 )
 from .agent_collab import AgentCollaborator
 
+# Harness adapters (optional FastAPI at create_harness_app time)
+from .harness.protocol import (
+    SCHEMA_VERSION,
+    HarnessEvent,
+    HarnessEventType,
+    HarnessResult,
+    HarnessStatus,
+    TokenUsage,
+)
+
 __all__ = [
     "AgentRuntime",
     "AgentRuntimeConfig",
@@ -70,4 +80,10 @@ __all__ = [
     "notify_callback",
     "handle_control_method",
     "AgentCollaborator",
+    "SCHEMA_VERSION",
+    "HarnessEvent",
+    "HarnessEventType",
+    "HarnessResult",
+    "HarnessStatus",
+    "TokenUsage",
 ]

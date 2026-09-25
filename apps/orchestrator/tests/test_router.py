@@ -10,8 +10,8 @@ from router.scoring import ScoringWeights, ScoringPolicy, ScoringEngine
 
 
 def test_normalize_endpoint_maps_docker_hostnames():
-    assert normalize_endpoint("http://search-agent:8001/") == "http://127.0.0.1:8001/"
-    assert normalize_endpoint("http://rag-agent:8002/a2a") == "http://127.0.0.1:8002/"
+    assert normalize_endpoint("http://claude-coder:8011/") == "http://127.0.0.1:8011/"
+    assert normalize_endpoint("http://pi-researcher:8014/a2a") == "http://127.0.0.1:8014/"
     assert normalize_endpoint("http://example.com:9000/") == "http://example.com:9000/"
 
 

@@ -109,6 +109,16 @@ def test_cancel_task():
     assert result is True
 
 
+def test_cancel_task_accepts_task_dict():
+    client = A2AClient("http://test-agent", card=None)
+    client._rpc = lambda method, params: {
+        "id": params["id"],
+        "status": {"state": "canceled"},
+        "artifacts": [],
+    }
+    assert client.cancel_task("task-os-root") is True
+
+
 def test_delegate_task():
     mock_agent = MockAgent()
     mock_agent.add_response({

@@ -84,11 +84,11 @@ docker compose -f docker-compose.single.yml --profile observability up -d promet
 浏览器 → :3000 web
        → :8080 gateway → orchestrator :8090
                       → postgres / redis
-worker ← redis streams → agents (search…video)
+worker ← redis streams → harness virtual agents (claude/pi/deepseek × role)
 artifacts → minio :9000
 ```
 
-Agent 在容器网内用服务名注册（如 `http://search-agent:8001`），Worker 与 Gateway 均可直连。
+Agent 在容器网内用服务名注册（如 `http://claude-coder:8011`），见 `docker-compose.single.yml`。
 
 ## 安全建议（上公网）
 

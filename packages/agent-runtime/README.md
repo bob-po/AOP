@@ -255,11 +255,11 @@ print(f"Tool success: {tool_result.success}")
 The runtime is designed to integrate with existing AOP agents:
 
 ```python
-# In existing agent (e.g., analysis-agent/agent.py)
+# In a harness profile agent (e.g., agents/harness-agent/agent.py)
 from agent_runtime import AgentRuntime, Tool, ToolResult
 from llm_provider import OpenAIProvider, LLMProviderConfig
 
-class AnalysisAgent(AgentRuntime):
+class HarnessProfileAgent(AgentRuntime):
     def __init__(self):
         # Initialize with existing config
         config = AgentRuntimeConfig(max_tool_iterations=5)
@@ -279,6 +279,23 @@ class AnalysisAgent(AgentRuntime):
     def get_llm_provider(self):
         return self._llm_provider
 ```
+
+## Harness adapters (Phase 1)
+
+A2A shell + pluggable execution kernels (Claude CLI first):
+
+```python
+from agent_runtime.harness import create_harness_app
+from agent_runtime.harness.runners import ClaudeCliRunner
+
+app = create_harness_app(
+    agent_id="claude-coder",
+    runner=ClaudeCliRunner(),
+    card_path="profiles/claude-coder/agent-card.json",
+)
+```
+
+See [`docs/architecture/harness-migration.md`](../../docs/architecture/harness-migration.md) and `agents/harness-agent/`.
 
 ## Testing
 

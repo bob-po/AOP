@@ -25,6 +25,14 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[worker] metrics server skipped: {exc}")
 
+    try:
+        from error_handling import reset_circuit_breakers
+
+        reset_circuit_breakers()
+        print("[worker] circuit breakers reset")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[worker] circuit breaker reset skipped: {exc}")
+
     ExecutionEngine(consumer_name=args.consumer).run_forever()
 
 

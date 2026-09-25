@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2 smoke: register Search Agent → route by skill → A2A execute."""
+"""Phase 2 smoke: register harness agent → route by skill → A2A execute."""
 
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ from router import AgentRouter, RouterError, normalize_endpoint  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase 2 register + route + execute")
     parser.add_argument("--gateway", default="http://127.0.0.1:8080")
-    parser.add_argument("--agent", default="http://127.0.0.1:8001")
-    parser.add_argument("--skill", default="web-search")
+    parser.add_argument("--agent", default="http://127.0.0.1:8011")
+    parser.add_argument("--skill", default="code-assist")
     parser.add_argument("--query", default="A2A Agent Registry")
     parser.add_argument("--skip-register", action="store_true")
     args = parser.parse_args()

@@ -70,23 +70,24 @@ set ORCHESTRATOR_URL=http://127.0.0.1:8090
 go run ./cmd/
 ```
 
-### 4. Agents（8001–8008）并注册
+### 4. Harness 虚拟 Agents（8011–8016）并注册
 
 ```bash
+pip install -e "packages/agent-runtime[harness]"
 pip install -e packages/a2a-sdk
 python scripts/start_and_register_agents.py
 ```
 
-| Agent | Port | Skills（摘要） |
-|-------|------|----------------|
-| search | 8001 | web-search |
-| rag | 8002 | knowledge-search, qa |
-| report | 8003 | report-generation |
-| analysis | 8004 | business-analysis |
-| image | 8005 | text-to-image |
-| video | 8006 | text-to-video |
-| code | 8007 | code-execution（AST-safe） |
-| browser | 8008 | browser-automation（stub / Playwright） |
+| Profile | Port | Skills（摘要） |
+|---------|------|----------------|
+| claude-coder | 8011 | code-execution, code-assist |
+| claude-researcher | 8012 | web-research, research-summarize, web-search |
+| pi-coder | 8013 | code-execution, code-assist |
+| pi-researcher | 8014 | web-research, research-summarize, web-search |
+| deepseek-coder | 8015 | code-execution, code-assist |
+| deepseek-researcher | 8016 | web-research, research-summarize, web-search |
+
+详见 [harness-migration.md](./docs/architecture/harness-migration.md)。远端主机：`irm http://<os>:8000/install/claude-coder.ps1 | iex`
 
 ### 5. Web Console
 
@@ -166,9 +167,9 @@ cd apps/orchestrator && python scripts/phase25_auth_users.py
 | Phase | 文档 / 冒烟 |
 |-------|-------------|
 | 26 Billing | [billing.md](./docs/reference/billing.md) · `phase26_billing.py` |
-| 27 seccomp / Code·Browser | [agent-sandbox.md](./docs/architecture/agent-sandbox.md) · `phase27_seccomp.py` |
+| 27 seccomp | [agent-sandbox.md](./docs/architecture/agent-sandbox.md) · `phase27_seccomp.py` |
 | 28 Quotas | [quotas.md](./docs/reference/quotas.md) · `phase28_quotas.py` |
-| 29 Chromium | `agents/browser-agent` · `phase29_browser_chromium.py` |
+| 29 Chromium | ~~browser-agent~~ 已下线 · seccomp `browser-agent.json` 已移除 |
 | 30–32 Invoice / Stripe | [billing-invoice.md](./docs/reference/billing-invoice.md) · `phase30`–`phase32_*.py` |
 | 33 Quota boost | `phase33_quota_boost.py` |
 | 34 Egress | [egress.md](./docs/reference/egress.md) · `phase34_egress.py` |

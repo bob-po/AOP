@@ -86,20 +86,23 @@ except ImportError:
 # Request tracking for P36.1 idempotency (lazy import to avoid circular dependency)
 REQUEST_TRACKING_AVAILABLE = False
 
-# Enhanced retry policy for worker operations
+# Enhanced retry policy for worker operations.
+# Inner attempts stay at 1 — node-level scheduler already retries up to max_retry.
+# Nested retries + circuit breaker burned the budget during long DeerFlow calls.
 if ERROR_HANDLING_AVAILABLE:
     WORKER_RETRY_POLICY = RetryPolicy(
-        max_attempts=3,
-        base_delay=1.0,
+        max_attempts=1,
+        base_delay=2.0,
         max_delay=30.0,
         exponential_base=2.0,
-        jitter=True
+        jitter=True,
     )
 else:
     WORKER_RETRY_POLICY = None
 
-# attempt 1→2: 1s, 2→3: 3s, 3→fail handled before sleep for next
+# attempt 1→2: 1s, 2→3: 3s; circuit-breaker open uses recovery window below
 BACKOFF_SECONDS = {1: 1.0, 2: 3.0, 3: 10.0}
+CIRCUIT_BREAKER_RETRY_DELAY = float(os.getenv("CIRCUIT_BREAKER_RETRY_DELAY", "65"))
 # Long-running node stale reclaim (seconds). 0 disables.
 NODE_STALE_SECONDS = float(os.getenv("NODE_STALE_SECONDS", "900"))
 
@@ -164,9 +167,16 @@ class ExecutionEngine:
         task_id: str | None = None,
         target_agent_id: str | None = None,
     ):
-        """Execute A2A call with circuit breaker + retry."""
+        """Execute A2A call with circuit breaker + retry.
+
+        Circuit breaker only counts transport failures (timeout / network).
+        Application-level ``task.status=failed`` (e.g. empty DeerFlow) must
+        not trip the breaker — otherwise one long research + empty result
+        burns the failure budget and blocks legitimate retries.
+        """
         def execute_a2a():
-            result = self.executor.execute(
+            # Raise only on transport errors; return failed Task to caller.
+            return self.executor.execute(
                 endpoint,
                 query,
                 skill_id=skill,
@@ -175,16 +185,17 @@ class ExecutionEngine:
                 correlation_id=task_id,
                 target_agent_id=target_agent_id,
             )
-            if not result.ok:
-                error_msg = f"A2A execution failed with status {result.task.status.value}"
-                raise handle_a2a_error(RuntimeError(error_msg))
-            return result
 
         def guarded():
             breaker = get_circuit_breaker(f"a2a:{endpoint}") if get_circuit_breaker else None
             if breaker is not None:
-                return breaker.call(execute_a2a)
-            return execute_a2a()
+                result = breaker.call(execute_a2a)
+            else:
+                result = execute_a2a()
+            if not result.ok:
+                error_msg = f"A2A execution failed with status {result.task.status.value}"
+                raise handle_a2a_error(RuntimeError(error_msg))
+            return result
 
         if with_retry:
             @with_retry(policy=WORKER_RETRY_POLICY)
@@ -489,13 +500,16 @@ class ExecutionEngine:
             except CircuitBreakerOpenError as exc:
                 if TRACING_AVAILABLE:
                     record_span_exception(exc)
+                # Wait for breaker recovery; do NOT exclude the only agent —
+                # otherwise the next attempt fails with "no online agent".
                 self._on_failure(
                     fields,
                     error=str(exc),
                     attempt=attempt,
                     agent_id=routed.agent_id,
-                    exclude=exclude | {routed.agent_id},
+                    exclude=exclude,
                     idempotency_key=idempotency_key,
+                    force_delay=CIRCUIT_BREAKER_RETRY_DELAY,
                 )
             except Exception as exc:  # noqa: BLE001
                 if TRACING_AVAILABLE:
@@ -518,6 +532,7 @@ class ExecutionEngine:
         agent_id: str | None,
         exclude: set[str],
         idempotency_key: str | None = None,
+        force_delay: float | None = None,
     ) -> None:
         task_id = fields["task_id"]
         node_key = fields["node_key"]
@@ -573,7 +588,11 @@ class ExecutionEngine:
             },
         )
         if decision.get("decision") == "retry":
-            delay = BACKOFF_SECONDS.get(attempt, 10.0)
+            delay = (
+                float(force_delay)
+                if force_delay is not None
+                else BACKOFF_SECONDS.get(attempt, 10.0)
+            )
             next_attempt = int(decision["next_attempt"])
             print(
                 f"[worker] retry node={node_key} next_attempt={next_attempt} "
