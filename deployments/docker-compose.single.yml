@@ -93,16 +93,15 @@ services:
       "
     restart: "no"
 
-  claude-coder:
+  claude-code:
     build: *harness-build
-    container_name: aop-claude-coder
+    container_name: aop-claude-code
     environment:
-      HARNESS_PROFILE: claude-coder
-      AGENT_ID: claude-coder
+      HARNESS_PROFILE: claude-code
+      AGENT_ID: claude-code
       PORT: "8011"
-      AGENT_URL: http://claude-coder:8011/
+      AGENT_URL: http://claude-code:8011/
       A2A_OS_URL: http://gateway:8080
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
@@ -115,21 +114,23 @@ services:
       retries: 10
     restart: unless-stopped
 
-  claude-researcher:
+  deepseek-harness:
     build: *harness-build
-    container_name: aop-claude-researcher
+    container_name: aop-deepseek-harness
     environment:
-      HARNESS_PROFILE: claude-researcher
-      AGENT_ID: claude-researcher
+      HARNESS_PROFILE: deepseek-harness
+      AGENT_ID: deepseek-harness
       PORT: "8012"
-      AGENT_URL: http://claude-researcher:8012/
+      AGENT_URL: http://deepseek-harness:8012/
       A2A_OS_URL: http://gateway:8080
+      DSH_RUNNER_MODE: ${DSH_RUNNER_MODE:-tool_loop}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${OPENAI_BASE_URL:-https://api.deepseek.com}}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-${OPENAI_MODEL:-deepseek-chat}}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "8012:8012"
-    <<: [*agent-resources, *agent-security]
+    <<: [*agent-resources, *code-security]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8012/health')"]
       interval: 10s
@@ -137,91 +138,21 @@ services:
       retries: 10
     restart: unless-stopped
 
-  pi-coder:
+  pi:
     build: *harness-build
-    container_name: aop-pi-coder
+    container_name: aop-pi
     environment:
-      HARNESS_PROFILE: pi-coder
-      AGENT_ID: pi-coder
+      HARNESS_PROFILE: pi
+      AGENT_ID: pi
       PORT: "8013"
-      AGENT_URL: http://pi-coder:8013/
+      AGENT_URL: http://pi:8013/
       A2A_OS_URL: http://gateway:8080
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "8013:8013"
     <<: [*agent-resources, *code-security]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8013/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  pi-researcher:
-    build: *harness-build
-    container_name: aop-pi-researcher
-    environment:
-      HARNESS_PROFILE: pi-researcher
-      AGENT_ID: pi-researcher
-      PORT: "8014"
-      AGENT_URL: http://pi-researcher:8014/
-      A2A_OS_URL: http://gateway:8080
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    ports:
-      - "8014:8014"
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  deepseek-coder:
-    build: *harness-build
-    container_name: aop-deepseek-coder
-    environment:
-      HARNESS_PROFILE: deepseek-coder
-      AGENT_ID: deepseek-coder
-      PORT: "8015"
-      AGENT_URL: http://deepseek-coder:8015/
-      A2A_OS_URL: http://gateway:8080
-      DSH_RUNNER_MODE: ${DSH_RUNNER_MODE:-tool_loop}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${OPENAI_BASE_URL:-https://api.deepseek.com}}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-${OPENAI_MODEL:-deepseek-chat}}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    ports:
-      - "8015:8015"
-    <<: [*agent-resources, *code-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
-  deepseek-researcher:
-    build: *harness-build
-    container_name: aop-deepseek-researcher
-    environment:
-      HARNESS_PROFILE: deepseek-researcher
-      AGENT_ID: deepseek-researcher
-      PORT: "8016"
-      AGENT_URL: http://deepseek-researcher:8016/
-      A2A_OS_URL: http://gateway:8080
-      DSH_RUNNER_MODE: ${DSH_RUNNER_MODE:-tool_loop}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${OPENAI_API_KEY:-}}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-${OPENAI_BASE_URL:-https://api.deepseek.com}}
-      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-${OPENAI_MODEL:-deepseek-chat}}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    ports:
-      - "8016:8016"
-    <<: [*agent-resources, *agent-security]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8016/health')"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -271,12 +202,9 @@ services:
       MINIO_BUCKET: aop-artifacts
       MINIO_SECURE: "false"
       MINIO_PUBLIC_BASE: ${AOP_PUBLIC_SCHEME:-http}://${AOP_PUBLIC_HOST:-127.0.0.1}:9000/aop-artifacts
-      AOP_AGENT_CLAUDE_CODER_URL: http://claude-coder:8011
-      AOP_AGENT_CLAUDE_RESEARCHER_URL: http://claude-researcher:8012
-      AOP_AGENT_PI_CODER_URL: http://pi-coder:8013
-      AOP_AGENT_PI_RESEARCHER_URL: http://pi-researcher:8014
-      AOP_AGENT_DEEPSEEK_CODER_URL: http://deepseek-coder:8015
-      AOP_AGENT_DEEPSEEK_RESEARCHER_URL: http://deepseek-researcher:8016
+      AOP_AGENT_CLAUDE_CODE_URL: http://claude-code:8011
+      AOP_AGENT_DEEPSEEK_HARNESS_URL: http://deepseek-harness:8012
+      AOP_AGENT_PI_URL: http://pi:8013
       METRICS_PORT: "9091"
       ORCHESTRATOR_PORT: "8090"
       AOP_RUNTIME: docker
@@ -373,26 +301,17 @@ services:
     environment:
       GATEWAY_URL: http://gateway:8080
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-aop_sk_dev_local_0000000000000001}
-      AOP_AGENT_CLAUDE_CODER_URL: http://claude-coder:8011
-      AOP_AGENT_CLAUDE_RESEARCHER_URL: http://claude-researcher:8012
-      AOP_AGENT_PI_CODER_URL: http://pi-coder:8013
-      AOP_AGENT_PI_RESEARCHER_URL: http://pi-researcher:8014
-      AOP_AGENT_DEEPSEEK_CODER_URL: http://deepseek-coder:8015
-      AOP_AGENT_DEEPSEEK_RESEARCHER_URL: http://deepseek-researcher:8016
+      AOP_AGENT_CLAUDE_CODE_URL: http://claude-code:8011
+      AOP_AGENT_DEEPSEEK_HARNESS_URL: http://deepseek-harness:8012
+      AOP_AGENT_PI_URL: http://pi:8013
     depends_on:
       gateway:
         condition: service_healthy
-      claude-coder:
+      claude-code:
         condition: service_started
-      claude-researcher:
+      deepseek-harness:
         condition: service_started
-      pi-coder:
-        condition: service_started
-      pi-researcher:
-        condition: service_started
-      deepseek-coder:
-        condition: service_started
-      deepseek-researcher:
+      pi:
         condition: service_started
     restart: "no"
 

@@ -10,8 +10,9 @@ from router.scoring import ScoringWeights, ScoringPolicy, ScoringEngine
 
 
 def test_normalize_endpoint_maps_docker_hostnames():
-    assert normalize_endpoint("http://claude-coder:8011/") == "http://127.0.0.1:8011/"
-    assert normalize_endpoint("http://pi-researcher:8014/a2a") == "http://127.0.0.1:8014/"
+    assert normalize_endpoint("http://claude-code:8011/") == "http://127.0.0.1:8011/"
+    assert normalize_endpoint("http://deepseek-harness:8012/") == "http://127.0.0.1:8012/"
+    assert normalize_endpoint("http://pi:8013/") == "http://127.0.0.1:8013/"
     assert normalize_endpoint("http://example.com:9000/") == "http://example.com:9000/"
 
 

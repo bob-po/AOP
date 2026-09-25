@@ -22,12 +22,9 @@ class SandboxViolation(PermissionError):
 _DEFAULT_ALLOWED_HOSTS = (
     "127.0.0.1",
     "localhost",
-    "claude-coder",
-    "claude-researcher",
-    "pi-coder",
-    "pi-researcher",
-    "deepseek-coder",
-    "deepseek-researcher",
+    "claude-code",
+    "deepseek-harness",
+    "pi",
     "harness-agent",
     "host.docker.internal",
 )
@@ -79,8 +76,10 @@ class SandboxPolicy:
             allow = None
 
         timeouts: dict[str, float] = {
-            # DeerFlow / deep-research skills often exceed the generic A2A default.
+            # Research / deep-research skills often exceed the generic A2A default.
+            "web-research": 480.0,
             "web-search": 480.0,
+            "research-summarize": 300.0,
             "research": 480.0,
         }
         for part in os.getenv("AGENT_SKILL_TIMEOUTS", "").split(","):

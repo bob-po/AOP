@@ -19,13 +19,42 @@ from router import hitl_skills
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
-# Preferred research pipeline when skills exist in registry.
-PIPELINE: list[tuple[str, str, tuple[str, ...]]] = [
-    ("search", "web-search", ()),
-    ("rag", "knowledge-search", ()),
-    ("analysis", "business-analysis", ("search", "rag")),
-    ("report", "report-generation", ("analysis",)),
-]
+# Preferred default agent (agent_key). Override via DEFAULT_AGENT.
+_DEFAULT_AGENTS = (
+    "claude-code",
+    "deepseek-harness",
+    "pi",
+)
+
+
+def pick_agent(available: set[str], *candidates: str) -> str | None:
+    """Return the first candidate agent_key present in ``available``."""
+    for key in candidates:
+        if key in available:
+            return key
+    return None
+
+
+def default_agent(available: set[str]) -> str | None:
+    preferred = (os.getenv("DEFAULT_AGENT") or "claude-code").strip()
+    # Legacy env aliases
+    if not preferred or preferred == "claude-code":
+        preferred = (
+            os.getenv("DEFAULT_RESEARCH_AGENT")
+            or os.getenv("DEFAULT_CODE_AGENT")
+            or preferred
+        ).strip()
+        if preferred in {"claude-researcher", "claude-coder"}:
+            preferred = "claude-code"
+    ordered = (preferred,) + tuple(a for a in _DEFAULT_AGENTS if a != preferred)
+    return pick_agent(available, *ordered)
+
+
+# Back-compat aliases
+pick_skill = pick_agent
+default_research_skill = default_agent
+default_research_agent = default_agent
+default_code_agent = default_agent
 
 _SIMPLE_QA_MARKERS = (
     "一句话",
@@ -190,19 +219,24 @@ class Planner:
         if not goal:
             raise ValueError("goal is required")
 
-        available = set(self.list_available_skills())
+        available = set(self.list_available_agents())
         hitl = set(hitl_skills())
         method = "heuristic"
         nodes: list[PlanNode] = []
 
-        # 1) Multi-step wording → linear DAG (Phase 19)
-        if _planner_v2():
+        # Harness-first: default is a single hop to the preferred researcher
+        # (Claude Researcher). Multi-step / specialty pipelines stay opt-in.
+        if _planner_v2() and os.getenv("PLANNER_MULTI_STEP", "").lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
             stepped = decompose_to_nodes(goal, available, hitl=hitl)
             if stepped:
                 nodes = stepped
                 method = "heuristic_steps"
 
-        # 2) Default research / media heuristic
+        # 2) Default research / code heuristic (plan node.skill = agent_key)
         if not nodes:
             nodes = self._heuristic_nodes(goal, available)
             method = "heuristic"
@@ -223,143 +257,57 @@ class Planner:
                 except DAGValidationError:
                     pass  # keep heuristic / steps
 
-        # 4) Last-resort fallback
+        # 4) Last-resort fallback → default harness agent
         if not nodes:
-            if "web-search" in available:
-                nodes = [PlanNode(id="search", skill="web-search")]
+            agent = default_agent(available)
+            if agent:
+                nodes = [PlanNode(id="run", skill=agent)]
             elif available:
-                skill = sorted(available)[0]
-                nodes = [PlanNode(id="step1", skill=skill)]
+                key = sorted(available)[0]
+                nodes = [PlanNode(id="step1", skill=key)]
             else:
-                raise ValueError("no online agents/skills registered; cannot plan")
+                raise ValueError("no online agents registered; cannot plan")
             method = "fallback"
 
         plan = TaskPlan(title=title or _short_title(goal), goal=goal, nodes=nodes)
         validate_plan(plan, available_skills=available)
         return PlannerResult(plan=plan, method=method, available_skills=sorted(available))
 
-    def list_available_skills(self) -> list[str]:
+    def list_available_agents(self) -> list[str]:
+        """Online agent_keys (skills removed — route by agent)."""
         sql = """
-            SELECT DISTINCT s.skill_id
-            FROM agent_skills s
-            JOIN agents a ON a.id = s.agent_id
+            SELECT a.agent_key
+            FROM agents a
             WHERE a.tenant_id = %s::uuid
               AND a.status IN ('online', 'running')
-            ORDER BY s.skill_id
+              AND EXISTS (
+                SELECT 1 FROM agent_endpoints e
+                WHERE e.agent_id = a.id AND e.is_primary = true
+              )
+            ORDER BY a.agent_key
         """
         with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
-        return [r["skill_id"] for r in rows]
+        return [r["agent_key"] for r in rows if r.get("agent_key")]
+
+    def list_available_skills(self) -> list[str]:
+        """Deprecated alias — returns online agent_keys."""
+        return self.list_available_agents()
 
     def _heuristic_nodes(self, goal: str, available: set[str]) -> list[PlanNode]:
-        """Build a *minimal* intent DAG — do not dump the full research pipeline."""
-        text = goal.lower()
-        wants_report = _wants_report(goal)
-        wants_ppt = _wants_ppt(goal)
-        wants_search = _wants_search(goal)
-        wants_rag = _wants_rag(goal)
-        wants_analysis = _wants_analysis(goal)
-        deep = _wants_deep_research(goal)
-        wants_image = any(k in text for k in ("图", "image", "宣传图", "海报", "插画"))
-        wants_video = any(k in text for k in ("视频", "video", "短片", "宣传片"))
+        """Single hop to the default harness agent (claude-code)."""
         hitl = set(hitl_skills())
-
-        # Intro PPT without deep research / analysis / report → search→ppt only.
-        thin_intro_ppt = (
-            wants_ppt
-            and not wants_report
-            and not wants_analysis
-            and not deep
-            and not wants_rag
-        )
-
-        created: dict[str, PlanNode] = {}
-
-        def try_add(node_id: str, skill: str, depends_on: tuple[str, ...]) -> None:
-            if skill not in available or node_id in created:
-                return
-            deps = [d for d in depends_on if d in created]
-            created[node_id] = PlanNode(
-                id=node_id,
-                skill=skill,
-                depends_on=deps,
-                requires_approval=skill in hitl,
+        agent = default_agent(available)
+        if not agent:
+            return []
+        return [
+            PlanNode(
+                id="run",
+                skill=agent,  # task_nodes.skill stores target agent_key
+                depends_on=[],
+                requires_approval=agent in hitl,
             )
-
-        # Short factual Q&A → web-search only (DeerFlow/Bing already answer in-band).
-        if _is_simple_qa(goal):
-            try_add("search", "web-search", ())
-            return list(created.values())
-
-        # Pure media generation (no research / report / ppt wording).
-        researchish = (
-            wants_search
-            or wants_rag
-            or wants_analysis
-            or wants_report
-            or wants_ppt
-            or deep
-        )
-        if (wants_image or wants_video) and not researchish:
-            if wants_image:
-                try_add("image", "text-to-image", ())
-            if wants_video:
-                try_add("video", "text-to-video", ())
-            return list(created.values())
-
-        # --- gather context only when needed ---
-        need_search = (
-            wants_search
-            or wants_report
-            or wants_ppt
-            or wants_analysis
-            or deep
-            or (not created and not wants_image and not wants_video)
-        )
-        if need_search:
-            try_add("search", "web-search", ())
-
-        # RAG: explicit ask, or deep research (not thin intro PPT).
-        if wants_rag or (deep and not thin_intro_ppt):
-            try_add("rag", "knowledge-search", ())
-
-        # Analysis: explicit, report pipeline, or deep research (not thin PPT).
-        if wants_analysis or wants_report or (deep and not thin_intro_ppt):
-            analysis_deps = tuple(n for n in ("search", "rag") if n in created)
-            try_add("analysis", "business-analysis", analysis_deps)
-
-        if wants_report:
-            report_deps: tuple[str, ...] = (
-                ("analysis",) if "analysis" in created else tuple(created.keys())
-            )
-            try_add("report", "report-generation", report_deps)
-
-        if wants_ppt:
-            if "analysis" in created:
-                ppt_deps: tuple[str, ...] = ("analysis",)
-            elif "search" in created:
-                ppt_deps = ("search",)
-            elif "rag" in created:
-                ppt_deps = ("rag",)
-            else:
-                ppt_deps = ()
-            try_add("ppt", "ppt-generation", ppt_deps)
-
-        media_deps = tuple(
-            n for n in ("search", "rag", "analysis", "report", "ppt") if n in created
-        ) or ()
-        if wants_image:
-            try_add("image", "text-to-image", media_deps)
-        if wants_video:
-            try_add("video", "text-to-video", media_deps)
-
-        if not created:
-            for skill in sorted(available):
-                token = skill.replace("-", " ")
-                if skill in text or token in text:
-                    try_add(skill, skill, ())
-
-        return list(created.values())
+        ]
 
     def _try_llm_nodes(
         self,

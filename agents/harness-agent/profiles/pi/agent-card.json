@@ -1,0 +1,14 @@
+{
+  "name": "Pi",
+  "description": "Unified Pi harness agent. Receives the user goal directly (no skills).",
+  "url": "http://127.0.0.1:8013/",
+  "version": "0.1.0",
+  "protocolVersion": "0.3.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text", "application/json"],
+  "skills": []
+}

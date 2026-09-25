@@ -132,6 +132,7 @@ class ClaudeCliRunner:
             prompt,
             "--output-format",
             "stream-json",
+            "--verbose",
             *self.extra_args,
         ]
         env = dict(self.env or os.environ.copy())

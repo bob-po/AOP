@@ -70,7 +70,7 @@ set ORCHESTRATOR_URL=http://127.0.0.1:8090
 go run ./cmd/
 ```
 
-### 4. Harness 虚拟 Agents（8011–8016）并注册
+### 4. Harness Agents（Claude / DeepSeek / Pi）并注册
 
 ```bash
 pip install -e "packages/agent-runtime[harness]"
@@ -78,16 +78,13 @@ pip install -e packages/a2a-sdk
 python scripts/start_and_register_agents.py
 ```
 
-| Profile | Port | Skills（摘要） |
-|---------|------|----------------|
-| claude-coder | 8011 | code-execution, code-assist |
-| claude-researcher | 8012 | web-research, research-summarize, web-search |
-| pi-coder | 8013 | code-execution, code-assist |
-| pi-researcher | 8014 | web-research, research-summarize, web-search |
-| deepseek-coder | 8015 | code-execution, code-assist |
-| deepseek-researcher | 8016 | web-research, research-summarize, web-search |
+| Profile | Port | 说明 |
+|---------|------|------|
+| claude-code | 8011 | Claude Code Agent |
+| deepseek-harness | 8012 | DeepSeek Harness Agent |
+| pi | 8013 | Pi Agent |
 
-详见 [harness-migration.md](./docs/architecture/harness-migration.md)。远端主机：`irm http://<os>:8000/install/claude-coder.ps1 | iex`
+默认规划打到 `claude-code`（`DEFAULT_AGENT`）。详见 [harness-migration.md](./docs/architecture/harness-migration.md)。远端：`irm http://<os>:8000/install/claude-code.ps1 | iex`
 
 ### 5. Web Console
 

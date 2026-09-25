@@ -36,8 +36,6 @@ def main() -> int:
         print("[1/4] Registering agents ...")
         for ep in (
             "http://127.0.0.1:8011",
-            "http://127.0.0.1:8012",
-            "http://127.0.0.1:8015",
         ):
             try:
                 data = register(gateway, ep)

@@ -145,6 +145,12 @@ class AgentRouter:
         if not candidates:
             candidates = self._candidates_from_pg(skill)
             source = "pg"
+        # Skills removed: treat ``skill`` as agent_key and route directly.
+        if not candidates:
+            row = self._get_agent(skill)
+            if row:
+                candidates = [row]
+                source = "agent_key"
 
         online = [
             c
@@ -555,13 +561,13 @@ def normalize_endpoint(url: str) -> str:
     parsed = urlparse(url)
     host = parsed.hostname or ""
     mapped = {
-        "claude-coder": 8011,
-        "claude-researcher": 8012,
-        "pi-coder": 8013,
-        "pi-researcher": 8014,
-        "deepseek-coder": 8015,
-        "deepseek-researcher": 8016,
+        "claude-code": 8011,
+        "deepseek-harness": 8012,
+        "pi": 8013,
         "harness-agent": 8011,
+        # Legacy aliases
+        "claude-coder": 8011,
+        "claude-researcher": 8011,
     }
     if host in mapped:
         port = parsed.port or mapped[host]

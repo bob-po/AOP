@@ -18,9 +18,9 @@ HIGH_RISK_SKILLS: frozenset[str] = frozenset(
 # Endpoint hostnames permitted for high-risk skills
 HIGH_RISK_HOSTS: frozenset[str] = frozenset(
     {
-        "claude-coder",
-        "pi-coder",
-        "deepseek-coder",
+        "claude-code",
+        "deepseek-harness",
+        "pi",
         "harness-agent",
         "127.0.0.1",
         "localhost",
@@ -28,7 +28,7 @@ HIGH_RISK_HOSTS: frozenset[str] = frozenset(
 )
 
 SKILL_TO_HOST: dict[str, str] = {
-    "code-execution": "claude-coder",
+    "code-execution": "claude-code",
 }
 
 SKILL_TO_PROFILE: dict[str, str] = {

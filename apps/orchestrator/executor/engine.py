@@ -193,7 +193,33 @@ class ExecutionEngine:
             else:
                 result = execute_a2a()
             if not result.ok:
+                detail = ""
+                try:
+                    st = result.task.status
+                    msg = getattr(st, "message", None)
+                    if isinstance(msg, dict):
+                        parts = msg.get("parts") or []
+                        texts = [
+                            str(p.get("text") or "").strip()
+                            for p in parts
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        ]
+                        detail = " ".join(t for t in texts if t)
+                    elif msg is not None and hasattr(msg, "parts"):
+                        parts = msg.parts or []
+                        texts = []
+                        for p in parts:
+                            t = getattr(p, "text", None) or (
+                                p.get("text") if isinstance(p, dict) else None
+                            )
+                            if t:
+                                texts.append(str(t).strip())
+                        detail = " ".join(texts)
+                except Exception:  # noqa: BLE001
+                    detail = ""
                 error_msg = f"A2A execution failed with status {result.task.status.value}"
+                if detail:
+                    error_msg = f"{error_msg}: {detail[:500]}"
                 raise handle_a2a_error(RuntimeError(error_msg))
             return result
 

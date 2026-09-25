@@ -23,7 +23,9 @@ _DEFAULT_PRICES: dict[str, Any] = {
     "task_created": 0.02,
     "agent_run": 0.01,
     "per_skill": {
+        "web-research": 0.006,
         "web-search": 0.005,
+        "research-summarize": 0.01,
         "knowledge-search": 0.008,
         "business-analysis": 0.015,
         "report-generation": 0.02,

@@ -19,12 +19,9 @@ API_KEY = (
 
 # (name, endpoint env, default URL)
 AGENTS = [
-    ("claude-coder", "AOP_AGENT_CLAUDE_CODER_URL", "http://claude-coder:8011"),
-    ("claude-researcher", "AOP_AGENT_CLAUDE_RESEARCHER_URL", "http://claude-researcher:8012"),
-    ("pi-coder", "AOP_AGENT_PI_CODER_URL", "http://pi-coder:8013"),
-    ("pi-researcher", "AOP_AGENT_PI_RESEARCHER_URL", "http://pi-researcher:8014"),
-    ("deepseek-coder", "AOP_AGENT_DEEPSEEK_CODER_URL", "http://deepseek-coder:8015"),
-    ("deepseek-researcher", "AOP_AGENT_DEEPSEEK_RESEARCHER_URL", "http://deepseek-researcher:8016"),
+    ("claude-code", "AOP_AGENT_CLAUDE_CODE_URL", "http://claude-code:8011"),
+    ("deepseek-harness", "AOP_AGENT_DEEPSEEK_HARNESS_URL", "http://deepseek-harness:8012"),
+    ("pi", "AOP_AGENT_PI_URL", "http://pi:8013"),
 ]
 
 

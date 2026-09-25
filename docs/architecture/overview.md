@@ -25,7 +25,7 @@ Orchestrator (Python :8090)
         └── MinIO (Artifacts)
                 │
                 ▼
-        Harness virtual agents :8011–8016 (claude/pi/deepseek × coder/researcher)
+        Harness agents :8011–8013 (claude-code / deepseek-harness / pi)
 ```
 
 ## 专项设计

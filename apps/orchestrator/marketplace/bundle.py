@@ -36,12 +36,9 @@ _VENDOR_SKIP_DIR_NAMES = frozenset(
 _VENDOR_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 
 DEFAULT_PORTS: dict[str, int] = {
-    "claude-coder": 8011,
-    "claude-researcher": 8012,
-    "pi-coder": 8013,
-    "pi-researcher": 8014,
-    "deepseek-coder": 8015,
-    "deepseek-researcher": 8016,
+    "claude-code": 8011,
+    "deepseek-harness": 8012,
+    "pi": 8013,
 }
 
 HARNESS_BY_PREFIX: tuple[tuple[str, str], ...] = (

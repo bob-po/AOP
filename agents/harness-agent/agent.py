@@ -4,10 +4,9 @@ Select a virtual agent profile via ``HARNESS_PROFILE`` (directory under
 ``profiles/``). Runner defaults from profile name prefix unless
 ``HARNESS_RUNNER`` is set:
 
-- ``claude-*`` → Claude Code CLI (https://github.com/anthropics/claude-code)
-- ``pi-*`` → Pi CLI ``--mode json`` (https://github.com/earendil-works/pi)
-- ``deepseek-*`` → DeepSeek Harness SDK / dsh / tool_loop
-  (https://github.com/deepseek-ai/deepseek-harness)
+- ``claude-*`` / ``claude-code`` → Claude Code CLI
+- ``pi`` / ``pi-*`` → Pi CLI ``--mode json``
+- ``deepseek-*`` / ``dsh-*`` → DeepSeek Harness SDK / dsh / tool_loop
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from agent_runtime.harness.runners import create_runner
 ROOT = Path(__file__).resolve().parent
 PROFILES = ROOT / "profiles"
 
-PROFILE = os.getenv("HARNESS_PROFILE") or os.getenv("AGENT_ID") or "claude-coder"
+PROFILE = os.getenv("HARNESS_PROFILE") or os.getenv("AGENT_ID") or "claude-code"
 PROFILE_DIR = PROFILES / PROFILE
 if not PROFILE_DIR.is_dir():
     raise SystemExit(f"Unknown harness profile: {PROFILE!r} (looked in {PROFILES})")

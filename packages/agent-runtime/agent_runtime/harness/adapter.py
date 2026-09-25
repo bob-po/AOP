@@ -58,13 +58,14 @@ def _skill_id(params: dict[str, Any], card: dict[str, Any]) -> str:
     skills = card.get("skills") or []
     if skills:
         return str(skills[0].get("id") or "default")
-    return "default"
+    # No skills on card — pass-through agent identity / default.
+    return str(card.get("agentKey") or card.get("name") or "default")
 
 
 def _skill_allowed(skill_id: str, card: dict[str, Any]) -> bool:
     skills = card.get("skills") or []
     if not skills:
-        return True
+        return True  # skill-less virtual agents accept any / no skillId
     allowed = {str(s.get("id")) for s in skills if s.get("id")}
     return skill_id in allowed
 

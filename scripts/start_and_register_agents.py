@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Start harness virtual agents (Windows-friendly) and register to Gateway.
 
-Specialty agents under agents/* were removed; only ``agents/harness-agent`` remains.
+One profile per harness product: ``claude-code``, ``deepseek-harness``, ``pi``.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -17,14 +16,11 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# harness-agent is one codebase; profiles are virtual agent identities.
+# (profile dir name / agent_key, port)
 HARNESS_PROFILES = [
-    ("claude-coder", 8011),
-    ("claude-researcher", 8012),
-    ("pi-coder", 8013),
-    ("pi-researcher", 8014),
-    ("deepseek-coder", 8015),
-    ("deepseek-researcher", 8016),
+    ("claude-code", 8011),
+    ("deepseek-harness", 8012),
+    ("pi", 8013),
 ]
 
 GATEWAY = os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")

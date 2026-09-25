@@ -21,7 +21,7 @@
 | **Outbox Processor** | Python | 无（轮询 PG） | P36.2 outbox 投递（**必需**） |
 | **Gateway** | Go | `8080` | 注册中心 + 反向代理 + 鉴权 |
 | **Web Console** | Next.js 15 | `3000` | 前端 |
-| **Harness virtual agents** | Python | `8011`–`8016` | Claude/Pi/DeepSeek × coder|researcher（`agents/harness-agent`） |
+| **Harness agents** | Python | `8011`–`8013` | Claude Code / DeepSeek Harness / Pi（`agents/harness-agent`） |
 
 启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → Agents → Web**。
 
@@ -125,11 +125,11 @@ pip install -e packages/a2a-sdk      # 确保已装
 python scripts/start_and_register_agents.py
 ```
 
-脚本会按 profile 在 `8011`–`8016` 拉起 harness 虚拟 Agent（claude/pi/deepseek × coder|researcher），健康检查通过后向 Gateway 注册。远端主机可用 Marketplace 一键安装（`irm …/install.ps1 | iex`），见 [harness-migration.md](../architecture/harness-migration.md)。
+脚本会拉起 `claude-code`（:8011）、`deepseek-harness`（:8012）、`pi`（:8013），健康检查通过后向 Gateway 注册。远端主机可用 Marketplace 一键安装（`irm …/install.ps1 | iex`），见 [harness-migration.md](../architecture/harness-migration.md)。
 
 ```powershell
 # 仅启动部分 profile（可选）
-$env:HARNESS_PROFILES="claude-coder,deepseek-coder"
+$env:HARNESS_PROFILES="claude-code,pi"
 python scripts/start_and_register_agents.py
 ```
 
@@ -165,7 +165,7 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess -ErrorActio
 | `6379` | Redis | `9091` | 指标服务（orchestrator & worker 默认都抢） |
 | `9000/9001` | MinIO | `8080` | Gateway |
 | `9090` | Prometheus | `3000` | Web |
-| `3001` | Grafana | `8011–8016` | Harness virtual agents |
+| `3001` | Grafana | `8011–8013` | Claude / DeepSeek / Pi |
 | `9093` | Alertmanager | `5000` | Webhook |
 
 ---

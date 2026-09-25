@@ -25,8 +25,6 @@ def main() -> int:
     print("[1/4] Register agents ...")
     for ep in (
         "http://127.0.0.1:8011",
-        "http://127.0.0.1:8012",
-        "http://127.0.0.1:8015",
     ):
         r = httpx.post(f"{gateway}/v1/agents/register", json={"endpoint": ep}, timeout=30)
         print(f"      {ep} -> {r.status_code}")

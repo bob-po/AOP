@@ -31,8 +31,8 @@ import {
 } from "@/lib/api";
 
 const TEMPLATES = [
-  { label: "产品调研", text: "用 researcher agent 调研一款 AI 产品，整理公开资料并输出研究摘要" },
-  { label: "代码协助", text: "用 coder agent 帮我检查 A2A cancel 链路并给出修复建议" },
+  { label: "产品调研", text: "调研一款 AI 产品，整理公开资料并输出研究摘要" },
+  { label: "代码协助", text: "帮我检查 A2A cancel 链路并给出修复建议" },
   { label: "部署清单", text: "给出在远端主机用 install.ps1 部署 claude-coder 并注册到 OS 的步骤" },
 ];
 

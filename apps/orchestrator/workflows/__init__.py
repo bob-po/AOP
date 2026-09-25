@@ -19,15 +19,9 @@ from router import hitl_skills
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 DEFAULT_RESEARCH_DAG = {
-    "title": "Enterprise Research",
+    "title": "Claude Code Agent",
     "nodes": [
-        {"id": "search", "skill": "web-search"},
-        {"id": "rag", "skill": "knowledge-search"},
-        {
-            "id": "report",
-            "skill": "report-generation",
-            "depends_on": ["search", "rag"],
-        },
+        {"id": "run", "skill": "claude-code"},
     ],
 }
 
@@ -64,7 +58,7 @@ class WorkflowService:
                 return
         self.create(
             name="Enterprise Research",
-            description="Search + RAG in parallel, then generate a report",
+            description="Single hop to Claude Researcher",
             dag=DEFAULT_RESEARCH_DAG,
             workflow_key="enterprise-research",
             publish=True,
