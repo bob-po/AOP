@@ -15,6 +15,10 @@ from minio.error import S3Error
 
 
 DEFAULT_BUCKET = "aop-artifacts"
+# Primary human-readable node body (Markdown). Legacy: output.txt.
+PRIMARY_TEXT_NAME = "output.md"
+PRIMARY_TEXT_MIME = "text/markdown; charset=utf-8"
+LEGACY_TEXT_NAMES = ("output.md", "output.txt")  # preference order
 _MAX_BUNDLE_BYTES = 15_000_000
 _MAX_BUNDLE_FILES = 32
 _BUNDLE_EXACT = {"report.html", "report.css", "report.pdf", "deck.pptx", "report.pptx"}
@@ -22,6 +26,7 @@ _BUNDLE_DIRS = ("assets/images/", "assets/charts/", "assets/diagrams/")
 _MIME = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -30,6 +35,17 @@ _MIME = {
     ".json": "application/json",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
+
+
+def is_primary_text_artifact(*, name: str | None = None, uri: str | None = None) -> bool:
+    """True for output.md / legacy output.txt (by name or URI suffix)."""
+    base = (name or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base in LEGACY_TEXT_NAMES:
+        return True
+    if uri:
+        u = str(uri).replace("\\", "/").lower().rstrip("/")
+        return any(u.endswith(f"/{n}") or u.endswith(n) for n in LEGACY_TEXT_NAMES)
+    return False
 
 
 def safe_bundle_path(name: str) -> str | None:
@@ -183,14 +199,16 @@ class ArtifactStore:
         name: str,
         text: str,
         content_type: str = "text/plain; charset=utf-8",
+        artifact_type: str | None = None,
     ) -> ArtifactRef:
+        atype = artifact_type or ("markdown" if name.lower().endswith(".md") else "text")
         return self.put_bytes(
             task_id=task_id,
             node_key=node_key,
             name=name,
             data=text.encode("utf-8"),
             content_type=content_type,
-            artifact_type="text",
+            artifact_type=atype,
         )
 
     def put_json(
@@ -225,8 +243,9 @@ class ArtifactStore:
                 self.put_text(
                     task_id=task_id,
                     node_key=node_key,
-                    name="output.txt",
+                    name=PRIMARY_TEXT_NAME,
                     text=text,
+                    content_type=PRIMARY_TEXT_MIME,
                 )
             )
         if data is not None:
@@ -331,8 +350,10 @@ class ArtifactStore:
             mime = "application/octet-stream"
             if name.endswith(".json"):
                 mime = "application/json"
-            elif name.endswith(".txt") or name.endswith(".md"):
-                mime = "text/plain"
+            elif name.endswith(".md"):
+                mime = "text/markdown; charset=utf-8"
+            elif name.endswith(".txt"):
+                mime = "text/plain; charset=utf-8"
             elif name.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
                 mime = "image/" + name.rsplit(".", 1)[-1].replace("jpg", "jpeg")
             elif name.endswith((".mp4", ".webm")):
@@ -380,7 +401,9 @@ def parse_s3_uri(uri: str, *, default_bucket: str = DEFAULT_BUCKET) -> tuple[str
 def _guess_type(name: str) -> str:
     if name.endswith(".json"):
         return "json"
-    if name.endswith((".txt", ".md")):
+    if name.endswith(".md"):
+        return "markdown"
+    if name.endswith(".txt"):
         return "text"
     if name.endswith((".pptx", ".ppt")):
         return "ppt"

@@ -125,6 +125,14 @@ class ProcessSupervisor:
             # New session so we can kill the process group on cancel.
             kwargs["start_new_session"] = True
         proc = await asyncio.create_subprocess_exec(*argv, **kwargs)
+        # Raise StreamReader limits — CLI JSONL tool payloads often exceed 64KiB.
+        try:
+            from .runners._cli_common import bump_stream_limit
+
+            bump_stream_limit(proc.stdout)
+            bump_stream_limit(proc.stderr)
+        except Exception:  # noqa: BLE001
+            pass
         return await self.register(task_id, proc)
 
 

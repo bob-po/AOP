@@ -100,14 +100,14 @@ def test_scheduling_engine_approve_enqueues_ready_jobs():
 def test_artifact_manager_merges_by_uri():
     store = MagicMock()
     store.list_task_artifacts.return_value = [
-        {"uri": "s3://b/a", "name": "output.txt", "source": "minio"},
+        {"uri": "s3://b/a", "name": "output.md", "source": "minio"},
     ]
     scheduler = MagicMock()
     scheduler.get_task.return_value = {"nodes": [{"id": "n1"}]}
     scheduler.get_node.return_value = {
         "output_json": {
             "artifacts": [
-                {"uri": "s3://b/a", "name": "output.txt", "type": "text", "size": 10},
+                {"uri": "s3://b/a", "name": "output.md", "type": "text", "size": 10},
                 {"uri": "s3://b/b", "name": "output.json", "type": "json"},
             ]
         }

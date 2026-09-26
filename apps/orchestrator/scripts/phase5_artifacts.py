@@ -72,14 +72,14 @@ def main() -> int:
     for a in items:
         print(f"      - {a.get('node_id')}/{a.get('name')} {a.get('uri')}")
 
-    # Must have per-node output.txt / output.json
+    # Must have per-node output.md / output.json
     names = {(a.get("node_id"), a.get("name")) for a in items}
     required = {
-        ("search", "output.txt"),
+        ("search", "output.md"),
         ("search", "output.json"),
-        ("rag", "output.txt"),
+        ("rag", "output.md"),
         ("rag", "output.json"),
-        ("report", "output.txt"),
+        ("report", "output.md"),
         ("report", "output.json"),
     }
     missing = required - names

@@ -24,12 +24,12 @@ def test_mark_success_writes_checkpoint(database_url: str, agent_id: str):
         "search",
         output={
             "text": "hello",
-            "artifacts": [{"name": "output.txt", "uri": "s3://b/t/search/output.txt"}],
+            "artifacts": [{"name": "output.md", "uri": "s3://b/t/search/output.md"}],
             "handoff": {
                 "from": "search",
                 "to": [],
                 "reason": "done",
-                "artifact_ids": ["s3://b/t/search/output.txt"],
+                "artifact_ids": ["s3://b/t/search/output.md"],
                 "confidence": 0.9,
             },
         },

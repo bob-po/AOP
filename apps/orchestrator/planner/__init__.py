@@ -50,6 +50,81 @@ def default_agent(available: set[str]) -> str | None:
     return pick_agent(available, *ordered)
 
 
+def wants_all_agents(goal: str) -> bool:
+    """True when the goal asks to involve every available harness agent."""
+    low = (goal or "").lower()
+    if any(m.lower() in low for m in _MULTI_AGENT_MARKERS):
+        return True
+    # Explicitly names ≥2 known harness products
+    named = [a for a in _DEFAULT_AGENTS if a in low or a.replace("-", " ") in low]
+    if "deepseek" in low and "claude" in low:
+        return True
+    if "deepseek" in low and "pi" in low:
+        return True
+    if len(named) >= 2:
+        return True
+    return False
+
+
+def parallel_harness_nodes(available: set[str], *, hitl: set[str]) -> list[PlanNode]:
+    """One independent DAG node per online harness agent (fan-out, no deps).
+
+    When only one agent remains after filtering, still returns a single node so
+    the multi-agent intent degrades gracefully instead of failing.
+    """
+    keys = [a for a in _DEFAULT_AGENTS if a in available]
+    if not keys:
+        keys = sorted(available)
+    if not keys:
+        return []
+    id_by_key = {
+        "claude-code": "claude",
+        "deepseek-harness": "deepseek",
+        "pi": "pi",
+    }
+    nodes: list[PlanNode] = []
+    used_ids: set[str] = set()
+    for key in keys:
+        nid = id_by_key.get(key) or key.replace("-", "_")[:24]
+        base = nid
+        n = 2
+        while nid in used_ids:
+            nid = f"{base}{n}"
+            n += 1
+        used_ids.add(nid)
+        nodes.append(
+            PlanNode(
+                id=nid,
+                skill=key,
+                depends_on=[],
+                requires_approval=key in hitl,
+            )
+        )
+    return nodes
+
+
+def probe_agent_ready(endpoint: str, *, timeout_s: float = 2.0) -> bool:
+    """GET ``/health`` — treat missing flag as ready (older agents)."""
+    if os.getenv("PLANNER_SKIP_READY_PROBE", "").lower() in {"1", "true", "yes"}:
+        return True
+    url = (endpoint or "").rstrip("/") + "/health"
+    try:
+        import httpx
+
+        r = httpx.get(url, timeout=timeout_s)
+        if r.status_code >= 400:
+            return False
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict):
+            return True
+        if "runner_ready" in data:
+            return bool(data.get("runner_ready"))
+        return True
+    except Exception:  # noqa: BLE001
+        # Unreachable → do not schedule (avoids guaranteed failure).
+        return False
+
+
 # Back-compat aliases
 pick_skill = pick_agent
 default_research_skill = default_agent
@@ -65,6 +140,31 @@ _SIMPLE_QA_MARKERS = (
     "简短",
     "简单介绍",
 )
+
+# User explicitly wants every online harness agent in the plan.
+_MULTI_AGENT_MARKERS = (
+    "所有agent",
+    "所有 agent",
+    "全部agent",
+    "全部 agent",
+    "所有的agent",
+    "使用目前所有",
+    "用目前所有",
+    "目前所有的agent",
+    "目前所有agent",
+    "多智能体",
+    "多 agent",
+    "多agent",
+    "三个agent",
+    "三个 agent",
+    "all agents",
+    "all agent",
+    "every agent",
+    "use all",
+    "所有智能体",
+    "全部智能体",
+)
+
 _REPORT_INTENT = (
     "报告",
     "report",
@@ -224,25 +324,36 @@ class Planner:
         method = "heuristic"
         nodes: list[PlanNode] = []
 
-        # Harness-first: default is a single hop to the preferred researcher
-        # (Claude Researcher). Multi-step / specialty pipelines stay opt-in.
-        if _planner_v2() and os.getenv("PLANNER_MULTI_STEP", "").lower() in {
-            "1",
-            "true",
-            "yes",
-        }:
+        # 1) Explicit multi-agent fan-out (all *ready* online harness agents)
+        if wants_all_agents(goal):
+            ready = set(self.list_ready_agents(available))
+            multi = parallel_harness_nodes(ready or available, hitl=hitl)
+            if multi:
+                nodes = multi
+                method = "heuristic_multi"
+
+
+        # 2) Opt-in multi-step decompose (still single-agent hops unless step skills differ)
+        if (
+            not nodes
+            and _planner_v2()
+            and os.getenv("PLANNER_MULTI_STEP", "").lower() in {"1", "true", "yes"}
+        ):
             stepped = decompose_to_nodes(goal, available, hitl=hitl)
             if stepped:
                 nodes = stepped
                 method = "heuristic_steps"
 
-        # 2) Default research / code heuristic (plan node.skill = agent_key)
+        # 3) Default single-hop heuristic (plan node.skill = agent_key)
         if not nodes:
             nodes = self._heuristic_nodes(goal, available)
             method = "heuristic"
 
-        # 3) Optional LLM — validate or repair; never fail hard (Phase 19)
-        if os.getenv("PLANNER_LLM", "").lower() in {"1", "true", "yes"}:
+        # 4) Optional LLM — skip when user already forced multi-agent fan-out
+        if (
+            method != "heuristic_multi"
+            and os.getenv("PLANNER_LLM", "").lower() in {"1", "true", "yes"}
+        ):
             llm_nodes, repaired = self._try_llm_nodes(goal, available, hitl=hitl)
             if llm_nodes:
                 try:
@@ -257,7 +368,7 @@ class Planner:
                 except DAGValidationError:
                     pass  # keep heuristic / steps
 
-        # 4) Last-resort fallback → default harness agent
+        # 5) Last-resort fallback → default harness agent
         if not nodes:
             agent = default_agent(available)
             if agent:
@@ -290,13 +401,51 @@ class Planner:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
         return [r["agent_key"] for r in rows if r.get("agent_key")]
 
+    def list_agent_endpoints(self) -> dict[str, str]:
+        """Map online agent_key → primary endpoint URL."""
+        sql = """
+            SELECT a.agent_key, e.url
+            FROM agents a
+            JOIN agent_endpoints e ON e.agent_id = a.id AND e.is_primary = true
+            WHERE a.tenant_id = %s::uuid
+              AND a.status IN ('online', 'running')
+            ORDER BY a.agent_key
+        """
+        with connect(self.database_url) as conn:
+            rows = conn.execute(sql, (self.tenant_id,)).fetchall()
+        out: dict[str, str] = {}
+        for r in rows:
+            key = r.get("agent_key")
+            url = r.get("url")
+            if key and url:
+                out[str(key)] = str(url)
+        return out
+
+    def list_ready_agents(self, available: set[str] | None = None) -> list[str]:
+        """Online agents whose ``/health`` reports runner_ready (or older agents without the flag)."""
+        keys = set(available) if available is not None else set(self.list_available_agents())
+        endpoints = self.list_agent_endpoints()
+        ready: list[str] = []
+        for key in sorted(keys):
+            ep = endpoints.get(key)
+            if not ep:
+                continue
+            if probe_agent_ready(ep):
+                ready.append(key)
+        return ready
+
     def list_available_skills(self) -> list[str]:
         """Deprecated alias — returns online agent_keys."""
         return self.list_available_agents()
 
     def _heuristic_nodes(self, goal: str, available: set[str]) -> list[PlanNode]:
-        """Single hop to the default harness agent (claude-code)."""
+        """Default: one hop to preferred agent; multi-agent goals fan out in parallel."""
         hitl = set(hitl_skills())
+        if wants_all_agents(goal):
+            ready = set(self.list_ready_agents(available))
+            multi = parallel_harness_nodes(ready or available, hitl=hitl)
+            if multi:
+                return multi
         agent = default_agent(available)
         if not agent:
             return []
@@ -350,8 +499,11 @@ class Planner:
                         "role": "system",
                         "content": (
                             "You are a task planner for a multi-agent platform. "
-                            "Return JSON with key nodes. Only use available skills. "
-                            "Prefer parallel independent nodes. Keep 2-5 nodes."
+                            "Return JSON with key nodes. Only use available skills "
+                            "(each skill is an agent_key). Prefer parallel independent "
+                            "nodes. Keep 2-5 nodes. When the goal asks to use all agents "
+                            "/ 所有agent / 全部智能体, create one parallel node per "
+                            "available agent_key with empty depends_on."
                         ),
                     },
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},

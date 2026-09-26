@@ -8,8 +8,8 @@
 
 - `artifacts/` — 上传/下载/列表
 - 路径：`s3://aop-artifacts/tasks/{task_id}/{node}/{name}`
-- Worker 写入 `output.txt` / `output.json` / `meta.json`，URI 写入 node `output_json.artifacts`
-- 下游节点优先从 MinIO 读取上游 `output.txt`
+- Worker 写入 `output.md` / `output.json` / `meta.json`，URI 写入 node `output_json.artifacts`
+- 下游节点优先从 MinIO 读取上游 `output.md`（兼容旧产物 `output.txt`）
 - API：`GET /v1/tasks/{id}/artifacts`（经 Gateway 反代）
 
 ## Phase 7 — Workflows / Marketplace / Health

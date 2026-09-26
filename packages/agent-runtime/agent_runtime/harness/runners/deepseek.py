@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -28,7 +27,14 @@ from ..protocol import (
     HarnessStatus,
     TokenUsage,
 )
-from ._cli_common import emit_event, message_text, resolve_binary, system_prompt_from_message
+from ._cli_common import (
+    bump_stream_limit,
+    emit_event,
+    message_text,
+    readline_unlimited,
+    resolve_binary,
+    system_prompt_from_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,48 @@ def _deepseek_model() -> str:
     return os.getenv("DSH_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
 
 
+def _ensure_dsh_home(explicit: Optional[str] = None) -> str:
+    """dsh requires an absolute DSH_HOME; never rely on ~/.dsh."""
+    raw = (explicit or os.getenv("DSH_HOME") or "").strip()
+    if raw:
+        home = Path(raw).expanduser().resolve()
+    else:
+        home = (Path.home() / ".aop" / "dsh-home").resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    return str(home)
+
+
+def _sdk_error_message(result: Any) -> str:
+    """Extract credential / finish errors from DeepSeekHarness RunResult."""
+    finish = str(getattr(result, "finish_reason", None) or "")
+    events = getattr(result, "events", None) or []
+    texts: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        # turn/end reason.error.message
+        reason = data.get("reason") if isinstance(data.get("reason"), dict) else {}
+        err = reason.get("error") if isinstance(reason.get("error"), dict) else {}
+        if err.get("message"):
+            texts.append(str(err["message"]))
+        # assistant/attempt stream finish failure
+        stream = data.get("stream") if isinstance(data.get("stream"), list) else []
+        for item in stream:
+            if not isinstance(item, dict):
+                continue
+            chunk = item.get("chunk") if isinstance(item.get("chunk"), dict) else {}
+            fr = chunk.get("reason") if isinstance(chunk.get("reason"), dict) else {}
+            failure = fr.get("failure") if isinstance(fr.get("failure"), dict) else {}
+            if failure.get("message"):
+                texts.append(str(failure["message"]))
+    if texts:
+        return texts[-1]
+    if finish == "error":
+        return "DeepSeek SDK finish_reason=error"
+    return ""
+
+
 class DeepSeekHarnessRunner:
     """DeepSeek harness with SDK → CLI → tool_loop fallback."""
 
@@ -60,7 +108,7 @@ class DeepSeekHarnessRunner:
         self,
         *,
         binary: Optional[str] = None,
-        timeout_s: float = 300.0,
+        timeout_s: float = 1800.0,
         workspace: Optional[str] = None,
         dsh_home: Optional[str] = None,
         prefer: Optional[str] = None,
@@ -70,7 +118,7 @@ class DeepSeekHarnessRunner:
         self.binary = binary or os.getenv("DSH_CLI_PATH") or "dsh"
         self.timeout_s = float(os.getenv("DSH_CLI_TIMEOUT_S") or timeout_s)
         self.workspace = workspace or os.getenv("DSH_WORKSPACE") or os.getcwd()
-        self.dsh_home = dsh_home or os.getenv("DSH_HOME") or None
+        self.dsh_home = _ensure_dsh_home(dsh_home)
         self.prefer = (prefer or os.getenv("DSH_RUNNER_MODE") or "auto").lower()
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
@@ -86,6 +134,24 @@ class DeepSeekHarnessRunner:
             return True
         except ImportError:
             return False
+
+    def readiness(self) -> dict[str, Any]:
+        """Whether this runner can execute work on this host."""
+        # Bundled dsh / SDK always need a DeepSeek (or OpenAI-compatible) API key.
+        if not _deepseek_api_key():
+            return {
+                "ready": False,
+                "mode": None,
+                "reason": (
+                    "DeepSeek harness needs DEEPSEEK_API_KEY (or OPENAI_API_KEY) "
+                    "in the agent process environment."
+                ),
+            }
+        if self.sdk_available():
+            return {"ready": True, "mode": "sdk"}
+        if self.resolve_binary():
+            return {"ready": True, "mode": "cli"}
+        return {"ready": True, "mode": "tool_loop"}
 
     async def cancel(self, task_id: str) -> bool:
         flag = self._cancel_flags.get(task_id)
@@ -108,6 +174,8 @@ class DeepSeekHarnessRunner:
             if mode == "auto":
                 if self.sdk_available() and _deepseek_api_key():
                     mode = "sdk"
+                elif _deepseek_api_key():
+                    mode = "tool_loop"
                 elif self.resolve_binary():
                     mode = "cli"
                 else:
@@ -143,7 +211,7 @@ class DeepSeekHarnessRunner:
         )
 
         workspace = Path(self.workspace).resolve()
-        dsh_home = Path(self.dsh_home).resolve() if self.dsh_home else Path(tempfile.mkdtemp(prefix="aop-dsh-home-"))
+        dsh_home = Path(self.dsh_home).resolve()
         dsh_home.mkdir(parents=True, exist_ok=True)
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -188,7 +256,25 @@ class DeepSeekHarnessRunner:
                 data={"runner": "DeepSeekHarnessRunner", "mode": "sdk"},
             )
 
-        text = str(getattr(result, "final_response", None) or getattr(result, "text", None) or result or "")
+        text = str(getattr(result, "final_response", None) or getattr(result, "text", None) or "")
+        finish = str(getattr(result, "finish_reason", None) or "")
+        err_msg = _sdk_error_message(result)
+        if (not text and finish == "error") or err_msg:
+            err = err_msg or "DeepSeek SDK finished with error and empty response"
+            if "api key" in err.lower() or "missing_credential" in err.lower():
+                return await self._run_tool_loop(
+                    task_id=task_id, message=message, skill_id=skill_id, on_event=on_event
+                )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                data={"runner": "DeepSeekHarnessRunner", "mode": "sdk"},
+            )
         usage = TokenUsage(
             model=_deepseek_model(),
             wall_time_ms=int((time.monotonic() - started) * 1000),
@@ -241,10 +327,14 @@ class DeepSeekHarnessRunner:
             payload={"state": "working", "message": "starting dsh headless"},
         )
 
-        argv = [binary, "--profile", "headless", prompt]
+        argv = [
+            binary,
+            "--profile",
+            os.getenv("DSH_CLI_PROFILE") or "sdk-minimal",
+            prompt,
+        ]
         env = dict(self.env or os.environ.copy())
-        if self.dsh_home:
-            env["DSH_HOME"] = self.dsh_home
+        env["DSH_HOME"] = self.dsh_home
         if system:
             env["DSH_SYSTEM_PROMPT"] = system
 
@@ -258,7 +348,7 @@ class DeepSeekHarnessRunner:
         async def _read_stdout() -> None:
             assert mp.proc.stdout is not None
             while True:
-                line_b = await mp.proc.stdout.readline()
+                line_b = await readline_unlimited(mp.proc.stdout)
                 if not line_b:
                     break
                 text = line_b.decode("utf-8", errors="replace")
@@ -270,7 +360,7 @@ class DeepSeekHarnessRunner:
         async def _read_stderr() -> None:
             assert mp.proc.stderr is not None
             while True:
-                line_b = await mp.proc.stderr.readline()
+                line_b = await readline_unlimited(mp.proc.stderr)
                 if not line_b:
                     break
                 stderr_bits.append(line_b.decode("utf-8", errors="replace"))
@@ -301,9 +391,23 @@ class DeepSeekHarnessRunner:
         rc = mp.returncode
         if rc not in (0, None) and not text:
             err = "".join(stderr_bits).strip() or f"dsh exited with code {rc}"
-            # Fall back to tool_loop if headless profile unavailable
-            if "profile" in err.lower() or "not found" in err.lower():
-                logger.info("dsh headless failed (%s); tool_loop fallback", err[:200])
+            # Fall back to tool_loop if headless profile / home / auth unavailable
+            low = err.lower()
+            if any(
+                m in low
+                for m in (
+                    "profile",
+                    "not found",
+                    "dsh_home",
+                    "api key",
+                    "unauthorized",
+                    "authentication",
+                    "cannot find package",
+                    "err_module_not_found",
+                    "plugin tree failed",
+                )
+            ):
+                logger.info("dsh cli failed (%s); tool_loop fallback", err[:200])
                 return await self._run_tool_loop(
                     task_id=task_id, message=message, skill_id=skill_id, on_event=on_event
                 )

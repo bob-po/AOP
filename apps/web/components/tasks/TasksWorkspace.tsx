@@ -17,7 +17,7 @@ import {
   type TaskSummary,
 } from "@/lib/api";
 import { useTaskLive } from "@/hooks/useTaskLive";
-import { TaskFlowDag } from "@/components/tasks/TaskFlowDag";
+import { TaskFlowDag, agentDisplayName } from "@/components/tasks/TaskFlowDag";
 import { TaskTrace } from "@/components/TaskTrace";
 import { PptPreview } from "@/components/tasks/PptPreview";
 import { CollaborationGraphView } from "@/components/tasks/CollaborationGraph";
@@ -182,7 +182,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     selectedNodeId;
 
   async function onCancel() {
-    if (!selectedId || busy) return;
+    if (!selectedId || busy || !canCancel) return;
     setBusy(true);
     try {
       await cancelTask(selectedId);
@@ -280,8 +280,20 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     const html = owned.find((item) =>
       (item.name || "").replace(/\\/g, "/").endsWith("report.html"),
     );
-    const text = owned.find((item) => (item.name || "").endsWith("output.txt"));
+    const text =
+      owned.find((item) => (item.name || "").endsWith("output.md")) ||
+      owned.find((item) => (item.name || "").endsWith("output.txt"));
     return html?.url || text?.url || null;
+  }, [artifacts, detailNode]);
+
+  const markdownPreviewUrl = useMemo(() => {
+    if (!detailNode) return null;
+    if (isReportSkill(detailNode.skill) || isPptSkill(detailNode.skill)) return null;
+    const owned = artifacts.filter((item) => item.node_id === detailNode.id);
+    const md =
+      owned.find((item) => (item.name || "").endsWith("output.md")) ||
+      owned.find((item) => (item.name || "").endsWith("output.txt"));
+    return md?.url || null;
   }, [artifacts, detailNode]);
 
   const pptArtifact = useMemo(() => {
@@ -294,6 +306,15 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   }, [artifacts, detailNode]);
 
   const goal = task?.input_json?.content || task?.plan_json?.goal || task?.title || "";
+  const nodeInflight = (task?.nodes || []).some((n) =>
+    ["pending", "ready", "running", "retrying", "waiting_for_user"].includes(n.status),
+  );
+  // Allow cancel while any node is still in flight — even if the task was
+  // already marked failed (parallel sibling failed first).
+  const canCancel =
+    !!task &&
+    !busy &&
+    (nodeInflight || !["completed", "failed", "cancelled"].includes(task.status || ""));
   const rootTaskId =
     (typeof task?.execution?.execute?.root_task_id === "string" &&
       task.execution.execute.root_task_id) ||
@@ -440,7 +461,13 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
               plan={task?.plan_json}
               nodes={task?.nodes || []}
               selectedNodeId={selectedNodeId}
-              onSelectNode={setSelectedNodeId}
+              onSelectNode={(id) => {
+                if (id) openNodeDetail(id);
+                else {
+                  setSelectedNodeId(null);
+                  setDetailNodeId(null);
+                }
+              }}
             />
           ) : (
             <CollaborationGraphView
@@ -457,7 +484,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
           )
         ) : (
           <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/10 font-mono text-sm text-mist-400">
-            选择左侧任务查看 DAG
+            选择左侧任务查看工作流 DAG（节点 = Harness Agent）
           </div>
         )}
         {liveError ? (
@@ -487,7 +514,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!task || busy || ["completed", "failed", "cancelled"].includes(task?.status || "")}
+              disabled={!canCancel}
               onClick={onCancel}
               className="rounded-lg border border-white/15 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-mist-200 hover:border-signal-warm/40 disabled:opacity-40"
             >
@@ -648,7 +675,8 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                   ← 返回
                 </button>
                 <span className="truncate font-mono text-[10px] text-mist-200">
-                  {detailNode.id} · {detailNode.skill}
+                  {detailNode.id} ·{" "}
+                  {agentDisplayName(detailNode.agent_key || detailNode.skill, detailNode.agent_name)}
                 </span>
               </div>
               {isPptSkill(detailNode.skill) ? (
@@ -672,13 +700,54 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                 )
               ) : (
                 <div>
-                  <div className="text-sm text-mist-100">{detailNode.skill}</div>
+                  <div className="text-sm text-mist-100">
+                    {agentDisplayName(detailNode.agent_key || detailNode.skill, detailNode.agent_name)}
+                  </div>
                   <div className="mt-1 font-mono text-[11px] text-mist-400">
+                    agent_key={detailNode.agent_key || detailNode.skill}
+                    {" · "}
                     status={detailNode.status} · attempt={detailNode.attempt ?? 0}
                   </div>
+                  {detailNode.a2a_task_id ? (
+                    <div className="mt-1 truncate font-mono text-[10px] text-mist-400" title={detailNode.a2a_task_id}>
+                      a2a={detailNode.a2a_task_id}
+                    </div>
+                  ) : null}
+                  {detailNode.agent_endpoint ? (
+                    <div className="mt-1 truncate font-mono text-[10px] text-mist-400">
+                      {detailNode.agent_endpoint}
+                    </div>
+                  ) : null}
                   {detailNode.error_message ? (
                     <p className="mt-2 text-xs text-red-300">{detailNode.error_message}</p>
                   ) : null}
+                  {detailNode.handoff && typeof detailNode.handoff === "object" ? (
+                    <div className="mt-2 rounded-lg border border-white/5 bg-ink-950/40 p-2">
+                      <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-mist-400">
+                        Handoff
+                      </div>
+                      <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-mist-300">
+                        {JSON.stringify(detailNode.handoff, null, 2).slice(0, 800)}
+                      </pre>
+                    </div>
+                  ) : null}
+                  {markdownPreviewUrl ? (
+                    <a
+                      href={markdownPreviewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-block font-mono text-[10px] text-signal underline underline-offset-2"
+                    >
+                      打开 output.md
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setCanvasMode("collab")}
+                    className="mt-3 block font-mono text-[10px] text-mist-400 underline underline-offset-2 hover:text-mist-200"
+                  >
+                    查看运行时协作图（子 Agent spawn）
+                  </button>
                 </div>
               )}
             </div>
@@ -796,9 +865,11 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                   <div className="pr-20 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
                     节点 {node.id}
                   </div>
-                  <div className="mt-2 text-sm text-mist-100">{node.skill}</div>
+                  <div className="mt-2 text-sm text-mist-100">
+                    {agentDisplayName(node.agent_key || node.skill, node.agent_name)}
+                  </div>
                   <div className="mt-1 font-mono text-[11px] text-mist-400">
-                    status={node.status} · attempt={node.attempt ?? 0}
+                    {node.agent_key || node.skill} · status={node.status} · attempt={node.attempt ?? 0}
                     {node.checkpoint_at
                       ? ` · ckpt@${new Date(node.checkpoint_at).toLocaleTimeString()}`
                       : ""}

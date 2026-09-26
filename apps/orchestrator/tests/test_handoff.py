@@ -19,14 +19,14 @@ def test_build_and_parse_handoff_roundtrip():
         from_node="search",
         to_nodes=["report"],
         reason="search done; unlock report",
-        artifact_ids=["s3://bucket/tasks/t/search/output.txt"],
+        artifact_ids=["s3://bucket/tasks/t/search/output.md"],
         confidence=0.9,
         skill="web-search",
         agent_id="agent-1",
     )
     assert h["from"] == "search"
     assert h["to"] == ["report"]
-    assert h["artifact_ids"][0].endswith("output.txt")
+    assert h["artifact_ids"][0].endswith("output.md")
     parsed = parse_handoff(h)
     assert parsed is not None
     assert parsed["reason"] == "search done; unlock report"
@@ -82,13 +82,13 @@ def test_artifact_uris_skip_meta():
             self.uri = uri
 
     refs = [
-        Ref("output.txt", "s3://b/t/n/output.txt"),
+        Ref("output.md", "s3://b/t/n/output.md"),
         Ref("meta.json", "s3://b/t/n/meta.json"),
         {"name": "output.json", "uri": "s3://b/t/n/output.json"},
     ]
     uris = artifact_uris_from_refs(refs)
     assert "s3://b/t/n/meta.json" not in uris
-    assert "s3://b/t/n/output.txt" in uris
+    assert "s3://b/t/n/output.md" in uris
     assert "s3://b/t/n/output.json" in uris
 
 
@@ -107,7 +107,7 @@ def test_prune_upstream_slices_respects_total_budget():
             "skill": "web-search",
             "reason": "search done",
             "confidence": 0.9,
-            "artifact_ids": ["s3://b/t/search/output.txt"],
+            "artifact_ids": ["s3://b/t/search/output.md"],
             "body": long_a,
             "human": "",
         },
@@ -116,7 +116,7 @@ def test_prune_upstream_slices_respects_total_budget():
             "skill": "knowledge-search",
             "reason": "rag done",
             "confidence": 0.4,
-            "artifact_ids": ["s3://b/t/rag/output.txt"],
+            "artifact_ids": ["s3://b/t/rag/output.md"],
             "body": long_b,
             "human": "",
         },
@@ -187,11 +187,11 @@ def test_compose_query_prefers_handoff_artifacts():
                             "from": "search",
                             "to": ["report"],
                             "reason": "search done; unlock report",
-                            "artifact_ids": ["s3://b/t/search/output.txt"],
+                            "artifact_ids": ["s3://b/t/search/output.md"],
                             "confidence": 0.9,
                         },
                         "artifacts": [
-                            {"name": "output.txt", "uri": "s3://b/t/search/output.txt"},
+                            {"name": "output.md", "uri": "s3://b/t/search/output.md"},
                         ],
                     }
                 }
@@ -199,7 +199,7 @@ def test_compose_query_prefers_handoff_artifacts():
 
     class FakeArtifacts:
         def get_text(self, uri):
-            assert uri.endswith("output.txt")
+            assert uri.endswith("output.md")
             return "FROM_HANDOFF_ARTIFACT"
 
     class FakeMemory:

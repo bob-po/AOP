@@ -6,12 +6,13 @@ import os
 import socket
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from aggregator import Aggregator
-from artifacts import ArtifactStore
+from artifacts import ArtifactStore, LEGACY_TEXT_NAMES, is_primary_text_artifact
 from evaluation import EvaluationService
-from . import A2AExecutor
+from . import A2AExecutor, ExecutionResult
 from handoff import (
     artifact_uris_from_refs,
     build_handoff,
@@ -103,8 +104,34 @@ else:
 # attempt 1→2: 1s, 2→3: 3s; circuit-breaker open uses recovery window below
 BACKOFF_SECONDS = {1: 1.0, 2: 3.0, 3: 10.0}
 CIRCUIT_BREAKER_RETRY_DELAY = float(os.getenv("CIRCUIT_BREAKER_RETRY_DELAY", "65"))
-# Long-running node stale reclaim (seconds). 0 disables.
-NODE_STALE_SECONDS = float(os.getenv("NODE_STALE_SECONDS", "900"))
+# Long-running node stale reclaim (seconds). Must exceed CLI + join budgets.
+# 0 disables. Default 2400s so research nodes aren't reclaimed mid-flight.
+NODE_STALE_SECONDS = float(os.getenv("NODE_STALE_SECONDS", "2400"))
+
+
+def _a2a_exec_async_enabled() -> bool:
+    """Platform async: submit A2A then join in a side thread (frees Redis consumer)."""
+    return os.getenv("A2A_EXEC_ASYNC", "1").lower() not in {"0", "false", "off", "no"}
+
+
+def _a2a_async_join_timeout_s() -> float:
+    # Must exceed CLI wall timeouts (default 1800s) so join doesn't race the runner.
+    return float(os.getenv("A2A_ASYNC_JOIN_TIMEOUT", os.getenv("A2A_TIMEOUT", "1920")))
+
+
+def _task_status_str(status: Any) -> str:
+    """Normalize Task.status whether Enum or plain str (cached reconstructions)."""
+    if status is None:
+        return ""
+    return str(getattr(status, "value", status) or "").lower()
+
+
+def _a2a_async_poll_s() -> float:
+    return float(os.getenv("A2A_ASYNC_POLL_INTERVAL", "2"))
+
+
+def _a2a_async_workers() -> int:
+    return max(1, int(os.getenv("A2A_ASYNC_WORKERS", "8")))
 
 
 class ExecutionEngine:
@@ -123,6 +150,16 @@ class ExecutionEngine:
         self.memory = MemoryService()
         self._last_stale_check = 0.0
         self._request_tracking_service = None  # Lazy-loaded
+        self._async_pool: ThreadPoolExecutor | None = None
+        if _a2a_exec_async_enabled():
+            self._async_pool = ThreadPoolExecutor(
+                max_workers=_a2a_async_workers(),
+                thread_name_prefix="a2a-await",
+            )
+            print(
+                f"[worker] A2A async join enabled "
+                f"(workers={_a2a_async_workers()} timeout={_a2a_async_join_timeout_s()}s)"
+            )
 
     def _get_request_tracking_service(self):
         """Lazy import of request tracking service."""
@@ -166,6 +203,7 @@ class ExecutionEngine:
         *,
         task_id: str | None = None,
         target_agent_id: str | None = None,
+        async_mode: bool = False,
     ):
         """Execute A2A call with circuit breaker + retry.
 
@@ -184,6 +222,7 @@ class ExecutionEngine:
                 task_id=task_id,
                 correlation_id=task_id,
                 target_agent_id=target_agent_id,
+                async_mode=async_mode,
             )
 
         def guarded():
@@ -192,37 +231,38 @@ class ExecutionEngine:
                 result = breaker.call(execute_a2a)
             else:
                 result = execute_a2a()
+            # Async submit may return submitted/working — not a transport failure.
+            if async_mode:
+                state = _task_status_str(result.task.status)
+                if state in {"submitted", "working"}:
+                    return result
             if not result.ok:
                 detail = ""
                 try:
-                    st = result.task.status
-                    msg = getattr(st, "message", None)
-                    if isinstance(msg, dict):
-                        parts = msg.get("parts") or []
-                        texts = [
-                            str(p.get("text") or "").strip()
-                            for p in parts
-                            if isinstance(p, dict) and p.get("type") == "text"
-                        ]
-                        detail = " ".join(t for t in texts if t)
-                    elif msg is not None and hasattr(msg, "parts"):
-                        parts = msg.parts or []
-                        texts = []
-                        for p in parts:
-                            t = getattr(p, "text", None) or (
-                                p.get("text") if isinstance(p, dict) else None
+                    # Task.from_dict already promotes status.message text → task.error
+                    detail = str(getattr(result.task, "error", None) or "").strip()
+                    if not detail and isinstance(result.data, dict):
+                        detail = str(
+                            result.data.get("error")
+                            or result.data.get("message")
+                            or ""
+                        ).strip()
+                        harness_st = result.data.get("status")
+                        if harness_st and harness_st != "ok":
+                            detail = (
+                                f"[{harness_st}] {detail}" if detail else str(harness_st)
                             )
-                            if t:
-                                texts.append(str(t).strip())
-                        detail = " ".join(texts)
+                    if not detail and result.text:
+                        detail = str(result.text).strip()[:500]
                 except Exception:  # noqa: BLE001
                     detail = ""
-                error_msg = f"A2A execution failed with status {result.task.status.value}"
+                error_msg = (
+                    f"A2A execution failed with status {_task_status_str(result.task.status)}"
+                )
                 if detail:
                     error_msg = f"{error_msg}: {detail[:500]}"
                 raise handle_a2a_error(RuntimeError(error_msg))
             return result
-
         if with_retry:
             @with_retry(policy=WORKER_RETRY_POLICY)
             def retry_execute():
@@ -324,6 +364,9 @@ class ExecutionEngine:
             if not idempotency_key:
                 # Fallback for nodes created before migration
                 idempotency_key = f"req_{task_id[:8]}_{node_key}"
+            # Scope by attempt so agent-side caches don't poison retries with a
+            # prior terminal failure (e.g. timeout after join raced the CLI).
+            idempotency_key = f"{idempotency_key}:a{attempt}"
             
             # P36.1: Track the request before execution
             tracking_service = self._get_request_tracking_service()
@@ -359,6 +402,7 @@ class ExecutionEngine:
                 with trace_operation(
                     "worker.execute_a2a", agent_id=routed.agent_id, endpoint=endpoint
                 ) as exec_span:
+                    use_async = self._async_pool is not None
                     if ERROR_HANDLING_AVAILABLE and WORKER_RETRY_POLICY:
                         result = self._execute_with_retry(
                             endpoint,
@@ -367,6 +411,7 @@ class ExecutionEngine:
                             idempotency_key=idempotency_key,
                             task_id=task_id,
                             target_agent_id=routed.agent_id,
+                            async_mode=use_async,
                         )
                     else:
                         result = self.executor.execute(
@@ -377,151 +422,53 @@ class ExecutionEngine:
                             task_id=task_id,
                             correlation_id=task_id,
                             target_agent_id=routed.agent_id,
+                            async_mode=use_async,
                         )
 
-                    # Persist first; quality gate may fail the node after artifacts land.
-                    latency_ms = int((time.time() - started) * 1000)
+                    state = _task_status_str(result.task.status)
+                    if use_async and state in {"submitted", "working"}:
+                        print(
+                            f"[worker] async A2A submitted task={result.task.id} "
+                            f"node={node_key} — join in background"
+                        )
+                        self.streams.publish_execution_event(
+                            "agent.task.submitted",
+                            {
+                                "task_id": task_id,
+                                "node_key": node_key,
+                                "agent_id": routed.agent_id,
+                                "a2a_task_id": result.task.id,
+                            },
+                        )
+                        self._async_pool.submit(
+                            self._await_a2a_and_finish,
+                            fields=dict(fields),
+                            endpoint=endpoint,
+                            routed=routed,
+                            skill=skill,
+                            idempotency_key=idempotency_key,
+                            started=started,
+                            a2a_task_id=str(result.task.id),
+                            attempt=attempt,
+                            exclude=set(exclude),
+                        )
+                        return
 
                     if TRACING_AVAILABLE and exec_span:
-                        set_span_attribute("execution.latency_ms", latency_ms)
                         set_span_attribute(
                             "execution.artifact_count",
                             len(result.task.artifacts or []),
                         )
-                refs = self.artifacts.persist_node_output(
+                self._finalize_node_result(
                     task_id=task_id,
                     node_key=node_key,
-                    text=result.text,
-                    data=result.data,
-                )
-                gate = self._quality_gate(skill=skill, text=result.text, data=result.data)
-                if not result.ok or not gate["ok"]:
-                    reason = gate.get("message") or f"a2a status={result.task.status.value}"
-                    raise RuntimeError(reason)
-
-                task_row = self.scheduler.get_task(task_id) or {}
-                to_nodes = plan_dependents(task_row.get("plan_json"), node_key)
-                conf = float(gate.get("confidence") or 0.5)
-                handoff = build_handoff(
-                    from_node=node_key,
-                    to_nodes=to_nodes,
-                    artifact_ids=artifact_uris_from_refs(refs),
-                    confidence=conf,
                     skill=skill,
-                    agent_id=routed.agent_id,
-                    reason=(
-                        gate.get("reason")
-                        or (
-                            f"Completed {skill or node_key}"
-                            + (f"; unlock {', '.join(to_nodes)}" if to_nodes else "")
-                        )
-                    ),
+                    routed=routed,
+                    endpoint=endpoint,
+                    result=result,
+                    started=started,
+                    idempotency_key=idempotency_key,
                 )
-                output = {
-                    "text": result.text,
-                    "data": result.data,
-                    "artifacts": [r.to_dict() for r in refs],
-                    "agent": {
-                        "id": routed.agent_id,
-                        "key": routed.agent_key,
-                        "endpoint": endpoint,
-                    },
-                    "a2a_task_id": result.task.id,
-                    "status": gate.get("status") or "ok",
-                    "confidence": conf,
-                    "handoff": handoff,
-                }
-                
-                # P36.1: Mark request as completed
-                if tracking_service:
-                    try:
-                        tracking_service.mark_request_completed(idempotency_key, output)
-                    except Exception as e:
-                        print(f"[worker] request completion tracking error: {e}")
-                
-                ready_jobs = self._with_task_lock(
-                    task_id,
-                    lambda: self.scheduler.mark_success(
-                        task_id,
-                        node_key,
-                        output=output,
-                        a2a_task_id=result.task.id,
-                        latency_ms=latency_ms,
-                    ),
-                )
-                self.streams.publish_execution_event(
-                    "agent.task.completed",
-                    {
-                        "task_id": task_id,
-                        "node_key": node_key,
-                        "agent_id": routed.agent_id,
-                        "latency_ms": latency_ms,
-                        "artifact_count": len(refs),
-                    },
-                )
-                try:
-                    record_agent_call(
-                        routed.agent_key,
-                        status="success",
-                        latency_seconds=latency_ms / 1000.0,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-                print(
-                    f"[worker] stored {len(refs)} artifacts for {node_key}: "
-                    + ", ".join(r.uri for r in refs if r.name != "meta.json")
-                )
-                try:
-                    self.memory.remember_node(
-                        task_id,
-                        node_key=node_key,
-                        skill=skill,
-                        text=result.text or "",
-                        agent_id=routed.agent_id,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[worker] memory write skipped: {exc}")
-                for job in ready_jobs or []:
-                    self.streams.enqueue_execution(**job)
-                    print(f"[worker] enqueued downstream {job['node_key']}")
-
-                task = self.scheduler.get_task(task_id)
-                if task and task.get("status") == "waiting_for_user":
-                    self.streams.publish_task_event(
-                        "task.waiting_for_user",
-                        {"task_id": task_id, "node_key": node_key},
-                    )
-                    print(f"[worker] task waiting_for_user {task_id} at {node_key}")
-                elif task and task.get("status") == "completed":
-                    result_json = self.aggregator.build_result(task_id)
-                    self.streams.publish_task_event(
-                        "task.completed",
-                        {
-                            "task_id": task_id,
-                            "summary_len": len(result_json.get("summary") or ""),
-                        },
-                    )
-                    print(f"[worker] task completed {task_id}")
-                    try:
-                        record_task_finished("completed")
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        if os.getenv("TENANT_MEMORY_PROMOTE", "1").lower() not in {
-                            "0",
-                            "false",
-                            "no",
-                            "off",
-                        }:
-                            promoted = self.memory.promote_task(task_id)
-                            if promoted:
-                                print(
-                                    f"[worker] promoted {len(promoted)} tenant memories "
-                                    f"from {task_id}"
-                                )
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[worker] tenant memory promote skipped: {exc}")
-                    self._auto_evaluate(task_id)
 
             except CircuitBreakerOpenError as exc:
                 if TRACING_AVAILABLE:
@@ -548,6 +495,231 @@ class ExecutionEngine:
                     exclude=exclude | {routed.agent_id},
                     idempotency_key=idempotency_key,
                 )
+
+    def _await_a2a_and_finish(
+        self,
+        *,
+        fields: dict[str, str],
+        endpoint: str,
+        routed: Any,
+        skill: str,
+        idempotency_key: str | None,
+        started: float,
+        a2a_task_id: str,
+        attempt: int,
+        exclude: set[str],
+    ) -> None:
+        """Background join after async submit — keeps Redis consumer free."""
+        task_id = fields["task_id"]
+        node_key = fields["node_key"]
+        try:
+            result = self.executor.join_task(
+                endpoint,
+                a2a_task_id,
+                timeout_s=_a2a_async_join_timeout_s(),
+                poll_interval_s=_a2a_async_poll_s(),
+            )
+            # Preserve skill_id from the original routing intent.
+            if result.skill_id is None:
+                result = ExecutionResult(
+                    agent_name=result.agent_name,
+                    agent_url=result.agent_url,
+                    skill_id=skill,
+                    task=result.task,
+                    text=result.text,
+                    data=result.data,
+                )
+            self._finalize_node_result(
+                task_id=task_id,
+                node_key=node_key,
+                skill=skill,
+                routed=routed,
+                endpoint=endpoint,
+                result=result,
+                started=started,
+                idempotency_key=idempotency_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[worker] async join failed node={node_key}: {exc}")
+            traceback.print_exc()
+            self._on_failure(
+                fields,
+                error=str(exc),
+                attempt=attempt,
+                agent_id=getattr(routed, "agent_id", None),
+                exclude=exclude | ({routed.agent_id} if getattr(routed, "agent_id", None) else set()),
+                idempotency_key=idempotency_key,
+            )
+
+    def _finalize_node_result(
+        self,
+        *,
+        task_id: str,
+        node_key: str,
+        skill: str,
+        routed: Any,
+        endpoint: str,
+        result: ExecutionResult,
+        started: float,
+        idempotency_key: str | None,
+    ) -> None:
+        """Persist artifacts, mark success, enqueue dependents (sync or after async join)."""
+        latency_ms = int((time.time() - started) * 1000)
+        tracking_service = self._get_request_tracking_service()
+
+        refs = self.artifacts.persist_node_output(
+            task_id=task_id,
+            node_key=node_key,
+            text=result.text,
+            data=result.data,
+        )
+        gate = self._quality_gate(skill=skill, text=result.text, data=result.data)
+        if not result.ok or not gate["ok"]:
+            reason = gate.get("message")
+            if not reason:
+                detail = ""
+                task_err = getattr(result.task, "error", None)
+                if task_err:
+                    detail = str(task_err).strip()
+                if not detail and isinstance(result.data, dict):
+                    detail = str(
+                        result.data.get("error")
+                        or result.data.get("message")
+                        or ""
+                    ).strip()
+                    harness_st = result.data.get("status")
+                    if harness_st and harness_st != "ok" and detail:
+                        detail = f"[{harness_st}] {detail}"
+                    elif harness_st and harness_st != "ok" and not detail:
+                        detail = str(harness_st)
+                if not detail and result.text:
+                    detail = str(result.text).strip()[:500]
+                reason = f"a2a status={_task_status_str(result.task.status)}"
+                if detail:
+                    reason = f"{reason}: {detail[:500]}"
+            raise RuntimeError(reason)
+        task_row = self.scheduler.get_task(task_id) or {}
+        to_nodes = plan_dependents(task_row.get("plan_json"), node_key)
+        conf = float(gate.get("confidence") or 0.5)
+        handoff = build_handoff(
+            from_node=node_key,
+            to_nodes=to_nodes,
+            artifact_ids=artifact_uris_from_refs(refs),
+            confidence=conf,
+            skill=skill,
+            agent_id=routed.agent_id,
+            reason=(
+                gate.get("reason")
+                or (
+                    f"Completed {skill or node_key}"
+                    + (f"; unlock {', '.join(to_nodes)}" if to_nodes else "")
+                )
+            ),
+        )
+        output = {
+            "text": result.text,
+            "data": result.data,
+            "artifacts": [r.to_dict() for r in refs],
+            "agent": {
+                "id": routed.agent_id,
+                "key": routed.agent_key,
+                "endpoint": endpoint,
+            },
+            "a2a_task_id": result.task.id,
+            "status": gate.get("status") or "ok",
+            "confidence": conf,
+            "handoff": handoff,
+        }
+
+        if tracking_service and idempotency_key:
+            try:
+                tracking_service.mark_request_completed(idempotency_key, output)
+            except Exception as e:
+                print(f"[worker] request completion tracking error: {e}")
+
+        ready_jobs = self._with_task_lock(
+            task_id,
+            lambda: self.scheduler.mark_success(
+                task_id,
+                node_key,
+                output=output,
+                a2a_task_id=result.task.id,
+                latency_ms=latency_ms,
+            ),
+        )
+        self.streams.publish_execution_event(
+            "agent.task.completed",
+            {
+                "task_id": task_id,
+                "node_key": node_key,
+                "agent_id": routed.agent_id,
+                "latency_ms": latency_ms,
+                "artifact_count": len(refs),
+            },
+        )
+        try:
+            record_agent_call(
+                routed.agent_key,
+                status="success",
+                latency_seconds=latency_ms / 1000.0,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        print(
+            f"[worker] stored {len(refs)} artifacts for {node_key}: "
+            + ", ".join(r.uri for r in refs if r.name != "meta.json")
+        )
+        try:
+            self.memory.remember_node(
+                task_id,
+                node_key=node_key,
+                skill=skill,
+                text=result.text or "",
+                agent_id=routed.agent_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[worker] memory write skipped: {exc}")
+        for job in ready_jobs or []:
+            self.streams.enqueue_execution(**job)
+            print(f"[worker] enqueued downstream {job['node_key']}")
+
+        task = self.scheduler.get_task(task_id)
+        if task and task.get("status") == "waiting_for_user":
+            self.streams.publish_task_event(
+                "task.waiting_for_user",
+                {"task_id": task_id, "node_key": node_key},
+            )
+            print(f"[worker] task waiting_for_user {task_id} at {node_key}")
+        elif task and task.get("status") == "completed":
+            result_json = self.aggregator.build_result(task_id)
+            self.streams.publish_task_event(
+                "task.completed",
+                {
+                    "task_id": task_id,
+                    "summary_len": len(result_json.get("summary") or ""),
+                },
+            )
+            print(f"[worker] task completed {task_id}")
+            try:
+                record_task_finished("completed")
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if os.getenv("TENANT_MEMORY_PROMOTE", "1").lower() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }:
+                    promoted = self.memory.promote_task(task_id)
+                    if promoted:
+                        print(
+                            f"[worker] promoted {len(promoted)} tenant memories "
+                            f"from {task_id}"
+                        )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[worker] tenant memory promote skipped: {exc}")
+            self._auto_evaluate(task_id)
 
     def _on_failure(
         self,
@@ -708,14 +880,25 @@ class ExecutionEngine:
             artifact_candidates: list[str] = []
             if handoff and handoff.get("artifact_ids"):
                 artifact_candidates.extend(str(u) for u in handoff["artifact_ids"])
+
+            by_name: dict[str, str] = {}
             for art in out.get("artifacts") or []:
-                if art.get("name") == "output.txt" and art.get("uri"):
-                    uri = str(art["uri"])
-                    if uri not in artifact_candidates:
-                        artifact_candidates.insert(0, uri)
+                if not isinstance(art, dict):
+                    continue
+                name = str(art.get("name") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+                uri = art.get("uri")
+                if uri and name in LEGACY_TEXT_NAMES:
+                    by_name[name] = str(uri)
+            # Prefer output.md over legacy output.txt, then other handoff URIs
+            preferred = [by_name[n] for n in LEGACY_TEXT_NAMES if n in by_name]
+            ordered: list[str] = []
+            for uri in preferred + artifact_candidates:
+                if uri not in ordered:
+                    ordered.append(uri)
+            artifact_candidates = ordered
 
             for uri in artifact_candidates:
-                if not (uri.endswith(".txt") or "output.txt" in uri):
+                if not is_primary_text_artifact(uri=uri):
                     continue
                 try:
                     text = self.artifacts.get_text(uri)

@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
-  MarkerType,
+  Handle,
+  Position,
   type Edge,
   type Node,
   type NodeMouseHandler,
+  type NodeProps,
   type OnNodesChange,
 } from "reactflow";
 import "reactflow/dist/style.css";
@@ -22,50 +24,20 @@ import {
 } from "@/lib/api";
 import { CollaborationStream } from "./CollaborationStream";
 
-/** Align with TaskFlowDag STATUS_COLOR */
-const STATUS_COLOR: Record<string, string> = {
-  pending: "#4a665c",
-  ready: "#ffb454",
-  running: "#3dffa8",
-  success: "#7eaea0",
-  waiting_for_user: "#fbbf24",
-  failed: "#ff6b6b",
-  retrying: "#ffb454",
-  cancelled: "#6b7280",
-  completed: "#7eaea0",
-  REGISTERED: "#4a665c",
-  READY: "#3dffa8",
-  BUSY: "#ffb454",
-  DRAINING: "#fbbf24",
-  OFFLINE: "#6b7280",
-  SUCCEEDED: "#7eaea0",
-  FAILED: "#ff6b6b",
-  RUNNING: "#3dffa8",
-};
+/** Pastel fills by branch lane (git-style tracks), matching reference. */
+const LANE_FILL = ["#93c5fd", "#c4b5fd", "#6ee7b7", "#fcd34d", "#fda4af", "#a5b4fc"];
+const EDGE_STROKE = "#374151";
+const NODE_STROKE = "#1f2937";
 
-const COL_W = 280;
-const ROW_H = 150;
-const ORIGIN_X = 40;
-const ORIGIN_Y = 40;
-
-function statusColor(s?: string) {
-  if (!s) return STATUS_COLOR.pending;
-  return STATUS_COLOR[s] || STATUS_COLOR[s.toLowerCase()] || STATUS_COLOR.pending;
-}
-
-function shortLabel(text: string, max = 28): string {
-  const t = text.replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  if (t.length <= max) return t;
-  return `${t.slice(0, Math.max(0, max - 1))}…`;
-}
+const COL_W = 96;
+const ROW_H = 88;
+const ORIGIN_X = 48;
+const ORIGIN_Y = 120;
+const NODE_SIZE = 28;
 
 type AgentIndex = {
-  /** key or uuid → canonical uuid (or original id) */
   canonical: Map<string, string>;
-  /** canonical id → display name */
   names: Map<string, string>;
-  /** canonical id → agent_key */
   keys: Map<string, string>;
 };
 
@@ -89,18 +61,62 @@ function canonId(raw: string | undefined, index: AgentIndex): string {
   return index.canonical.get(raw) || raw;
 }
 
-function taskNodeId(taskId: string | undefined, nodes: CollaborationNode[]): string | null {
-  if (!taskId) return null;
-  const exact = `task:${taskId}`;
-  if (nodes.some((n) => n.id === exact)) return exact;
-  if (nodes.some((n) => n.id === taskId)) return taskId;
-  const byField = nodes.find((n) => n.type === "task" && n.task_id === taskId);
-  return byField?.id || null;
+type CircleData = {
+  raw: CollaborationNode;
+  title: string;
+  subtitle?: string;
+  fill: string;
+  highlighted?: boolean;
+};
+
+function BranchCircle({ data }: NodeProps<CircleData>) {
+  const size = NODE_SIZE;
+  return (
+    <div className="relative" style={{ width: size, height: size }}>
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-2 !w-2 !border-0 !bg-[#374151]"
+      />
+      <div
+        title={[data.title, data.subtitle].filter(Boolean).join(" · ")}
+        className="h-full w-full rounded-full"
+        style={{
+          background: data.fill,
+          border: `${data.highlighted ? 3 : 2.5}px solid ${data.highlighted ? "#3dffa8" : NODE_STROKE}`,
+          boxShadow: data.highlighted ? "0 0 0 3px rgba(61,255,168,0.25)" : "none",
+        }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-2 !w-2 !border-0 !bg-[#374151]"
+      />
+      <div
+        className="pointer-events-none absolute left-1/2 top-[calc(100%+6px)] w-[7.5rem] -translate-x-1/2 text-center font-mono text-[9px] leading-tight text-mist-300"
+      >
+        <div className="truncate">{data.title}</div>
+        {data.subtitle ? (
+          <div className="truncate text-mist-400">{data.subtitle}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = { branchCircle: memo(BranchCircle) };
+
+function shortLabel(text: string, max = 22): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (t.length <= max) return t;
+  return `${t.slice(0, Math.max(0, max - 1))}…`;
 }
 
 /**
- * Normalize graph: merge agent_key ↔ UUID aliases, dedupe task nodes.
- * Layout: left→right by call depth so each hop reads caller → task → target.
+ * Git-branch layout: left→right columns, horizontal lanes.
+ * Main trunk on lane 0; each fork from a node that already continues on its
+ * lane opens a new lane above/below (odd → up, even → down).
  */
 function layoutNodes(
   graph: CollaborationGraph,
@@ -110,7 +126,6 @@ function layoutNodes(
   const rawNodes = graph.nodes || [];
   const rawLinks = graph.links || [];
 
-  // --- canonicalize agents & rebuild node lists ---
   const agentMeta = new Map<string, CollaborationNode>();
   for (const n of rawNodes) {
     if (n.type !== "agent") continue;
@@ -118,11 +133,7 @@ function layoutNodes(
     if (!id) continue;
     const prev = agentMeta.get(id);
     const label =
-      index.names.get(id) ||
-      prev?.label ||
-      n.label ||
-      index.keys.get(id) ||
-      id;
+      index.names.get(id) || prev?.label || n.label || index.keys.get(id) || id;
     agentMeta.set(id, {
       ...prev,
       ...n,
@@ -154,7 +165,6 @@ function layoutNodes(
     target: canonId(l.target, index),
   }));
 
-  // Ensure agents referenced only on links still appear
   for (const l of links) {
     for (const aid of [l.source, l.target]) {
       if (!aid || agentMeta.has(aid)) continue;
@@ -181,231 +191,198 @@ function layoutNodes(
     }
   }
 
-  // --- rank agents by call depth (left → right) ---
-  // level 0: agents that call but are never targeted (or roots)
-  // level d: agents first appearing as target of a depth-d hop
-  const agentLevel = new Map<string, number>();
+  // Expand each hop into agent → task → agent chain segments
+  type Seg = { from: string; to: string; link: CollaborationLink };
+  const segs: Seg[] = [];
   const sortedLinks = [...links].sort(
     (a, b) => (a.depth ?? 0) - (b.depth ?? 0) || String(a.id).localeCompare(String(b.id)),
   );
-
-  for (const l of sortedLinks) {
-    if (l.source && !agentLevel.has(l.source)) agentLevel.set(l.source, 0);
-    if (l.target) {
-      const d = Math.max(1, Number(l.depth) || 1);
-      const prev = agentLevel.get(l.target);
-      agentLevel.set(l.target, prev == null ? d : Math.min(prev, d));
-    }
-  }
-  // callers that are also targets keep target level; bump pure callers stay 0
   for (const l of sortedLinks) {
     if (!l.source || !l.target) continue;
-    const src = agentLevel.get(l.source) ?? 0;
-    const tgt = agentLevel.get(l.target) ?? src + 1;
-    // ensure target is to the right of source
-    if (tgt <= src) agentLevel.set(l.target, src + 1);
-  }
-
-  // slot agents within each level (vertical)
-  const byLevel = new Map<number, string[]>();
-  for (const id of agentMeta.keys()) {
-    const lvl = agentLevel.get(id) ?? 0;
-    agentLevel.set(id, lvl);
-    const list = byLevel.get(lvl) || [];
-    list.push(id);
-    byLevel.set(lvl, list);
-  }
-  for (const list of byLevel.values()) {
-    list.sort((a, b) => {
-      const na = agentMeta.get(a)?.label || a;
-      const nb = agentMeta.get(b)?.label || b;
-      return String(na).localeCompare(String(nb));
-    });
-  }
-
-  const agentPos = new Map<string, { x: number; y: number }>();
-  for (const [lvl, ids] of byLevel) {
-    ids.forEach((id, i) => {
-      agentPos.set(id, {
-        x: ORIGIN_X + lvl * COL_W * 2,
-        y: ORIGIN_Y + i * ROW_H,
-      });
-    });
-  }
-
-  // tasks sit on the half-column between caller and target; stagger by hop index
-  const hopIndex = new Map<string, number>();
-  const hopsAtPair = new Map<string, number>();
-  for (const l of sortedLinks) {
-    const mid = l.task_id ? `task:${l.task_id}` : "";
-    if (!mid) continue;
-    const pair = `${l.source}->${l.target}`;
-    const n = hopsAtPair.get(pair) || 0;
-    hopsAtPair.set(pair, n + 1);
-    hopIndex.set(mid, n);
-  }
-
-  const taskPos = new Map<string, { x: number; y: number }>();
-  for (const l of sortedLinks) {
-    if (!l.task_id) continue;
-    const mid = `task:${l.task_id}`;
-    const sp = agentPos.get(l.source);
-    const tp = agentPos.get(l.target);
-    if (!sp || !tp) {
-      taskPos.set(mid, { x: ORIGIN_X + COL_W, y: ORIGIN_Y });
-      continue;
+    const mid = l.task_id ? `task:${l.task_id}` : null;
+    if (mid && taskMeta.has(mid)) {
+      segs.push({ from: l.source, to: mid, link: l });
+      segs.push({ from: mid, to: l.target, link: l });
+    } else {
+      segs.push({ from: l.source, to: l.target, link: l });
     }
-    const stagger = (hopIndex.get(mid) || 0) * 36;
-    taskPos.set(mid, {
-      x: (sp.x + tp.x) / 2,
-      y: (sp.y + tp.y) / 2 + stagger,
+  }
+
+  // adjacency for children
+  const children = new Map<string, string[]>();
+  for (const s of segs) {
+    const list = children.get(s.from) || [];
+    if (!list.includes(s.to)) list.push(s.to);
+    children.set(s.from, list);
+  }
+
+  // Roots: agents that appear as source but never as target among agents
+  const targeted = new Set(segs.map((s) => s.to));
+  const roots = [...agentMeta.keys()].filter((id) => !targeted.has(id));
+  if (roots.length === 0 && agentMeta.size) {
+    roots.push([...agentMeta.keys()][0]);
+  }
+
+  const col = new Map<string, number>();
+  const lane = new Map<string, number>();
+  const usedLanesAtCol = new Map<number, Set<number>>();
+
+  function reserveLane(c: number, preferred: number): number {
+    const used = usedLanesAtCol.get(c) || new Set();
+    if (!used.has(preferred)) {
+      used.add(preferred);
+      usedLanesAtCol.set(c, used);
+      return preferred;
+    }
+    // spiral: 0, -1, 1, -2, 2, ...
+    for (let k = 1; k < 32; k++) {
+      for (const cand of [-k, k]) {
+        if (!used.has(cand)) {
+          used.add(cand);
+          usedLanesAtCol.set(c, used);
+          return cand;
+        }
+      }
+    }
+    used.add(preferred + 100);
+    usedLanesAtCol.set(c, used);
+    return preferred + 100;
+  }
+
+  // Place roots on main lane
+  roots.forEach((id, i) => {
+    col.set(id, i);
+    lane.set(id, 0);
+    reserveLane(i, 0);
+  });
+
+  // BFS along segs
+  const placed = new Set(roots);
+  const queue = [...roots];
+
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const kids = children.get(cur) || [];
+    const parentCol = col.get(cur) ?? 0;
+    const parentLane = lane.get(cur) ?? 0;
+
+    kids.forEach((child, kidIdx) => {
+      if (placed.has(child) && (col.get(child) ?? -1) > parentCol) {
+        return;
+      }
+      const nextCol = parentCol + 1;
+      let nextLane = parentLane;
+      if (kidIdx === 0) {
+        nextLane = parentLane;
+      } else {
+        const forkNum = kidIdx;
+        const sign = forkNum % 2 === 1 ? -1 : 1;
+        nextLane = parentLane + sign * Math.ceil(forkNum / 2);
+      }
+      nextLane = reserveLane(nextCol, nextLane);
+      const prevCol = col.get(child);
+      if (prevCol == null || nextCol >= prevCol) {
+        col.set(child, nextCol);
+        lane.set(child, nextLane);
+      }
+      if (!placed.has(child)) {
+        placed.add(child);
+        queue.push(child);
+      }
     });
   }
 
-  // fallback place for tasks without a matching link
-  let orphan = 0;
-  for (const id of taskMeta.keys()) {
-    if (taskPos.has(id)) continue;
-    taskPos.set(id, {
-      x: ORIGIN_X + COL_W,
-      y: ORIGIN_Y + (byLevel.get(0)?.length || 1) * ROW_H + orphan * 100,
-    });
-    orphan += 1;
+  // Place any leftover nodes
+  let orphanCol = Math.max(0, ...col.values(), 0) + 1;
+  for (const id of [...agentMeta.keys(), ...taskMeta.keys()]) {
+    if (col.has(id)) continue;
+    col.set(id, orphanCol++);
+    lane.set(id, reserveLane(col.get(id)!, 1));
+  }
+
+  // Normalize lanes so main is visually centered (shift so min lane → keep relative)
+  const laneVals = [...lane.values()];
+  const minLane = laneVals.length ? Math.min(...laneVals) : 0;
+
+  const highlightSkill = (highlightNodeKey || "").trim().toLowerCase();
+
+  function fillForLane(ln: number): string {
+    const idx = Math.abs(ln - minLane) % LANE_FILL.length;
+    return LANE_FILL[idx];
   }
 
   const nodes: Node[] = [];
-  for (const [id, n] of agentMeta) {
-    const pos = agentPos.get(id) || { x: ORIGIN_X, y: ORIGIN_Y };
-    const key = index.keys.get(id) || (n.agent_key as string | undefined);
-    const title = n.label || index.names.get(id) || key || id.slice(0, 10);
-    nodes.push({
-      id,
-      position: pos,
-      data: {
-        raw: n,
-        label: `${title}${key && key !== title ? `\n${key}` : ""}\n[${n.state || n.status || "—"}]`,
-      },
-      type: "default",
-      style: {
-        background: "rgba(15, 23, 20, 0.92)",
-        border: `1.5px solid ${statusColor(n.state || n.status)}`,
-        borderRadius: 12,
-        color: "#e8f0ea",
-        fontSize: 11,
-        padding: 10,
-        minWidth: 148,
-        maxWidth: 200,
-        whiteSpace: "pre-line",
-        textAlign: "center",
-      },
-    });
-  }
+  const allMeta = new Map<string, CollaborationNode>([
+    ...agentMeta.entries(),
+    ...taskMeta.entries(),
+  ]);
 
-  const highlightSkill = (highlightNodeKey || "").trim().toLowerCase();
-  for (const [id, n] of taskMeta) {
-    const pos = taskPos.get(id) || { x: ORIGIN_X + COL_W, y: ORIGIN_Y };
-    const skill = String(n.skill || n.label || "").toLowerCase();
-    const nodeKeyHint = String(n.task_id || id).toLowerCase();
+  for (const [id, meta] of allMeta) {
+    const c = col.get(id) ?? 0;
+    const ln = lane.get(id) ?? 0;
+    const x = ORIGIN_X + c * COL_W;
+    const y = ORIGIN_Y + (ln - minLane) * ROW_H;
+    const isTask = meta.type === "task";
+    const key = isTask
+      ? String(meta.skill || meta.label || "")
+      : index.keys.get(id) || String(meta.agent_key || "");
+    const title = isTask
+      ? shortLabel(String(meta.skill || meta.label || "task"), 16)
+      : shortLabel(String(meta.label || key || id.slice(0, 8)), 16);
+    const subtitle = isTask
+      ? shortLabel(`d${meta.depth ?? "·"} · ${meta.status || "—"}`, 18)
+      : shortLabel(key && key !== title ? key : String(meta.state || meta.status || ""), 18);
+    const skill = String(meta.skill || meta.label || "").toLowerCase();
     const highlighted =
       !!highlightSkill &&
       (skill === highlightSkill ||
-        nodeKeyHint.includes(highlightSkill) ||
-        String(n.label || "").toLowerCase() === highlightSkill);
+        String(meta.task_id || id).toLowerCase().includes(highlightSkill) ||
+        key.toLowerCase() === highlightSkill);
+
     nodes.push({
       id,
-      position: pos,
+      type: "branchCircle",
+      position: { x, y },
       data: {
-        raw: n,
-        label: `${n.skill || "task"}\nd${n.depth ?? "?"} · ${n.status || "—"}`,
+        raw: meta,
+        title,
+        subtitle: subtitle || undefined,
+        fill: fillForLane(ln),
+        highlighted,
       },
-      type: "default",
-      style: {
-        background: highlighted ? "rgba(61, 255, 168, 0.12)" : "rgba(30, 42, 36, 0.95)",
-        border: highlighted
-          ? "2px solid #3dffa8"
-          : `1.5px dashed ${statusColor(n.status)}`,
-        borderRadius: 8,
-        color: "#c5d4c9",
-        fontSize: 10,
-        padding: 8,
-        minWidth: 120,
-        maxWidth: 160,
-        whiteSpace: "pre-line",
-        textAlign: "center",
-        boxShadow: highlighted ? "0 0 0 1px rgba(61,255,168,0.35)" : undefined,
-      },
+      draggable: false,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
     });
   }
 
   const nodeIds = new Set(nodes.map((n) => n.id));
-  const allRaw = [...agentMeta.values(), ...taskMeta.values()];
   const edges: Edge[] = [];
+  const seenEdge = new Set<string>();
 
-  for (const l of links) {
-    const st = (l.status || "").toLowerCase();
-    const animated = st === "running" || st === "pending" || st === "ready";
-    const stroke = statusColor(l.status);
-    const mid = taskNodeId(l.task_id, allRaw);
-    const base = {
+  for (const s of segs) {
+    if (!nodeIds.has(s.from) || !nodeIds.has(s.to)) continue;
+    const eid = `${s.from}->${s.to}`;
+    if (seenEdge.has(eid)) continue;
+    seenEdge.add(eid);
+
+    const st = (s.link.status || "").toLowerCase();
+    const animated = st === "running" || st === "pending" || st === "submitted" || st === "ready";
+    const fromLane = lane.get(s.from) ?? 0;
+    const toLane = lane.get(s.to) ?? 0;
+    const sameLane = fromLane === toLane;
+
+    edges.push({
+      id: eid,
+      source: s.from,
+      target: s.to,
+      type: sameLane ? "straight" : "bezier",
       animated,
-      style: { stroke, strokeWidth: 1.8 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
-      labelStyle: { fill: "#7eaea0", fontSize: 9 },
-      labelBgStyle: { fill: "rgba(10,16,14,0.85)" },
-      labelBgPadding: [4, 2] as [number, number],
-      labelBgBorderRadius: 4,
-    };
-
-    // Prefer handoff.reason ("why call me"); fall back to skill
-    const edgeLabel = shortLabel(
-      String(l.reason || l.skill || "").trim(),
-      28,
-    ) || undefined;
-    const edgeHot =
-      !!highlightSkill &&
-      (String(l.skill || "").toLowerCase() === highlightSkill ||
-        String(l.reason || "").toLowerCase().includes(highlightSkill) ||
-        (mid != null &&
-          String(taskMeta.get(mid)?.skill || "").toLowerCase() === highlightSkill));
-    const edgeStyle = {
-      ...base,
       style: {
-        stroke: edgeHot ? "#3dffa8" : stroke,
-        strokeWidth: edgeHot ? 2.6 : 1.8,
+        stroke: EDGE_STROKE,
+        strokeWidth: 3.2,
       },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: edgeHot ? "#3dffa8" : stroke,
-      },
-      labelStyle: {
-        fill: edgeHot ? "#3dffa8" : "#7eaea0",
-        fontSize: 9,
-      },
-    };
-
-    if (mid && nodeIds.has(mid) && nodeIds.has(l.source) && nodeIds.has(l.target)) {
-      edges.push({
-        ...edgeStyle,
-        id: `${l.id || "e"}:in`,
-        source: l.source,
-        target: mid,
-        label: edgeLabel,
-      });
-      edges.push({
-        ...edgeStyle,
-        id: `${l.id || "e"}:out`,
-        source: mid,
-        target: l.target,
-      });
-    } else if (nodeIds.has(l.source) && nodeIds.has(l.target)) {
-      edges.push({
-        ...edgeStyle,
-        id: l.id || `${l.source}-${l.target}`,
-        source: l.source,
-        target: l.target,
-        label: edgeLabel,
-      });
-    }
+    });
   }
 
   return { nodes, edges };
@@ -420,13 +397,10 @@ export function CollaborationGraphView({
   rootTaskId: string | null;
   denialCount?: number;
   onOpenDenials?: () => void;
-  /** Plan node_key / skill to emphasize (checkpoint time-travel) */
   highlightNodeKey?: string | null;
 }) {
   const [graph, setGraph] = useState<CollaborationGraph | null>(null);
-  const [agentIndex, setAgentIndex] = useState<AgentIndex>(() =>
-    buildAgentIndex([]),
-  );
+  const [agentIndex, setAgentIndex] = useState<AgentIndex>(() => buildAgentIndex([]));
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<CollaborationNode | null>(null);
   const [loading, setLoading] = useState(false);
@@ -439,7 +413,7 @@ export function CollaborationGraphView({
         if (!cancelled) setAgentIndex(buildAgentIndex(r.agents || []));
       })
       .catch(() => {
-        /* registry optional for layout */
+        /* registry optional */
       });
     return () => {
       cancelled = true;
@@ -491,10 +465,7 @@ export function CollaborationGraphView({
   }, []);
 
   const { nodes, edges } = useMemo(
-    () =>
-      graph
-        ? layoutNodes(graph, agentIndex, highlightNodeKey)
-        : { nodes: [], edges: [] },
+    () => (graph ? layoutNodes(graph, agentIndex, highlightNodeKey) : { nodes: [], edges: [] }),
     [graph, agentIndex, highlightNodeKey],
   );
 
@@ -521,9 +492,7 @@ export function CollaborationGraphView({
           运行时协作图
         </span>
         <span className="font-mono text-[10px] text-mist-400/80">
-          {graph?.source === "plan_synthesis"
-            ? "由 Plan DAG 合成 · Agent → Task → Agent（按依赖深度从左到右）"
-            : "Agent → Task → Agent（按调用深度从左到右）"}
+          Git 分支布局 · 主线 / 上下分叉 = Agent 委派与 spawn
         </span>
         {typeof denialCount === "number" && denialCount > 0 ? (
           <button
@@ -543,18 +512,31 @@ export function CollaborationGraphView({
         </div>
       ) : (
         <div className="relative min-h-0 flex-1 rounded-xl border border-white/10 bg-ink-950/40">
+          <div className="pointer-events-none absolute left-3 top-3 z-10 flex gap-3 font-mono text-[9px] text-mist-400">
+            {LANE_FILL.slice(0, 3).map((c, i) => (
+              <span key={c} className="inline-flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full border border-[#1f2937]"
+                  style={{ background: c }}
+                />
+                {i === 0 ? "主线" : i === 1 ? "分支" : "分支"}
+              </span>
+            ))}
+          </div>
           <ReactFlow
             nodes={nodes}
             edges={edges}
+            nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
             onNodeClick={onNodeClick}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            fitViewOptions={{ padding: 0.25 }}
             proOptions={{ hideAttribution: true }}
             nodesDraggable={false}
             minZoom={0.35}
+            defaultEdgeOptions={{ type: "bezier" }}
           >
-            <Background color="rgba(255,255,255,0.04)" gap={18} />
+            <Background color="rgba(255,255,255,0.04)" gap={20} />
             <Controls showInteractive={false} />
           </ReactFlow>
         </div>
@@ -581,15 +563,7 @@ export function CollaborationGraphView({
             {selected.state ? <div>state · {selected.state}</div> : null}
             {selected.status ? <div>status · {selected.status}</div> : null}
             {selected.skill ? <div>skill · {selected.skill}</div> : null}
-            {selected.active_tasks != null ? <div>active_tasks · {selected.active_tasks}</div> : null}
-            {selected.task_count != null ? <div>task_count · {selected.task_count}</div> : null}
-            {selected.last_seen ? <div>last_seen · {selected.last_seen}</div> : null}
             {selected.depth != null ? <div>depth · {selected.depth}</div> : null}
-            {selected.type === "task" && selected.skill ? (
-              <div className="text-mist-300">
-                tip · 边上的绿色短文案是上游 handoff.reason（为何调用）
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

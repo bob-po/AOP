@@ -169,7 +169,7 @@ def test_collaboration_from_plan_builds_mid_task_hops(monkeypatch):
              "handoff": {
                  "from": "search", "to": ["report"],
                  "reason": "search done; unlock report",
-                 "artifact_ids": ["s3://b/t/search/output.txt"],
+                 "artifact_ids": ["s3://b/t/search/output.md"],
                  "confidence": 0.9,
              }},
             {"id": "rag", "skill": "knowledge-search", "status": "success",
@@ -177,7 +177,7 @@ def test_collaboration_from_plan_builds_mid_task_hops(monkeypatch):
              "handoff": {
                  "from": "rag", "to": ["report"],
                  "reason": "rag done; unlock report",
-                 "artifact_ids": ["s3://b/t/rag/output.txt"],
+                 "artifact_ids": ["s3://b/t/rag/output.md"],
                  "confidence": 0.85,
              }},
             {"id": "report", "skill": "report-generation", "status": "success",

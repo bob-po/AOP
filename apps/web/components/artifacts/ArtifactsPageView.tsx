@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { listArtifacts, type ArtifactItem } from "@/lib/api";
 import { PptPreview } from "@/components/tasks/PptPreview";
 
-const TYPES = ["", "json", "text", "image", "video", "pdf", "ppt"];
+const TYPES = ["", "json", "markdown", "text", "image", "video", "pdf", "ppt"];
 
 export function ArtifactsPageView() {
   const router = useRouter();

@@ -48,7 +48,8 @@ class ExecutionResult:
 
     @property
     def ok(self) -> bool:
-        return self.task.status.value == "completed"
+        status = getattr(self.task.status, "value", self.task.status)
+        return str(status or "").lower() == "completed"
 
 
 class A2AExecutor:
@@ -83,6 +84,8 @@ class A2AExecutor:
         target_agent_id: str | None = None,
         depth: int = 0,
         visited_agents: list[str] | None = None,
+        async_mode: bool = False,
+        callback_url: str | None = None,
     ) -> ExecutionResult:
         # P36.1: Use provided idempotency key or generate one
         if idempotency_key is None:
@@ -104,7 +107,9 @@ class A2AExecutor:
                 query=query,
                 policy=self.policy,
             )
-            client = A2AClient(agent_url, timeout=timeout)
+            # Submit path may return immediately; use a short connect timeout for async.
+            client_timeout = min(timeout, 30.0) if async_mode else timeout
+            client = A2AClient(agent_url, timeout=client_timeout)
             card = client.card
             # Seed A2A lineage from the central OS task so Agent networks inherit
             # the orchestrator task as root_task_id (Phase 2 Task↔Runtime Graph).
@@ -124,6 +129,8 @@ class A2AExecutor:
                 target_agent_id=target_agent_id,
                 visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
                 task_id=a2a_task_id,
+                async_mode=async_mode,
+                callback_url=callback_url,
             )
             text = clamp_output(first_text_artifact(task), self.policy)
             result = ExecutionResult(
@@ -145,6 +152,39 @@ class A2AExecutor:
             logger.error(f"A2A execution error: {e}")
             raise
 
+    def join_task(
+        self,
+        agent_url: str,
+        a2a_task_id: str,
+        *,
+        timeout_s: float = 900.0,
+        poll_interval_s: float = 2.0,
+    ) -> ExecutionResult:
+        """Poll ``tasks/get`` until the A2A task reaches a terminal state."""
+        import time
+
+        client = A2AClient(agent_url, timeout=min(60.0, max(5.0, poll_interval_s * 4)))
+        card = client.card
+        deadline = time.monotonic() + max(1.0, float(timeout_s))
+        terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
+        last: Task | None = None
+        while time.monotonic() < deadline:
+            last = client.get_task(a2a_task_id)
+            state = getattr(last.status, "value", str(last.status)).lower()
+            if state in terminal:
+                text = clamp_output(first_text_artifact(last), self.policy)
+                return ExecutionResult(
+                    agent_name=card.name,
+                    agent_url=agent_url.rstrip("/"),
+                    skill_id=None,
+                    task=last,
+                    text=text,
+                    data=first_data_artifact(last),
+                )
+            time.sleep(max(0.2, float(poll_interval_s)))
+        raise TimeoutError(
+            f"A2A join timed out after {timeout_s}s for task {a2a_task_id}"
+        )
     def _result_from_cache(
         self,
         cached_response: dict[str, Any],
@@ -152,13 +192,24 @@ class A2AExecutor:
         skill_id: str | None,
     ) -> ExecutionResult:
         """Reconstruct ExecutionResult from cached response."""
-        # This is a simplified reconstruction - in production, you'd want to cache the full Task object
+        from a2a_sdk.models import TaskStatus
+
         task_dict = cached_response.get("task", {})
-        task = Task.from_dict(task_dict) if task_dict else Task(
-            id=cached_response.get("task_id", "cached"),
-            status=cached_response.get("status", "completed"),
-            artifacts=cached_response.get("artifacts", []),
-        )
+        if task_dict:
+            task = Task.from_dict(task_dict)
+        else:
+            raw_status = cached_response.get("status", "completed")
+            if isinstance(raw_status, dict):
+                raw_status = raw_status.get("state", "completed")
+            try:
+                status = TaskStatus(str(raw_status))
+            except ValueError:
+                status = TaskStatus.COMPLETED
+            task = Task(
+                id=str(cached_response.get("task_id") or "cached"),
+                status=status,
+                artifacts=list(cached_response.get("artifacts") or []),
+            )
         return ExecutionResult(
             agent_name=cached_response.get("agent_name", "cached"),
             agent_url=agent_url.rstrip("/"),

@@ -32,9 +32,15 @@ function isSessionToken(token: string): boolean {
 
 export type TaskNode = {
   id: string;
+  /** Plan field: today this is agent_key (no skill split). */
   skill: string;
   status: string;
   agent_id?: string | null;
+  /** Resolved harness / virtual agent key (claude-code, deepseek-harness, pi, …). */
+  agent_key?: string | null;
+  agent_name?: string | null;
+  agent_endpoint?: string | null;
+  a2a_task_id?: string | null;
   attempt?: number;
   error_message?: string | null;
   handoff?: Record<string, unknown> | null;
@@ -50,6 +56,7 @@ export type TaskPlan = {
   goal?: string;
   nodes: Array<{
     id: string;
+    /** Agent key routed by planner (legacy name: skill). */
     skill: string;
     depends_on?: string[];
   }>;

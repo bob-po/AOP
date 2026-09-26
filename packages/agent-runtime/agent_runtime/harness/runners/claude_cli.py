@@ -21,6 +21,7 @@ from ..protocol import (
     HarnessStatus,
     TokenUsage,
 )
+from ._cli_common import bump_stream_limit, readline_unlimited
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class ClaudeCliRunner:
         self,
         *,
         binary: Optional[str] = None,
-        timeout_s: float = 300.0,
+        timeout_s: float = 1800.0,
         extra_args: Optional[list[str]] = None,
         env: Optional[dict[str, str]] = None,
         supervisor: Optional[ProcessSupervisor] = None,
@@ -87,6 +88,15 @@ class ClaudeCliRunner:
         if self.binary and os.path.isfile(self.binary):
             return self.binary
         return None
+
+    def readiness(self) -> dict[str, Any]:
+        if self.resolve_binary():
+            return {"ready": True, "mode": "cli"}
+        return {
+            "ready": False,
+            "mode": None,
+            "reason": f"Claude CLI not found ({self.binary}). Install Claude Code or set CLAUDE_CLI_PATH.",
+        }
 
     async def cancel(self, task_id: str) -> bool:
         return await self.supervisor.cancel(task_id)
@@ -126,6 +136,16 @@ class ClaudeCliRunner:
 
         await _emit(HarnessEventType.STATUS, {"state": "working", "message": "starting claude cli"})
 
+        # Headless harness: grant tools by default (WebSearch/WebFetch etc.).
+        # Override via CLAUDE_CLI_PERMISSION_MODE / CLAUDE_CLI_ALLOWED_TOOLS.
+        permission_mode = (
+            os.getenv("CLAUDE_CLI_PERMISSION_MODE") or "bypassPermissions"
+        ).strip()
+        allowed_tools = (
+            os.getenv("CLAUDE_CLI_ALLOWED_TOOLS")
+            or "WebSearch,WebFetch,Bash,Read,Edit,Write,Glob,Grep,Agent,Skill,TodoWrite"
+        ).strip()
+
         argv = [
             binary,
             "-p",
@@ -133,8 +153,12 @@ class ClaudeCliRunner:
             "--output-format",
             "stream-json",
             "--verbose",
-            *self.extra_args,
+            "--permission-mode",
+            permission_mode,
         ]
+        if allowed_tools and allowed_tools.lower() not in {"-", "none", "off"}:
+            argv.extend(["--allowed-tools", allowed_tools])
+        argv.extend(self.extra_args)
         env = dict(self.env or os.environ.copy())
 
         usage = TokenUsage()
@@ -149,10 +173,13 @@ class ClaudeCliRunner:
             await _emit(HarnessEventType.ERROR, {"error": err})
             return HarnessResult(text="", status=HarnessStatus.FAILED, error=err, skill_id=skill_id)
 
+        bump_stream_limit(mp.proc.stdout)
+        bump_stream_limit(mp.proc.stderr)
+
         async def _read_stdout() -> None:
             assert mp.proc.stdout is not None
             while True:
-                line_b = await mp.proc.stdout.readline()
+                line_b = await readline_unlimited(mp.proc.stdout)
                 if not line_b:
                     break
                 line = line_b.decode("utf-8", errors="replace")
@@ -164,7 +191,7 @@ class ClaudeCliRunner:
         async def _read_stderr() -> None:
             assert mp.proc.stderr is not None
             while True:
-                line_b = await mp.proc.stderr.readline()
+                line_b = await readline_unlimited(mp.proc.stderr)
                 if not line_b:
                     break
                 stderr_bits.append(line_b.decode("utf-8", errors="replace"))
@@ -185,6 +212,19 @@ class ClaudeCliRunner:
                 skill_id=skill_id,
                 usage=usage,
                 data={"runner": "ClaudeCliRunner"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self.supervisor.cancel(task_id)
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            err = f"claude cli stream error: {exc}"
+            await _emit(HarnessEventType.ERROR, {"error": err})
+            return HarnessResult(
+                text="".join(chunks),
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "ClaudeCliRunner", "streamError": True},
             )
         finally:
             # If cancel raced us, supervisor already removed the entry.

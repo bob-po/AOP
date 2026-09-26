@@ -25,12 +25,44 @@ __all__ = [
     "DEFAULT_TENANT_ID",
     "Scheduler",
     "ScheduleResult",
+    "is_permanent_agent_error",
 ]
+
+_NODE_ACTIVE = frozenset(
+    {"pending", "ready", "running", "retrying", "waiting_for_user"}
+)
+_NODE_OK = frozenset({"success"})
+_NODE_BAD = frozenset({"failed", "cancelled"})
+
+# Missing CLI / SDK / API key — retrying will not help.
+_PERMANENT_ERROR_MARKERS = (
+    "unavailable",
+    "not found",
+    "pi cli not found",
+    "pi_cli_path",
+    "deepseek harness unavailable",
+    "deepseek_api_key",
+    "missing_credential",
+    "no api key",
+    "needs deepseek_api_key",
+    "install deepseek",
+    "install @earendil",
+    "set deepseek_api_key",
+    "set pi_cli_path",
+    "no such file",
+    "command not found",
+    "dsh_home",
+)
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
+
+def is_permanent_agent_error(error: str | None) -> bool:
+    """True when the agent/runtime error will not succeed on retry."""
+    low = (error or "").lower()
+    return any(m in low for m in _PERMANENT_ERROR_MARKERS)
 
 @dataclass
 class ScheduleResult:
@@ -403,7 +435,7 @@ class Scheduler:
                     SET status = 'running',
                         assigned_agent_id = %s::uuid,
                         attempt = %s,
-                        started_at = COALESCE(started_at, %s),
+                        started_at = %s,
                         updated_at = %s,
                         error_message = NULL
                     WHERE task_id = %s::uuid
@@ -602,6 +634,10 @@ class Scheduler:
                     "task_events"
                 )
 
+                # Permanent env/CLI gaps: skip remaining retries.
+                if is_permanent_agent_error(error):
+                    attempt = max(int(attempt or 1), max_retry)
+
                 fail_status = "retrying" if attempt < max_retry else "failed"
                 out = row.get("output_json")
                 if isinstance(out, str):
@@ -697,27 +733,24 @@ class Scheduler:
                             now,
                         ),
                     )
-                conn.execute(
-                    """
-                    UPDATE tasks
-                    SET status = 'failed', error_message = %s, updated_at = %s, finished_at = %s
-                    WHERE id = %s::uuid
-                    """,
-                    (f"node {node_key} failed: {error}", now, now, task_id),
+
+                plan = self._load_plan(conn, task_id)
+                self._cancel_blocked_dependents(
+                    conn, task_id, failed_key=node_key, plan=plan, now=now
                 )
-                self._append_event(
+                settled = self._settle_task_after_node(
                     conn,
                     task_id,
-                    None,
-                    "task.failed",
-                    f"Task failed at node {node_key}",
-                    {"node_key": node_key},
+                    now,
+                    trigger_node=node_key,
+                    trigger_error=error,
                 )
                 return {
                     "decision": "failed",
                     "attempt": attempt,
                     "max_retry": max_retry,
                     "node_id": row["node_id"],
+                    "task_status": settled,
                 }
 
     def approve_node(
@@ -1136,25 +1169,215 @@ class Scheduler:
         total = len(rows) or 1
         done = len(completed)
         progress = int(done * 100 / total)
-        status = "completed" if done == total else "running"
+        # Keep unlocking while peers run; final status comes from settlement
+        # (partial success / all-failed), not "all nodes success".
+        self._settle_task_after_node(conn, task_id, now)
+        # Ensure progress reflects completed count while still running
         conn.execute(
             """
-            UPDATE tasks SET status = %s, progress = %s, updated_at = %s,
-              finished_at = CASE WHEN %s = 'completed' THEN %s ELSE finished_at END
-            WHERE id = %s::uuid
+            UPDATE tasks SET progress = GREATEST(COALESCE(progress, 0), %s), updated_at = %s
+            WHERE id = %s::uuid AND status = 'running'
             """,
-            (status, progress, now, status, now, task_id),
+            (progress, now, task_id),
         )
-        if status == "completed":
-            self._append_event(
-                conn,
-                task_id,
-                None,
-                "task.completed",
-                "Task Completed",
-                {"progress": 100},
-            )
         return ready_jobs
+
+    def _cancel_blocked_dependents(
+        self,
+        conn: Any,
+        task_id: str,
+        *,
+        failed_key: str,
+        plan: TaskPlan,
+        now: datetime,
+    ) -> list[str]:
+        """Cancel pending nodes that can never unlock because a dependency failed."""
+        blocked: set[str] = {failed_key}
+        changed = True
+        while changed:
+            changed = False
+            for n in plan.nodes:
+                if n.id in blocked:
+                    continue
+                if any(d in blocked for d in (n.depends_on or [])):
+                    blocked.add(n.id)
+                    changed = True
+        cancelled: list[str] = []
+        for key in blocked:
+            if key == failed_key:
+                continue
+            updated = conn.execute(
+                """
+                UPDATE task_nodes
+                SET status = 'cancelled',
+                    error_message = COALESCE(error_message, %s),
+                    updated_at = %s,
+                    finished_at = COALESCE(finished_at, %s)
+                WHERE task_id = %s::uuid AND node_key = %s
+                  AND status IN ('pending', 'ready', 'retrying')
+                RETURNING id::text AS node_id
+                """,
+                (
+                    f"blocked: dependency {failed_key} failed",
+                    now,
+                    now,
+                    task_id,
+                    key,
+                ),
+            ).fetchone()
+            if updated:
+                cancelled.append(key)
+                self._append_event(
+                    conn,
+                    task_id,
+                    updated["node_id"],
+                    "task.node.cancelled",
+                    f"Node {key} cancelled (blocked by {failed_key})",
+                    {"node_key": key, "blocked_by": failed_key},
+                )
+        return cancelled
+
+    def _settle_task_after_node(
+        self,
+        conn: Any,
+        task_id: str,
+        now: datetime,
+        *,
+        trigger_node: str | None = None,
+        trigger_error: str | None = None,
+    ) -> str:
+        """Recompute task status from node states.
+
+        Parallel peers: one failed node does **not** fail the whole task while
+        siblings are still active. When all nodes are terminal:
+        - ≥1 success → completed (partial if any failed)
+        - all failed/cancelled → failed
+        """
+        current = conn.execute(
+            "SELECT status FROM tasks WHERE id = %s::uuid FOR UPDATE",
+            (task_id,),
+        ).fetchone()
+        cur_status = str(current["status"]) if current else "unknown"
+        if cur_status == "cancelled":
+            return "cancelled"
+
+        rows = self._list_nodes(conn, task_id)
+        if not rows:
+            return cur_status
+
+        active = [r for r in rows if r["status"] in _NODE_ACTIVE]
+        ok = [r for r in rows if r["status"] in _NODE_OK]
+        bad = [r for r in rows if r["status"] in _NODE_BAD]
+        waiting = [r for r in rows if r["status"] == "waiting_for_user"]
+        total = len(rows) or 1
+        progress = int(len(ok) * 100 / total)
+
+        if waiting and not any(
+            r["status"] in {"pending", "ready", "running", "retrying"} for r in rows
+        ):
+            conn.execute(
+                """
+                UPDATE tasks SET status = 'waiting_for_user', progress = %s, updated_at = %s,
+                  finished_at = NULL
+                WHERE id = %s::uuid AND status <> 'cancelled'
+                """,
+                (progress, now, task_id),
+            )
+            return "waiting_for_user"
+
+        if active and not waiting:
+            # Peers still working — keep task running even if some nodes failed.
+            conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'running',
+                    progress = %s,
+                    updated_at = %s,
+                    finished_at = NULL,
+                    error_message = CASE
+                      WHEN %s::text IS NOT NULL THEN COALESCE(error_message, %s)
+                      ELSE error_message
+                    END
+                WHERE id = %s::uuid AND status <> 'cancelled'
+                """,
+                (
+                    max(progress, 5),
+                    now,
+                    trigger_error,
+                    (
+                        f"node {trigger_node} failed: {trigger_error}"
+                        if trigger_node and trigger_error
+                        else None
+                    ),
+                    task_id,
+                ),
+            )
+            return "running"
+
+        if active:
+            # mix of waiting + other active already handled; keep running
+            conn.execute(
+                """
+                UPDATE tasks SET status = 'running', progress = %s, updated_at = %s,
+                  finished_at = NULL
+                WHERE id = %s::uuid AND status <> 'cancelled'
+                """,
+                (progress, now, task_id),
+            )
+            return "running"
+
+        # All nodes terminal
+        if ok and not bad:
+            status = "completed"
+            err = None
+            event = "task.completed"
+            msg = "Task Completed"
+        elif ok and bad:
+            status = "completed"
+            failed_keys = [r["id"] for r in bad]
+            err = f"partial success; failed nodes: {', '.join(failed_keys)}"
+            event = "task.completed"
+            msg = f"Task completed with {len(bad)} failed node(s)"
+        else:
+            status = "failed"
+            err = (
+                f"node {trigger_node} failed: {trigger_error}"
+                if trigger_node
+                else (trigger_error or "all nodes failed")
+            )
+            event = "task.failed"
+            msg = (
+                f"Task failed at node {trigger_node}"
+                if trigger_node
+                else "Task failed"
+            )
+
+        conn.execute(
+            """
+            UPDATE tasks
+            SET status = %s,
+                progress = %s,
+                updated_at = %s,
+                finished_at = %s,
+                error_message = COALESCE(%s, error_message)
+            WHERE id = %s::uuid AND status <> 'cancelled'
+            """,
+            (status, 100 if status == "completed" else progress, now, now, err, task_id),
+        )
+        self._append_event(
+            conn,
+            task_id,
+            None,
+            event,
+            msg,
+            {
+                "progress": 100 if status == "completed" else progress,
+                "ok": len(ok),
+                "failed": len(bad),
+                "node_key": trigger_node,
+            },
+        )
+        return status
 
     def _task_status(self, conn: Any, task_id: str) -> str:
         row = conn.execute(
@@ -1240,10 +1463,25 @@ class Scheduler:
                 ).fetchone()
                 if not row:
                     return None
-                if row["status"] in ("completed", "failed", "cancelled"):
+                now = _utc_now()
+                # Sweep any still-active nodes even if the task was already marked
+                # failed/completed (parallel peer left running after a sibling failed).
+                swept = conn.execute(
+                    """
+                    UPDATE task_nodes
+                    SET status = 'cancelled', updated_at = %s, finished_at = COALESCE(finished_at, %s),
+                        error_message = COALESCE(error_message, 'cancelled by user')
+                    WHERE task_id = %s::uuid
+                      AND status IN ('pending', 'ready', 'running', 'retrying', 'waiting_for_user')
+                    RETURNING id::text AS node_id, node_key
+                    """,
+                    (now, now, task_id),
+                ).fetchall()
+                already_terminal = row["status"] in ("completed", "failed", "cancelled")
+                if already_terminal and not swept:
                     nodes = self._list_nodes(conn, task_id)
                     return {**dict(row), "nodes": nodes, "cancelled": False}
-                now = _utc_now()
+
                 conn.execute(
                     """
                     UPDATE tasks
@@ -1253,22 +1491,22 @@ class Scheduler:
                     """,
                     (now, now, task_id),
                 )
-                conn.execute(
-                    """
-                    UPDATE task_nodes
-                    SET status = 'cancelled', updated_at = %s, finished_at = COALESCE(finished_at, %s)
-                    WHERE task_id = %s::uuid
-                      AND status IN ('pending', 'ready', 'running', 'retrying')
-                    """,
-                    (now, now, task_id),
-                )
+                for n in swept:
+                    self._append_event(
+                        conn,
+                        task_id,
+                        n["node_id"],
+                        "task.node.cancelled",
+                        f"Node {n['node_key']} cancelled",
+                        {"node_key": n["node_key"]},
+                    )
                 self._append_event(
                     conn,
                     task_id,
                     None,
                     "task.cancelled",
                     "task cancelled",
-                    {},
+                    {"swept_nodes": len(swept)},
                 )
                 nodes = self._list_nodes(conn, task_id)
                 return {
@@ -1386,18 +1624,30 @@ class Scheduler:
     def _list_nodes(self, conn, task_id: str) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
-            SELECT node_key AS id, skill, status,
-                   assigned_agent_id::text AS agent_id,
-                   attempt, error_message,
-                   output_json->'handoff' AS handoff,
-                   checkpoint_at,
-                   checkpoint_attempt,
-                   checkpoint_json->'artifact_ids' AS checkpoint_artifact_ids,
-                   checkpoint_json->'error' AS checkpoint_error,
-                   checkpoint_json->'status' AS checkpoint_status
-            FROM task_nodes
-            WHERE task_id = %s::uuid
-            ORDER BY created_at ASC, node_key ASC
+            SELECT tn.node_key AS id,
+                   tn.skill,
+                   tn.status,
+                   tn.assigned_agent_id::text AS agent_id,
+                   COALESCE(
+                     tn.output_json->'agent'->>'key',
+                     a.agent_key,
+                     tn.skill
+                   ) AS agent_key,
+                   COALESCE(a.name, tn.output_json->'agent'->>'key', tn.skill) AS agent_name,
+                   tn.output_json->'agent'->>'endpoint' AS agent_endpoint,
+                   tn.output_json->>'a2a_task_id' AS a2a_task_id,
+                   tn.attempt,
+                   tn.error_message,
+                   tn.output_json->'handoff' AS handoff,
+                   tn.checkpoint_at,
+                   tn.checkpoint_attempt,
+                   tn.checkpoint_json->'artifact_ids' AS checkpoint_artifact_ids,
+                   tn.checkpoint_json->'error' AS checkpoint_error,
+                   tn.checkpoint_json->'status' AS checkpoint_status
+            FROM task_nodes tn
+            LEFT JOIN agents a ON a.id = tn.assigned_agent_id
+            WHERE tn.task_id = %s::uuid
+            ORDER BY tn.created_at ASC, tn.node_key ASC
             """,
             (task_id,),
         ).fetchall()

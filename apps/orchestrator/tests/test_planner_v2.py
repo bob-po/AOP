@@ -13,6 +13,7 @@ from planner.decompose import decompose_to_nodes, split_goal_fragments
 from planner.json_plan import extract_json_object, nodes_from_payload
 
 
+# Legacy specialty skill names — still used by decompose unit tests / opt-in MULTI_STEP.
 SKILLS = {
     "web-search",
     "knowledge-search",
@@ -21,6 +22,8 @@ SKILLS = {
     "text-to-image",
     "text-to-video",
 }
+
+HARNESS = {"claude-code", "deepseek-harness", "pi"}
 
 
 def test_extract_json_from_fence():
@@ -65,9 +68,18 @@ def test_decompose_linear_steps():
 
 
 def test_planner_v2_steps_method():
+    """MULTI_STEP + specialty skills still available → linear DAG."""
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_skills", return_value=sorted(SKILLS)):
-        with patch.dict(os.environ, {"PLANNER_V2": "1", "HITL_SKILLS": "report-generation"}):
+    with patch.object(p, "list_available_agents", return_value=sorted(SKILLS)):
+        with patch.dict(
+            os.environ,
+            {
+                "PLANNER_V2": "1",
+                "PLANNER_MULTI_STEP": "1",
+                "HITL_SKILLS": "report-generation",
+            },
+            clear=False,
+        ):
             result = p.plan("1. 搜索资料 2. 分析一下 3. 生成报告")
     assert result.method == "heuristic_steps"
     assert len(result.plan.nodes) >= 3
@@ -75,8 +87,17 @@ def test_planner_v2_steps_method():
 
 def test_planner_llm_invalid_falls_back_to_heuristic():
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_skills", return_value=sorted(SKILLS)):
-        with patch.dict(os.environ, {"PLANNER_LLM": "true", "PLANNER_V2": "0", "HITL_SKILLS": "off"}):
+    with patch.object(p, "list_available_agents", return_value=sorted(HARNESS)):
+        with patch.dict(
+            os.environ,
+            {
+                "PLANNER_LLM": "true",
+                "PLANNER_V2": "1",
+                "PLANNER_MULTI_STEP": "0",
+                "HITL_SKILLS": "off",
+            },
+            clear=False,
+        ):
             with patch.object(
                 p,
                 "_try_llm_nodes",
@@ -87,14 +108,23 @@ def test_planner_llm_invalid_falls_back_to_heuristic():
             ):
                 result = p.plan("帮我研究一个 AI 产品并生成报告")
     assert result.method == "heuristic"
-    assert {n.skill for n in result.plan.nodes} <= SKILLS
+    assert result.plan.nodes[0].skill == "claude-code"
 
 
 def test_research_goal_still_heuristic_pipeline():
+    """Harness-first: research goals are a single hop to the default agent."""
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_skills", return_value=sorted(SKILLS)):
-        with patch.dict(os.environ, {"PLANNER_V2": "1", "HITL_SKILLS": "report-generation"}):
+    with patch.object(p, "list_available_agents", return_value=sorted(HARNESS)):
+        with patch.dict(
+            os.environ,
+            {
+                "PLANNER_V2": "1",
+                "PLANNER_MULTI_STEP": "0",
+                "HITL_SKILLS": "off",
+            },
+            clear=False,
+        ):
             result = p.plan("帮我研究一个 AI 产品并生成报告")
     assert result.method == "heuristic"
-    ids = {n.id for n in result.plan.nodes}
-    assert {"search", "rag", "analysis", "report"} <= ids
+    assert len(result.plan.nodes) == 1
+    assert result.plan.nodes[0].skill == "claude-code"

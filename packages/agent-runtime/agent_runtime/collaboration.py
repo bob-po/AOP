@@ -222,8 +222,39 @@ class A2ACollaborationRuntime:
         status = getattr(task, "status", None)
         if status is None and isinstance(task, dict):
             status = task.get("status")
+        if isinstance(status, dict):
+            return str(status.get("state") or "submitted")
         value = getattr(status, "value", status)
         return str(value) if value else "submitted"
+
+    def _get(self, path: str) -> dict[str, Any]:
+        url = f"{self.os_base_url}{path}"
+        with httpx.Client(
+            timeout=self.governance.request_timeout, transport=self._transport
+        ) as client:
+            resp = client.get(url, headers=self._headers())
+            resp.raise_for_status()
+            return resp.json()
+
+    def _lookup_agent(self, agent_key: str) -> dict[str, Any] | None:
+        """Resolve an agent by key/id via OS list (best-effort)."""
+        try:
+            data = self._get("/v1/agents")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("agent lookup failed: %s", exc)
+            return None
+        agents = data.get("agents") if isinstance(data, dict) else None
+        if not isinstance(agents, list):
+            return None
+        key = agent_key.strip().lower()
+        for a in agents:
+            if not isinstance(a, dict):
+                continue
+            for field in ("agent_key", "agentKey", "agent_id", "agentId", "name", "id"):
+                val = str(a.get(field) or "").strip().lower()
+                if val and val == key:
+                    return a
+        return None
 
     def _record_edge(self, *, child_ctx: CallContext, target_agent_id: str,
                      task_id: Optional[str], skill: Optional[str], status: str) -> None:
@@ -340,6 +371,7 @@ class A2ACollaborationRuntime:
         target_agent_id: str | None = None,
         idempotency_key: str | None = None,
         callback_url: str | None = None,
+        async_mode: bool = False,
     ) -> Any:
         """Low-level outbound A2A call with full lineage propagation."""
         client = self._make_client(endpoint)
@@ -364,7 +396,137 @@ class A2ACollaborationRuntime:
             governance_policy_id=context.governance_policy_id,
             deadline=context.deadline,
             callback_url=callback_url,
+            async_mode=async_mode,
         )
+
+    def spawn(
+        self,
+        text: str,
+        *,
+        context: CallContext,
+        skill: str | None = None,
+        agent_key: str | None = None,
+        required_skills: list[str] | None = None,
+        callback_url: str | None = None,
+        self_task_id: str | None = None,
+        selection: dict[str, Any] | None = None,
+    ) -> DelegationResult:
+        """Route to a peer and start work without waiting for completion."""
+        route_skill = skill or agent_key
+        skills = required_skills or ([route_skill] if route_skill else [])
+        if selection is None and agent_key:
+            found = self._lookup_agent(agent_key)
+            if found and (found.get("endpoint") or found.get("url")):
+                selection = {
+                    "selected_agent": {
+                        "agent_id": found.get("agent_id") or found.get("id"),
+                        "agent_key": found.get("agent_key") or agent_key,
+                        "endpoint": found.get("endpoint") or found.get("url"),
+                        "status": found.get("status"),
+                    }
+                }
+        selection = selection or self.route(
+            skill=route_skill,
+            required_skills=skills,
+            exclude_agent_ids=[self.agent_id] if self.agent_id else None,
+        )
+        chosen = selection.get("selected_agent") or (
+            (selection.get("candidates") or [None])[0]
+        )
+        if not chosen:
+            raise GovernanceError(
+                f"no agent available for skills={skills!r} agent_key={agent_key!r}",
+                code=NO_AGENT_AVAILABLE,
+            )
+
+        target_id = str(
+            chosen.get("agent_key")
+            or chosen.get("agent_id")
+            or chosen.get("agentId")
+            or agent_key
+            or ""
+        )
+        endpoint = chosen.get("endpoint") or chosen.get("url") or ""
+        if not endpoint:
+            raise GovernanceError(
+                f"selected agent {target_id!r} has no endpoint", code=NO_AGENT_AVAILABLE
+            )
+
+        self._check_governance(context, target_id)
+        decision_ctx = self._os_governance_check(context, target_id)
+
+        child_ctx = context.child(
+            target_id,
+            parent_task_id=self_task_id or context.self_task_id or context.parent_task_id,
+        )
+        skill_id = skill or route_skill or (skills[0] if skills else None)
+        try:
+            task = self.call_agent(
+                endpoint,
+                text,
+                context=child_ctx,
+                skill_id=skill_id,
+                target_agent_id=target_id,
+                callback_url=callback_url,
+                async_mode=True,
+            )
+            task_id = self._extract_task_id(task)
+            status = self._extract_status(task) or "submitted"
+            self._record_edge(
+                child_ctx=child_ctx,
+                target_agent_id=target_id,
+                task_id=task_id,
+                skill=skill_id,
+                status=status,
+            )
+            return DelegationResult(
+                task=task,
+                target_agent_id=target_id,
+                target_endpoint=endpoint,
+                skill=skill_id,
+                depth=child_ctx.depth,
+                correlation_id=child_ctx.correlation_id,
+                root_task_id=child_ctx.root_task_id,
+                parent_task_id=child_ctx.parent_task_id,
+                selection_reason={
+                    "score": chosen.get("score"),
+                    "score_breakdown": chosen.get("score_breakdown"),
+                    "status": chosen.get("status"),
+                    "async": True,
+                },
+            )
+        finally:
+            self._os_governance_release(decision_ctx)
+
+    def join(
+        self,
+        endpoint: str,
+        task_id: str,
+        *,
+        timeout_s: float = 120.0,
+        poll_interval_s: float = 0.5,
+    ) -> Any | None:
+        """Poll ``tasks/get`` until the peer task reaches a terminal state."""
+        import time
+
+        client = self._make_client(endpoint)
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+        terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
+        last: Any = None
+        while time.monotonic() < deadline:
+            try:
+                last = client.get_task(task_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("join poll failed task=%s: %s", task_id, exc)
+                time.sleep(poll_interval_s)
+                continue
+            state = self._extract_status(last).lower()
+            if state in terminal:
+                return last
+            time.sleep(poll_interval_s)
+        if last is not None and self._extract_status(last).lower() in terminal:
+            return last
+        return None
 
     def _check_governance(self, context: CallContext, target_agent_id: str) -> None:
         gov = self.governance

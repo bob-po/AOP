@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -24,9 +23,80 @@ from ..protocol import (
     HarnessStatus,
     TokenUsage,
 )
-from ._cli_common import emit_event, message_text, resolve_binary, system_prompt_from_message
+from ._cli_common import (
+    bump_stream_limit,
+    emit_event,
+    message_text,
+    openai_compatible_api_key,
+    readline_unlimited,
+    resolve_binary,
+    run_openai_compatible_sync,
+    system_prompt_from_message,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _pi_api_key() -> str:
+    return openai_compatible_api_key("PI_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+
+
+def _pi_base_url() -> str:
+    if (os.getenv("PI_BASE_URL") or "").strip():
+        return os.getenv("PI_BASE_URL") or ""
+    if (os.getenv("OPENAI_BASE_URL") or "").strip():
+        return os.getenv("OPENAI_BASE_URL") or ""
+    if (os.getenv("DEEPSEEK_BASE_URL") or "").strip():
+        return os.getenv("DEEPSEEK_BASE_URL") or ""
+    if (os.getenv("DEEPSEEK_API_KEY") or "").strip():
+        return "https://api.deepseek.com"
+    return "https://api.openai.com/v1"
+
+
+def _pi_model() -> str:
+    return (
+        os.getenv("PI_MODEL")
+        or os.getenv("DEEPSEEK_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "deepseek-chat"
+    )
+
+
+def _pi_cli_provider_args() -> list[str]:
+    """Pick provider/model flags from env so headless runs skip interactive /login."""
+    explicit_provider = (os.getenv("PI_PROVIDER") or "").strip()
+    explicit_model = (os.getenv("PI_MODEL") or "").strip()
+    args: list[str] = []
+    if explicit_provider:
+        args.extend(["--provider", explicit_provider])
+    if explicit_model:
+        # Supports "provider/id" form
+        args.extend(["--model", explicit_model])
+        return args
+
+    if (os.getenv("DEEPSEEK_API_KEY") or "").strip():
+        if not explicit_provider:
+            args.extend(["--provider", "deepseek"])
+        args.extend(["--model", os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"])
+        return args
+    if (os.getenv("OPENAI_API_KEY") or "").strip():
+        if not explicit_provider:
+            args.extend(["--provider", "openai"])
+        args.extend(["--model", os.getenv("OPENAI_MODEL") or "gpt-4o-mini"])
+        return args
+    if (os.getenv("ANTHROPIC_API_KEY") or "").strip():
+        if not explicit_provider:
+            args.extend(["--provider", "anthropic"])
+        args.extend(["--model", os.getenv("ANTHROPIC_MODEL") or "claude-sonnet-4-5"])
+        return args
+    if explicit_provider:
+        return args
+    return []
+
+
+def _looks_like_login_prompt(text: str) -> bool:
+    low = (text or "").lower()
+    return "/login" in low or "log into a provider" in low or "use /login" in low
 
 
 def parse_pi_jsonl_line(line: str) -> dict[str, Any] | None:
@@ -63,7 +133,7 @@ class PiCliRunner:
         self,
         *,
         binary: Optional[str] = None,
-        timeout_s: float = 300.0,
+        timeout_s: float = 1800.0,
         extra_args: Optional[list[str]] = None,
         cwd: Optional[str] = None,
         env: Optional[dict[str, str]] = None,
@@ -79,6 +149,30 @@ class PiCliRunner:
     def resolve_binary(self) -> Optional[str]:
         return resolve_binary(self.binary)
 
+    def readiness(self) -> dict[str, Any]:
+        has_key = bool(_pi_api_key() or (os.getenv("ANTHROPIC_API_KEY") or "").strip())
+        if self.resolve_binary() and has_key:
+            return {"ready": True, "mode": "cli"}
+        if has_key:
+            return {"ready": True, "mode": "tool_loop"}
+        if self.resolve_binary():
+            return {
+                "ready": False,
+                "mode": None,
+                "reason": (
+                    "Pi CLI found but no provider API key. Set DEEPSEEK_API_KEY "
+                    "(or OPENAI_API_KEY / ANTHROPIC_API_KEY) in agents/harness-agent/.env."
+                ),
+            }
+        return {
+            "ready": False,
+            "mode": None,
+            "reason": (
+                "Pi CLI not found (pi). Install @earendil-works/pi-coding-agent "
+                "or set PI_CLI_PATH / DEEPSEEK_API_KEY for tool_loop fallback."
+            ),
+        }
+
     async def cancel(self, task_id: str) -> bool:
         return await self.supervisor.cancel(task_id)
 
@@ -90,22 +184,125 @@ class PiCliRunner:
         skill_id: str,
         on_event: EventCallback,
     ) -> HarnessResult:
-        started = time.monotonic()
-        prompt = message_text(message)
-        system = system_prompt_from_message(message)
-        if system:
-            prompt = f"User task (skill={skill_id}):\n{prompt}"
-
         binary = self.resolve_binary()
         if not binary:
-            err = f"Pi CLI not found ({self.binary}). Install @earendil-works/pi-coding-agent or set PI_CLI_PATH."
-            await emit_event(on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err})
+            return await self._run_tool_loop(
+                task_id=task_id, message=message, skill_id=skill_id, on_event=on_event
+            )
+        return await self._run_cli(
+            task_id=task_id,
+            message=message,
+            skill_id=skill_id,
+            on_event=on_event,
+            binary=binary,
+        )
+
+    async def _run_tool_loop(
+        self,
+        *,
+        task_id: str,
+        message: dict[str, Any],
+        skill_id: str,
+        on_event: EventCallback,
+    ) -> HarnessResult:
+        started = time.monotonic()
+        prompt = message_text(message)
+        system = system_prompt_from_message(message) or (
+            "You are Pi, a helpful coding agent."
+        )
+        api_key = _pi_api_key()
+        if not api_key:
+            err = (
+                "Pi CLI not found (pi). Install @earendil-works/pi-coding-agent "
+                "or set PI_CLI_PATH / PI_API_KEY (or OPENAI_API_KEY) for tool_loop fallback."
+            )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
             return HarnessResult(
                 text="",
                 status=HarnessStatus.FAILED,
                 error=err,
                 skill_id=skill_id,
-                data={"runner": "PiCliRunner", "available": False},
+                data={"runner": "PiCliRunner", "mode": "tool_loop", "available": False},
+            )
+
+        await emit_event(
+            on_event,
+            task_id=task_id,
+            etype=HarnessEventType.STATUS,
+            payload={"state": "working", "message": "pi tool_loop"},
+        )
+        try:
+            text, usage = await asyncio.to_thread(
+                run_openai_compatible_sync,
+                prompt=prompt,
+                system=system,
+                skill_id=skill_id,
+                api_key=api_key,
+                base_url=_pi_base_url(),
+                model=_pi_model(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            err = f"Pi tool_loop failed: {exc}"
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text="",
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                data={"runner": "PiCliRunner", "mode": "tool_loop"},
+            )
+
+        usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+        await emit_event(
+            on_event, task_id=task_id, etype=HarnessEventType.USAGE, payload=usage.to_dict()
+        )
+        await emit_event(
+            on_event,
+            task_id=task_id,
+            etype=HarnessEventType.DELTA,
+            payload={"text": text},
+        )
+        await emit_event(
+            on_event, task_id=task_id, etype=HarnessEventType.FINAL, payload={"state": "completed"}
+        )
+        return HarnessResult(
+            text=text,
+            status=HarnessStatus.OK,
+            skill_id=skill_id,
+            usage=usage,
+            data={"runner": "PiCliRunner", "mode": "tool_loop"},
+        )
+
+    async def _run_cli(
+        self,
+        *,
+        task_id: str,
+        message: dict[str, Any],
+        skill_id: str,
+        on_event: EventCallback,
+        binary: str,
+    ) -> HarnessResult:
+        started = time.monotonic()
+        prompt = message_text(message)
+        system = system_prompt_from_message(message)
+        if not prompt:
+            err = (
+                "Pi CLI received an empty user message "
+                f"(skill={skill_id}). Check A2A message.parts text."
+            )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text="",
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                data={"runner": "PiCliRunner", "emptyMessage": True},
             )
 
         await emit_event(
@@ -115,16 +312,30 @@ class PiCliRunner:
             payload={"state": "working", "message": "starting pi cli"},
         )
 
-        argv = [binary, "--mode", "json", "--no-session", "--offline"]
+        # Keep the user goal as the primary CLI message. System prompt is separate.
+        # On Windows, multiline --system-prompt argv breaks CreateProcess quoting —
+        # write to a temp file and use --append-system-prompt (accepts file path).
+        argv = [binary, "--mode", "json", "--print", "--no-session"]
+        argv.extend(_pi_cli_provider_args())
+        if os.getenv("PI_OFFLINE", "").lower() in {"1", "true", "yes"}:
+            argv.append("--offline")
         sys_file: Optional[Path] = None
         if system:
+            import tempfile
+
             fd, path = tempfile.mkstemp(prefix="aop-pi-sys-", suffix=".md", text=True)
             os.close(fd)
             sys_file = Path(path)
             sys_file.write_text(system, encoding="utf-8")
-            argv.extend(["--system-prompt", str(sys_file)])
+            argv.extend(
+                [
+                    "--system-prompt",
+                    f"You are Pi Agent (skill={skill_id}). Follow the user goal carefully.",
+                ]
+            )
+            argv.extend(["--append-system-prompt", str(sys_file)])
         argv.extend(self.extra_args)
-        argv.append(prompt)
+        argv.extend(["--", prompt])
 
         env = dict(self.env or os.environ.copy())
         usage = TokenUsage()
@@ -139,13 +350,15 @@ class PiCliRunner:
             await emit_event(on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err})
             return HarnessResult(text="", status=HarnessStatus.FAILED, error=err, skill_id=skill_id)
         finally:
-            # Clean system prompt file after spawn attempt in finally of whole run
             pass
+
+        bump_stream_limit(mp.proc.stdout)
+        bump_stream_limit(mp.proc.stderr)
 
         async def _read_stdout() -> None:
             assert mp.proc.stdout is not None
             while True:
-                line_b = await mp.proc.stdout.readline()
+                line_b = await readline_unlimited(mp.proc.stdout)
                 if not line_b:
                     break
                 line = line_b.decode("utf-8", errors="replace")
@@ -157,7 +370,7 @@ class PiCliRunner:
         async def _read_stderr() -> None:
             assert mp.proc.stderr is not None
             while True:
-                line_b = await mp.proc.stderr.readline()
+                line_b = await readline_unlimited(mp.proc.stderr)
                 if not line_b:
                     break
                 stderr_bits.append(line_b.decode("utf-8", errors="replace"))
@@ -180,6 +393,21 @@ class PiCliRunner:
                 skill_id=skill_id,
                 usage=usage,
                 data={"runner": "PiCliRunner"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self.supervisor.cancel(task_id)
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            err = f"pi cli stream error: {exc}"
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text="".join(chunks),
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "PiCliRunner", "streamError": True},
             )
         finally:
             await self.supervisor.unregister(task_id)
@@ -204,6 +432,13 @@ class PiCliRunner:
             # Fallback: last message_end may have put content only in structured form
             text = text or "".join(stderr_bits[-3:]).strip()
 
+        combined = "\n".join([text, "".join(stderr_bits)]).strip()
+        if _looks_like_login_prompt(combined):
+            logger.info("pi cli asked for /login; falling back to tool_loop")
+            return await self._run_tool_loop(
+                task_id=task_id, message=message, skill_id=skill_id, on_event=on_event
+            )
+
         if rc not in (0, None) and not text:
             err = "".join(stderr_bits).strip() or f"pi exited with code {rc}"
             status = HarnessStatus.CANCELED if getattr(mp, "_killed", False) else HarnessStatus.FAILED
@@ -220,6 +455,23 @@ class PiCliRunner:
                 skill_id=skill_id,
                 usage=usage,
                 data={"runner": "PiCliRunner", "exitCode": rc},
+            )
+
+        if not text:
+            err = (
+                "".join(stderr_bits).strip()
+                or "Pi CLI returned empty output (no assistant text)"
+            )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text="",
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "PiCliRunner", "exitCode": rc, "emptyOutput": True},
             )
 
         await emit_event(
@@ -251,16 +503,29 @@ class PiCliRunner:
                 if u.estimated_cost:
                     usage.estimated_cost = u.estimated_cost
             ame = obj.get("assistantMessageEvent") or {}
-            if isinstance(ame, dict) and ame.get("type") == "text_delta":
-                delta = str(ame.get("delta") or "")
-                if delta:
-                    chunks.append(delta)
-                    await emit_event(
-                        on_event,
-                        task_id=task_id,
-                        etype=HarnessEventType.DELTA,
-                        payload={"text": delta},
-                    )
+            if isinstance(ame, dict):
+                et = str(ame.get("type") or "")
+                if et == "text_delta":
+                    delta = str(ame.get("delta") or "")
+                    if delta:
+                        chunks.append(delta)
+                        await emit_event(
+                            on_event,
+                            task_id=task_id,
+                            etype=HarnessEventType.DELTA,
+                            payload={"text": delta},
+                        )
+                elif et == "text_end":
+                    content = str(ame.get("content") or "")
+                    if content and content not in "".join(chunks):
+                        if not chunks:
+                            chunks.append(content)
+                            await emit_event(
+                                on_event,
+                                task_id=task_id,
+                                etype=HarnessEventType.DELTA,
+                                payload={"text": content},
+                            )
             return
 
         if otype == "message_end":

@@ -57,6 +57,7 @@ class A2AClient:
         deadline: str | None = None,
         callback_url: str | None = None,
         task_id: str | None = None,
+        async_mode: bool = False,
     ) -> Task:
         message = Message(
             role="user",
@@ -74,7 +75,12 @@ class A2AClient:
             deadline=deadline,
             callback_url=callback_url,
         )
-        return self.send_message(message, skill_id=skill_id, task_id=task_id)
+        return self.send_message(
+            message,
+            skill_id=skill_id,
+            task_id=task_id,
+            async_mode=async_mode,
+        )
 
     def send_message(
         self,
@@ -86,12 +92,18 @@ class A2AClient:
         root_task_id: str | None = None,
         depth: int = 0,
         task_id: str | None = None,
+        async_mode: bool = False,
     ) -> Task:
         params: dict[str, Any] = {"message": message.to_dict()}
         if task_id:
             params["id"] = task_id
+        meta: dict[str, Any] = {}
         if skill_id:
-            params["metadata"] = {"skillId": skill_id}
+            meta["skillId"] = skill_id
+        if async_mode:
+            meta["async"] = True
+        if meta:
+            params["metadata"] = meta
         if message.idempotency_key:
             params["idempotencyKey"] = message.idempotency_key
         # Lineage/governance are also mirrored at the top level so OS-side and

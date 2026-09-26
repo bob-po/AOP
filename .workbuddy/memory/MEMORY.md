@@ -42,6 +42,14 @@ Orchestrator 已降级为「可选的 Coordination Agent」。注意区分：
 - 调度打分口径（UI 解释用）：
   `score = 0.25·capability + 0.15·availability + 0.20·reliability + 0.15·latency + 0.15·resource − 0.05·cost − 0.05·queue + 公平性微调`
 
+## 客户端架构决策（2026-09-26）
+- 形态：每台客户机一个 **Supervisor 常驻进程（exe / Windows 服务）**，而非 CLI 直连或每个 agent 各建连接。
+- Supervisor 持有唯一出站 WSS 隧道（客户端发起，穿 NAT），负责：注册（agent card）、心跳、drain、子 agent 启停、事件汇聚上报。
+- 一台机器 = 一个 agent 身份；本地多个"agent"是 Supervisor 的子进程/skill 插件，不单独在 Registry 注册。
+- Supervisor 必须是原生 exe（自举问题：进程要先于 agent 存在），业务逻辑下沉到子 agent，权限白名单 + 敏感动作本地确认。
+- CLI 仅为可选本地管理入口（调 127.0.0.1），不直连服务器。类比 kubelet 与 pod 的关系。
+- 分发采用 Claude Code 式一行安装：`irm https://<host>/install.ps1 | iex` → 用户级目录（免管理员）+ PATH + 校验和；`aop login` 完成注册，`aop service install` 可选升级为 Windows 服务常驻；项目 agent 用 `.aop/agent.yaml` 声明 skills/权限，Supervisor 聚合进 agent card。
+
 ## 运行/环境
 - 本地默认 `AUTH_REQUIRED=false`；部署默认 `true`。会话存 `localStorage.aop_session_token`。
 - 开发账号：`admin@aop.local` / `aop_admin_dev`（先跑 `infrastructure/postgres/migrate.py` + Phase 25 seed）。

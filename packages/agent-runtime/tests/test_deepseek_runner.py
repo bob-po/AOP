@@ -76,3 +76,21 @@ async def test_deepseek_tool_loop_with_mock_provider(monkeypatch):
     assert result.usage.input_tokens == 5
     assert result.usage.output_tokens == 3
     assert result.data.get("mode") == "tool_loop"
+
+
+def test_deepseek_sets_dsh_home_by_default(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from agent_runtime.harness.runners.deepseek import _ensure_dsh_home
+
+    monkeypatch.delenv("DSH_HOME", raising=False)
+    home = _ensure_dsh_home(str(tmp_path / "custom-dsh"))
+    assert home == str((tmp_path / "custom-dsh").resolve())
+    assert Path(home).is_dir()
+
+    runner = DeepSeekHarnessRunner(
+        binary=str(tmp_path / "no-dsh.exe"),
+        dsh_home=str(tmp_path / "runner-home"),
+    )
+    assert "runner-home" in runner.dsh_home
+    assert Path(runner.dsh_home).is_dir()

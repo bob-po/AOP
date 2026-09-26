@@ -125,6 +125,94 @@ class AgentCollaborator:
             print(f"[{self.agent_id}] autonomous delegation skipped: {exc}")
             return None
 
+    def spawn(
+        self,
+        goal: str,
+        ctx: Optional[CallContext],
+        *,
+        skill: Optional[str] = None,
+        agent_key: Optional[str] = None,
+        callback_url: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Fire-and-forget peer spawn; return handles for a later ``join``.
+
+        Returns ``None`` (never raises) when disabled or the call fails.
+        """
+        target_skill = skill or agent_key or self.delegate_skill
+        if not self.enabled() or ctx is None:
+            return None
+        if not target_skill and not agent_key:
+            return None
+        runtime = self.runtime()
+        if runtime is None:
+            return None
+        try:
+            result = runtime.spawn(
+                goal,
+                context=ctx,
+                skill=skill or (None if agent_key else target_skill),
+                agent_key=agent_key,
+                required_skills=[target_skill] if target_skill else None,
+                callback_url=callback_url,
+            )
+            task_id = runtime._extract_task_id(result.task)
+            return {
+                "task_id": task_id,
+                "endpoint": result.target_endpoint,
+                "target_agent_id": result.target_agent_id,
+                "skill": result.skill,
+                "status": runtime._extract_status(result.task),
+                "correlation_id": result.correlation_id,
+                "root_task_id": result.root_task_id,
+                "parent_task_id": result.parent_task_id,
+                "depth": result.depth,
+            }
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{self.agent_id}] async spawn skipped: {exc}")
+            return None
+
+    def join(
+        self,
+        endpoint: str,
+        task_id: str,
+        *,
+        timeout_s: float = 120.0,
+        poll_interval_s: float = 0.5,
+    ) -> Any:
+        """Poll a peer task until terminal; ``None`` on timeout/failure."""
+        runtime = self.runtime()
+        if runtime is None:
+            # Allow join without OS when endpoint is known: bare A2A client.
+            try:
+                from a2a_sdk import A2AClient
+                import time
+
+                client = A2AClient(endpoint, timeout=min(60.0, float(timeout_s)))
+                deadline = time.monotonic() + max(0.1, float(timeout_s))
+                terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
+                last = None
+                while time.monotonic() < deadline:
+                    last = client.get_task(task_id)
+                    status = getattr(last, "status", None)
+                    state = str(getattr(status, "value", status) or "").lower()
+                    if state in terminal:
+                        return last
+                    time.sleep(poll_interval_s)
+                return None
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{self.agent_id}] join failed: {exc}")
+                return None
+        try:
+            return runtime.join(
+                endpoint,
+                task_id,
+                timeout_s=timeout_s,
+                poll_interval_s=poll_interval_s,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{self.agent_id}] join failed: {exc}")
+            return None
+
     @staticmethod
     def extract_text(task: Any) -> Optional[str]:
         """First text artifact from a Task object or dict."""
@@ -140,6 +228,16 @@ class AgentCollaborator:
                 ptext = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
                 if ptype == "text" and ptext:
                     return str(ptext)
+        # Fallback: status message text (working/completed previews)
+        status = getattr(task, "status", None)
+        if status is None and isinstance(task, dict):
+            status = task.get("status")
+        if isinstance(status, dict):
+            msg = status.get("message") or {}
+            parts = msg.get("parts") if isinstance(msg, dict) else None
+            for p in parts or []:
+                if isinstance(p, dict) and p.get("type") == "text" and p.get("text"):
+                    return str(p["text"])
         return None
 
     # ── server-side helpers ──────────────────────────────────────────────

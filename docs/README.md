@@ -61,6 +61,14 @@ docs/
 | [monitoring.md](./operations/monitoring.md) · [tracing.md](./operations/tracing.md) · [high-availability.md](./operations/high-availability.md) | 运维 |
 | [deployments/README.md](../deployments/README.md) | 部署 |
 
+### Research
+
+| 文档 | 说明 |
+|------|------|
+| [ui2v-research-summary.md](./research/ui2v-research-summary.md) | ui2v 多 Agent 协作调研摘要（含结论/风险/来源） |
+| [ui2v-public-materials-index.md](./research/ui2v-public-materials-index.md) | ui2v 公开资料逐文件索引（站点/GitHub/npm/上游） |
+| [ui2v-product-research.md](./research/ui2v-product-research.md) | ui2v 产品向长文（演进/对比/热度/建议） |
+
 ### Phases
 
 | Phase | 入口 |
