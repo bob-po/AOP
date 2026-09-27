@@ -180,7 +180,16 @@ class Scheduler:
                             task_id,
                             node.id,
                             node.skill,
-                            Jsonb({"goal": goal, "node_id": node.id}),
+                            Jsonb(
+                                {
+                                    "goal": goal,
+                                    "node_id": node.id,
+                                    "instruction": (
+                                        (node.instruction or "").strip() or goal
+                                    ),
+                                    "agent_key": node.skill,
+                                }
+                            ),
                             node_idempotency_key,
                             now,
                             now,

@@ -30,6 +30,7 @@ from ._cli_common import (
     openai_compatible_api_key,
     readline_unlimited,
     resolve_binary,
+    resolve_harness_workdir,
     run_openai_compatible_sync,
     system_prompt_from_message,
 )
@@ -142,7 +143,7 @@ class PiCliRunner:
         self.binary = binary or os.getenv("PI_CLI_PATH") or "pi"
         self.timeout_s = float(os.getenv("PI_CLI_TIMEOUT_S") or timeout_s)
         self.extra_args = list(extra_args or [])
-        self.cwd = cwd or os.getenv("PI_WORKDIR") or None
+        self.cwd = resolve_harness_workdir(cwd, legacy_env=("PI_WORKDIR",))
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
 

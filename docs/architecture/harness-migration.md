@@ -43,11 +43,21 @@ When the goal asks for **all / every / 所有 / 全部 agents**, the planner fan
 Agents whose `/health` reports `runner_ready=false` (missing CLI / API key) are
 **skipped** so the task can still complete on agents that work (usually Claude).
 
+Fan-out **dispatches** a per-node `instruction` (routing preamble stripped), e.g.
+「使用目前所有的agent，调研ui2v…」→ each agent receives a role brief +
+「调研ui2v…」, not the raw orchestration sentence. Worker sends `instruction`
+to the CLI; Claude’s system prompt tells it **not** to re-spawn peers when the
+platform already parallelized.
+
 | Agent | Needs to be ready |
 |-------|-------------------|
 | `claude-code` | `claude` CLI on PATH (or `CLAUDE_CLI_PATH`) |
 | `deepseek-harness` | `DEEPSEEK_API_KEY`（或 `OPENAI_API_KEY`）必填；可选 `DSH_HOME`（默认 `~/.aop/dsh-home`） |
 | `pi` | `pi` CLI, **or** `PI_API_KEY` / `OPENAI_API_KEY` (tool_loop) |
+
+All three runners share **`HARNESS_WORKDIR`** as the CLI/SDK cwd (Read/Write/Bash).
+Default when unset: `~/.aop/workspaces/default` (not the uvicorn/`agents/harness-agent` cwd).
+Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` only apply if `HARNESS_WORKDIR` is empty.
 
 ## Environment
 
@@ -57,8 +67,10 @@ Agents whose `/health` reports `runner_ready=false` (missing CLI / API key) are
 | `HARNESS_RUNNER` | Override: `claude_cli` / `pi_cli` / `deepseek` |
 | `HARNESS_ENABLED` | Default on in start script; `0` to skip |
 | `HARNESS_PROFILES` | Comma filter, e.g. `claude-code,pi` |
+| `HARNESS_WORKDIR` | Shared CLI/SDK working directory (default `~/.aop/workspaces/default`) |
 | `DEFAULT_AGENT` | Planner target agent_key (default `claude-code`) |
 | `CLAUDE_CLI_PATH` / `PI_CLI_PATH` / `DSH_CLI_PATH` | Binaries |
+| `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` | Legacy per-runner cwd (ignored when `HARNESS_WORKDIR` is set) |
 | `CLAUDE_CLI_PERMISSION_MODE` | Claude `-p` permission mode (default `bypassPermissions`) |
 | `CLAUDE_CLI_ALLOWED_TOOLS` | Comma list for `--allowed-tools` (default includes WebSearch/WebFetch); `none` to omit |
 | `A2A_OS_URL` / `GATEWAY_URL` | Heartbeat + optional cost POST |

@@ -5,10 +5,48 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+from pathlib import Path
 from typing import Any, Optional
 
 from ..events import utc_now
 from ..protocol import EventCallback, HarnessEvent, HarnessEventType
+
+# Shared sandbox when HARNESS_WORKDIR (and legacy product envs) are unset.
+# Keeps CLI Read/Write/Bash off the monorepo / uvicorn cwd by default.
+_DEFAULT_WORKDIR = Path.home() / ".aop" / "workspaces" / "default"
+
+
+def resolve_harness_workdir(
+    explicit: Optional[str] = None,
+    *,
+    legacy_env: tuple[str, ...] = (),
+    create: bool = True,
+) -> str:
+    """Resolve CLI/SDK working directory for all harness runners.
+
+    Priority:
+    1. Constructor ``explicit`` path
+    2. ``HARNESS_WORKDIR`` (unified)
+    3. Product legacy envs (``CLAUDE_WORKDIR`` / ``DSH_WORKSPACE`` / ``PI_WORKDIR``)
+    4. ``~/.aop/workspaces/default``
+    """
+    candidates: list[str] = []
+    if explicit is not None and str(explicit).strip():
+        candidates.append(str(explicit).strip())
+    shared = (os.getenv("HARNESS_WORKDIR") or "").strip()
+    if shared:
+        candidates.append(shared)
+    for name in legacy_env:
+        val = (os.getenv(name) or "").strip()
+        if val:
+            candidates.append(val)
+    if not candidates:
+        candidates.append(str(_DEFAULT_WORKDIR))
+
+    path = Path(candidates[0]).expanduser().resolve()
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def message_text(message: dict[str, Any]) -> str:

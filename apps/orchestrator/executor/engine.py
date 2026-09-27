@@ -830,16 +830,49 @@ class ExecutionEngine:
         except Exception as exc:  # noqa: BLE001
             print(f"[worker] evaluate skipped {task_id}: {exc}")
 
+    def _node_instruction(self, task_id: str, node_key: str) -> str | None:
+        """Per-node dispatch brief from planner (preferred over raw user goal)."""
+        detail = self.scheduler.get_node(task_id, node_key)
+        if not detail:
+            return None
+        inj = detail.get("input_json") or {}
+        if isinstance(inj, str):
+            import json
+
+            try:
+                inj = json.loads(inj)
+            except Exception:
+                return None
+        if not isinstance(inj, dict):
+            return None
+        text = inj.get("instruction")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+        return None
+
     def _compose_query(self, task_id: str, node_key: str, goal: str) -> str:
         """Build the A2A text query with dependency-scoped upstream handoffs.
 
         Prefer structured ``handoff.artifact_ids`` over dumping every success
         node's full prose. Only inject nodes listed in ``depends_on``.
+
+        When the planner attached a per-node ``instruction`` (multi-agent
+        dispatch), send that brief instead of the raw user goal so agents do
+        not see orchestration phrases like 「使用目前所有的 agent」.
         """
+        instruction = self._node_instruction(task_id, node_key)
+        primary = instruction or goal
+
         task = self.scheduler.get_task(task_id)
         if not task:
-            return goal
-        parts = [f"User goal: {goal}", f"Current node: {node_key}"]
+            return primary
+        parts = [primary, f"Current node: {node_key}"]
+        if instruction and goal and goal.strip() != instruction:
+            # Keep original user wording only as light context (truncated).
+            raw = goal.strip()
+            if len(raw) > 240:
+                raw = raw[:240] + "…"
+            parts.insert(1, f"(Original user request for context: {raw})")
         try:
             mem = self.memory.compose_context(task_id)
             if mem:
@@ -853,7 +886,14 @@ class ExecutionEngine:
             plan_json=task.get("plan_json"),
         )
         if not upstream:
-            return goal if len(parts) <= 2 else "\n".join(parts)
+            # Fan-out leaf: send the dispatch brief alone (+ optional memory).
+            if instruction:
+                extras = [p for p in parts[1:] if not p.startswith("Current node:")]
+                extras = [p for p in extras if not p.startswith("(Original user request")]
+                if extras:
+                    return "\n\n".join([instruction, *extras])
+                return instruction
+            return primary if len(parts) <= 2 else "\n".join(parts)
 
         # Collect dep-scoped slices, then reducer-prune under a shared budget.
         raw_slices: list[dict[str, Any]] = []
@@ -936,7 +976,7 @@ class ExecutionEngine:
 
         pruned = prune_upstream_slices(raw_slices)
         if not pruned:
-            return goal if len(parts) <= 2 else "\n".join(parts)
+            return primary if len(parts) <= 2 else "\n".join(parts)
 
         parts.append("Upstream results (via handoff):")
         for sl in pruned:

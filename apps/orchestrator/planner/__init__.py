@@ -66,11 +66,91 @@ def wants_all_agents(goal: str) -> bool:
     return False
 
 
-def parallel_harness_nodes(available: set[str], *, hitl: set[str]) -> list[PlanNode]:
+# Role framing for parallel fan-out — same work goal, complementary angles.
+_AGENT_DISPATCH_ROLES: dict[str, str] = {
+    "claude-code": (
+        "你是 Claude Code。平台已并行调度其他 agent，请独立完成本任务，"
+        "不要再 spawn/委派同伴。侧重用 WebSearch/WebFetch 收集一手公开资料并引用链接。"
+    ),
+    "deepseek-harness": (
+        "你是 DeepSeek Harness。平台已并行调度其他 agent，请独立完成本任务。"
+        "尽量补充与其他视角不同的公开来源、技术细节或实现向信息，并引用链接。"
+    ),
+    "pi": (
+        "你是 Pi。平台已并行调度其他 agent，请独立完成本任务。"
+        "侧重产品/市场/可用性视角整理公开资料，并引用链接。"
+    ),
+}
+
+
+def extract_work_goal(goal: str) -> str:
+    """Strip orchestration / routing preamble; keep the actual user work request.
+
+    Example:
+      「使用目前所有的agent，调研ui2v这个网页…」
+      → 「调研ui2v这个网页…」
+    """
+    text = (goal or "").strip()
+    if not text:
+        return text
+
+    cleaned = text
+    for marker in sorted(_MULTI_AGENT_MARKERS, key=len, reverse=True):
+        cleaned = re.sub(re.escape(marker), " ", cleaned, flags=re.IGNORECASE)
+
+    # Leftover routing crumbs: 「的agent」「全部 agents」「多智能体」…
+    cleaned = re.sub(
+        r"(的)?(目前)?(全部|所有)?\s*agents?\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"(的)?(目前)?(全部|所有)?\s*智能体", " ", cleaned)
+
+    # Drop explicit product names when used as routing targets.
+    for name in (
+        "claude-code",
+        "deepseek-harness",
+        "deepseek",
+        "claude code",
+        "claude",
+        "pi agent",
+    ):
+        cleaned = re.sub(rf"\b{re.escape(name)}\b", " ", cleaned, flags=re.IGNORECASE)
+    # Bare "pi" only at word boundaries when used as agent name (avoid English "pi" in math).
+    cleaned = re.sub(r"(?i)(?<![a-z])pi(?![a-z])", " ", cleaned)
+
+    # Glue left by Chinese punctuation after stripping markers.
+    cleaned = re.sub(r"[，,、；;]\s*[，,、；;]+", "，", cleaned)
+    cleaned = re.sub(r"^(请)?(使用|用|调用|让|请让)\s*", "", cleaned.strip())
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" ，,、；;：:")
+    return cleaned or text
+
+
+def dispatch_agent_instruction(agent_key: str, work_goal: str) -> str:
+    """Build the per-agent brief that Worker will send (not the raw user goal)."""
+    work = (work_goal or "").strip()
+    role = _AGENT_DISPATCH_ROLES.get(
+        agent_key,
+        f"你是 {agent_key}。平台已分发本任务给你，请独立完成，不要再委派同伴。",
+    )
+    return f"{role}\n\n任务：\n{work}"
+
+
+def parallel_harness_nodes(
+    available: set[str],
+    *,
+    hitl: set[str],
+    work_goal: str = "",
+) -> list[PlanNode]:
     """One independent DAG node per online harness agent (fan-out, no deps).
 
     When only one agent remains after filtering, still returns a single node so
     the multi-agent intent degrades gracefully instead of failing.
+
+    Each node gets an ``instruction`` brief derived from ``work_goal`` (routing
+    language should already be stripped by the caller).
     """
     keys = [a for a in _DEFAULT_AGENTS if a in available]
     if not keys:
@@ -82,6 +162,7 @@ def parallel_harness_nodes(available: set[str], *, hitl: set[str]) -> list[PlanN
         "deepseek-harness": "deepseek",
         "pi": "pi",
     }
+    work = (work_goal or "").strip()
     nodes: list[PlanNode] = []
     used_ids: set[str] = set()
     for key in keys:
@@ -92,12 +173,14 @@ def parallel_harness_nodes(available: set[str], *, hitl: set[str]) -> list[PlanN
             nid = f"{base}{n}"
             n += 1
         used_ids.add(nid)
+        instruction = dispatch_agent_instruction(key, work) if work else None
         nodes.append(
             PlanNode(
                 id=nid,
                 skill=key,
                 depends_on=[],
                 requires_approval=key in hitl,
+                instruction=instruction,
             )
         )
     return nodes
@@ -143,15 +226,22 @@ _SIMPLE_QA_MARKERS = (
 
 # User explicitly wants every online harness agent in the plan.
 _MULTI_AGENT_MARKERS = (
+    "使用目前所有的agent",
+    "用目前所有的agent",
+    "使用目前所有的 agent",
+    "用目前所有的 agent",
+    "使用目前所有",
+    "用目前所有",
+    "目前所有的agent",
+    "目前所有的 agent",
+    "目前所有agent",
+    "目前所有 agent",
+    "所有的agent",
+    "所有的 agent",
     "所有agent",
     "所有 agent",
     "全部agent",
     "全部 agent",
-    "所有的agent",
-    "使用目前所有",
-    "用目前所有",
-    "目前所有的agent",
-    "目前所有agent",
     "多智能体",
     "多 agent",
     "多agent",
@@ -324,10 +414,17 @@ class Planner:
         method = "heuristic"
         nodes: list[PlanNode] = []
 
-        # 1) Explicit multi-agent fan-out (all *ready* online harness agents)
+        # 1) Explicit multi-agent fan-out (all *ready* online harness agents).
+        # Strip routing preamble ("使用所有 agent…") and dispatch a clean work
+        # brief per agent — do not dump the raw orchestration sentence into CLIs.
         if wants_all_agents(goal):
             ready = set(self.list_ready_agents(available))
-            multi = parallel_harness_nodes(ready or available, hitl=hitl)
+            work_goal = extract_work_goal(goal)
+            multi = parallel_harness_nodes(
+                ready or available,
+                hitl=hitl,
+                work_goal=work_goal,
+            )
             if multi:
                 nodes = multi
                 method = "heuristic_multi"
@@ -443,7 +540,11 @@ class Planner:
         hitl = set(hitl_skills())
         if wants_all_agents(goal):
             ready = set(self.list_ready_agents(available))
-            multi = parallel_harness_nodes(ready or available, hitl=hitl)
+            multi = parallel_harness_nodes(
+                ready or available,
+                hitl=hitl,
+                work_goal=extract_work_goal(goal),
+            )
             if multi:
                 return multi
         agent = default_agent(available)

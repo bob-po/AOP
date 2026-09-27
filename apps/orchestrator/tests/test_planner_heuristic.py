@@ -7,7 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-from planner import Planner, wants_all_agents
+from planner import (
+    Planner,
+    dispatch_agent_instruction,
+    extract_work_goal,
+    wants_all_agents,
+)
 from planner.dag import DAGValidationError
 
 
@@ -63,6 +68,28 @@ def test_wants_all_agents_markers():
     assert not wants_all_agents("搜索 OpenAI 最新消息")
 
 
+def test_extract_work_goal_strips_routing_preamble():
+    assert "所有" not in extract_work_goal(
+        "使用目前所有的agent，调研ui2v这个网页，整理公开资料并输出研究摘要"
+    )
+    work = extract_work_goal(
+        "使用目前所有的agent，调研ui2v这个网页，整理公开资料并输出研究摘要"
+    )
+    assert "ui2v" in work
+    assert "研究摘要" in work
+    assert "agent" not in work.lower()
+
+
+def test_dispatch_brief_contains_work_not_routing():
+    brief = dispatch_agent_instruction(
+        "claude-code",
+        "调研ui2v这个网页，整理公开资料并输出研究摘要",
+    )
+    assert "调研ui2v" in brief
+    assert "不要再 spawn" in brief or "不要再" in brief
+    assert "使用目前所有" not in brief
+
+
 def test_all_agents_goal_fans_out_parallel(planner: Planner):
     result = _plan(
         planner,
@@ -75,6 +102,12 @@ def test_all_agents_goal_fans_out_parallel(planner: Planner):
     assert skills == ALL_AGENTS
     assert all(n.depends_on == [] for n in result.plan.nodes)
     assert len(result.plan.nodes) == 3
+    # Each agent gets a clean work brief — not the raw "用所有 agent…" sentence.
+    for n in result.plan.nodes:
+        assert n.instruction
+        assert "ui2v" in n.instruction
+        assert "用目前所有" not in n.instruction
+        assert n.skill.split("-")[0] in n.instruction.lower() or "独立" in n.instruction
 
 
 def test_all_agents_skips_unready_peers(planner: Planner):

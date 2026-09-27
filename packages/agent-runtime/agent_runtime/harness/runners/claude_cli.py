@@ -21,7 +21,7 @@ from ..protocol import (
     HarnessStatus,
     TokenUsage,
 )
-from ._cli_common import bump_stream_limit, readline_unlimited
+from ._cli_common import bump_stream_limit, readline_unlimited, resolve_harness_workdir
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +71,14 @@ class ClaudeCliRunner:
         binary: Optional[str] = None,
         timeout_s: float = 1800.0,
         extra_args: Optional[list[str]] = None,
+        cwd: Optional[str] = None,
         env: Optional[dict[str, str]] = None,
         supervisor: Optional[ProcessSupervisor] = None,
     ):
         self.binary = binary or os.getenv("CLAUDE_CLI_PATH") or "claude"
         self.timeout_s = float(os.getenv("CLAUDE_CLI_TIMEOUT_S") or timeout_s)
         self.extra_args = list(extra_args or [])
+        self.cwd = resolve_harness_workdir(cwd, legacy_env=("CLAUDE_WORKDIR",))
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
 
@@ -167,7 +169,7 @@ class ClaudeCliRunner:
         canceled = False
 
         try:
-            mp = await self.supervisor.spawn(task_id, *argv, env=env)
+            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=self.cwd)
         except FileNotFoundError:
             err = f"Failed to spawn Claude CLI: {binary}"
             await _emit(HarnessEventType.ERROR, {"error": err})

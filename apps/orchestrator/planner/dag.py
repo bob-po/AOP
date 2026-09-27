@@ -16,6 +16,8 @@ class PlanNode:
     skill: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
+    # Per-agent work brief (routing preamble stripped). Worker sends this to the agent.
+    instruction: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"id": self.id, "skill": self.skill}
@@ -23,6 +25,8 @@ class PlanNode:
             payload["depends_on"] = list(self.depends_on)
         if self.requires_approval:
             payload["requires_approval"] = True
+        if self.instruction:
+            payload["instruction"] = self.instruction
         return payload
 
 
@@ -47,6 +51,11 @@ class TaskPlan:
                 skill=str(n["skill"]),
                 depends_on=[str(d) for d in (n.get("depends_on") or [])],
                 requires_approval=bool(n.get("requires_approval")),
+                instruction=(
+                    str(n["instruction"]).strip()
+                    if isinstance(n.get("instruction"), str) and n["instruction"].strip()
+                    else None
+                ),
             )
             for n in (raw.get("nodes") or [])
         ]

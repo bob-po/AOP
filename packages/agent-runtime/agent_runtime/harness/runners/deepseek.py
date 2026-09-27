@@ -33,6 +33,7 @@ from ._cli_common import (
     message_text,
     readline_unlimited,
     resolve_binary,
+    resolve_harness_workdir,
     system_prompt_from_message,
 )
 
@@ -117,7 +118,7 @@ class DeepSeekHarnessRunner:
     ):
         self.binary = binary or os.getenv("DSH_CLI_PATH") or "dsh"
         self.timeout_s = float(os.getenv("DSH_CLI_TIMEOUT_S") or timeout_s)
-        self.workspace = workspace or os.getenv("DSH_WORKSPACE") or os.getcwd()
+        self.workspace = resolve_harness_workdir(workspace, legacy_env=("DSH_WORKSPACE",))
         self.dsh_home = _ensure_dsh_home(dsh_home)
         self.prefer = (prefer or os.getenv("DSH_RUNNER_MODE") or "auto").lower()
         self.env = env
