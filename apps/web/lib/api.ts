@@ -1096,6 +1096,17 @@ export type CollaborationNode = {
   [key: string]: unknown;
 };
 
+export type CollaborationHandoff = {
+  from?: string;
+  to?: string[] | string;
+  reason?: string;
+  artifact_ids?: string[];
+  confidence?: number;
+  skill?: string;
+  node_key?: string;
+  [key: string]: unknown;
+};
+
 export type CollaborationLink = {
   id: string;
   source: string;
@@ -1105,11 +1116,25 @@ export type CollaborationLink = {
   skill?: string;
   /** Structured handoff reason: why this call happened */
   reason?: string;
+  artifact_ids?: string[];
+  handoff?: CollaborationHandoff | null;
   depth?: number;
   status?: string;
   correlation_id?: string;
   created_at?: string;
   [key: string]: unknown;
+};
+
+export type CollaborationHandoffSummary = {
+  node_key?: string;
+  task_id?: string;
+  skill?: string;
+  status?: string;
+  reason?: string;
+  from?: string;
+  to?: string[] | string;
+  artifact_ids?: string[];
+  confidence?: number;
 };
 
 export type CollaborationGraph = {
@@ -1124,6 +1149,12 @@ export type CollaborationGraph = {
   links: CollaborationLink[];
   tree?: unknown[];
   edges?: unknown[];
+  /** All MinIO artifacts for the root task */
+  artifacts?: ArtifactItem[];
+  /** Intermediate handoff payloads (中间传递) */
+  handoffs?: CollaborationHandoffSummary[];
+  /** Leaf-node / final result files (最终产物) */
+  final_artifacts?: ArtifactItem[];
 };
 
 export type RuntimeGraph = {

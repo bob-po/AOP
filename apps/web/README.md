@@ -20,10 +20,12 @@ Open http://127.0.0.1:3000
 | Route | Purpose |
 |-------|---------|
 | `/` | Central dialog — create Task |
-| `/tasks/[id]` | DAG + Live Trace (1s poll) + Artifacts |
-| `/marketplace` | Virtual agents (harness × role) — Register / Deploy (`irm … \| iex`) / zip download |
-| `/workflows` | Workflow templates — Run skips Planner |
-| `/agents` | Registry + market tab + router preview |
+| `/tasks/[id]` | DAG + Live Trace + Artifacts |
+| `/agents` | Registry + router preview by **agent_key** (`claude-code` / `deepseek-harness` / `pi`) |
+| `/workflows` | Workflow templates — nodes use harness agent_key (not legacy specialty skills) |
+| `/settings` | Console settings |
+
+Legacy `/marketplace` and `/scheduling` redirect to `/agents`.
 
 ## Stack
 

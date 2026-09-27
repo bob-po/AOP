@@ -200,3 +200,23 @@ def test_collaboration_from_plan_builds_mid_task_hops(monkeypatch):
     assert any(
         (l.get("reason") or "").startswith("search done") for l in report_links
     )
+    # task nodes carry handoff + artifact_ids for console (中间传递 / 产物)
+    search_task = next(n for n in tasks if n.get("plan_node_id") == "search")
+    assert search_task.get("handoff_reason", "").startswith("search done")
+    assert any(
+        str(a).endswith("output.md") for a in (search_task.get("artifact_ids") or [])
+    )
+    # inbound report links expose upstream-passed artifact_ids (not mid outputs)
+    assert any(
+        (l.get("artifact_ids") or []) and "search/output.md" in str(l.get("artifact_ids"))
+        for l in report_links
+    )
+    # orchestrator → leaf fan-out must NOT pretend to pass the node's own outputs
+    root_links = [
+        l
+        for l in g["links"]
+        if str(l.get("source")) in {"orchestrator", "aop-orchestrator"}
+        or str(l.get("kind")) == "dispatch"
+    ]
+    for l in root_links:
+        assert not (l.get("artifact_ids") or []), l

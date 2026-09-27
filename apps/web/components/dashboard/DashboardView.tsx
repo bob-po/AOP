@@ -32,8 +32,15 @@ import {
 
 const TEMPLATES = [
   { label: "产品调研", text: "调研一款 AI 产品，整理公开资料并输出研究摘要" },
+  {
+    label: "全员并行",
+    text: "使用目前所有的 agent，调研 ui2v 这个网页，整理公开资料并输出研究摘要",
+  },
   { label: "代码协助", text: "帮我检查 A2A cancel 链路并给出修复建议" },
-  { label: "部署清单", text: "给出在远端主机用 install.ps1 部署 claude-coder 并注册到 OS 的步骤" },
+  {
+    label: "部署清单",
+    text: "给出在远端主机用 install.ps1 部署 claude-code 并注册到 OS 的步骤",
+  },
 ];
 
 function Kpi({
@@ -357,6 +364,8 @@ export function DashboardView() {
           新建任务 · 快速发起
         </div>
         <textarea
+          id="dashboard-goal"
+          name="goal"
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           rows={3}

@@ -29,10 +29,11 @@ import {
   type AgentReliability,
   type AgentRuntimeHealth,
 } from "@/lib/api";
-import { MarketplacePanel } from "@/components/MarketplacePanel";
-
-type Tab = "registry" | "market" | "routing";
+type Tab = "registry" | "routing";
 type ViewMode = "cards" | "list";
+
+/** Current harness products — plan node.skill is agent_key. */
+const HARNESS_AGENT_KEYS = ["claude-code", "deepseek-harness", "pi"] as const;
 
 const LIFE_COLOR: Record<string, string> = {
   REGISTERED: "text-mist-400",
@@ -47,7 +48,7 @@ export function AgentsPageView() {
   const [view, setView] = useState<ViewMode>("cards");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [perf, setPerf] = useState<AgentPerformance[]>([]);
-  const [routerSkill, setRouterSkill] = useState("web-research");
+  const [routerSkill, setRouterSkill] = useState("claude-code");
   const [routerPreview, setRouterPreview] = useState<{
     smart: boolean;
     selected: string | null;
@@ -64,7 +65,7 @@ export function AgentsPageView() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showRegister, setShowRegister] = useState(false);
-  const [endpoint, setEndpoint] = useState("http://127.0.0.1:8001");
+  const [endpoint, setEndpoint] = useState("http://127.0.0.1:8011");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Agent | null>(null);
   const [lifeHealth, setLifeHealth] = useState<AgentRuntimeHealth | null>(null);
@@ -244,7 +245,7 @@ export function AgentsPageView() {
         <div>
           <h1 className="font-display text-3xl text-mist-100">Agent 注册中心</h1>
           <p className="mt-1 text-sm text-mist-400">
-            虚拟 Agent = harness × 角色。注册表、市场一键部署、智能路由与运行指标。
+            虚拟 Agent = harness 产品（claude-code / deepseek-harness / pi）。注册表、智能路由与运行指标。
           </p>
         </div>
         <button
@@ -257,7 +258,7 @@ export function AgentsPageView() {
       </div>
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
-        {(["registry", "market", "routing"] as Tab[]).map((t) => (
+        {(["registry", "routing"] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -266,28 +267,45 @@ export function AgentsPageView() {
               tab === t ? "bg-signal/15 text-signal" : "text-mist-400"
             }`}
           >
-            {t === "registry" ? "注册表" : t === "market" ? "市场" : "智能路由"}
+            {t === "registry" ? "注册表" : "智能路由"}
           </button>
         ))}
       </div>
 
       {error ? <div className="mt-4 font-mono text-xs text-signal-warm">{error}</div> : null}
 
-      {tab === "market" ? (
-        <div className="mt-4">
-          <MarketplacePanel embedded />
-        </div>
-      ) : tab === "routing" ? (
+      {tab === "routing" ? (
         <div className="mt-6 grid gap-4 lg:grid-cols-[1fr_1.2fr]">
           <div className="rounded-2xl border border-white/10 bg-ink-900/50 p-4">
             <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-              Router Preview
+              Router Preview（按 agent_key）
+            </div>
+            <p className="mt-2 font-mono text-[10px] text-mist-400">
+              计划节点的 skill 字段即目标 agent_key，不再使用旧 specialty skill（如 web-research）。
+            </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {HARNESS_AGENT_KEYS.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setRouterSkill(key)}
+                  className={`rounded-full border px-2.5 py-1 font-mono text-[10px] ${
+                    routerSkill === key
+                      ? "border-signal/40 bg-signal/10 text-signal"
+                      : "border-white/10 text-mist-400 hover:text-mist-200"
+                  }`}
+                >
+                  {key}
+                </button>
+              ))}
             </div>
             <input
+              id="agents-router-skill"
+              name="router-skill"
               value={routerSkill}
               onChange={(e) => setRouterSkill(e.target.value)}
               className="mt-3 w-full rounded-xl border border-white/10 bg-ink-950 px-3 py-2 font-mono text-sm text-mist-100 outline-none focus:border-signal/40"
-              placeholder="skill id"
+              placeholder="agent_key e.g. claude-code"
             />
             <div className="mt-3 font-mono text-[11px] text-mist-400">
               smart={String(routerPreview?.smart ?? "—")} · selected=
@@ -347,12 +365,17 @@ export function AgentsPageView() {
         <>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <input
+              id="agents-search"
+              name="agents-search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索 Agent / skill"
+              placeholder="搜索 Agent / agent_key"
+              autoComplete="off"
               className="rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100 outline-none focus:border-signal/40"
             />
             <select
+              id="agents-status-filter"
+              name="agents-status"
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               className="rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 font-mono text-xs text-mist-200"
@@ -478,10 +501,12 @@ export function AgentsPageView() {
             <div className="font-display text-xl text-mist-100">注册 Agent</div>
             <p className="mt-1 text-sm text-mist-400">填入 A2A Endpoint，自动拉取 Agent Card。</p>
             <input
+              id="agents-register-endpoint"
+              name="endpoint"
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
               className="mt-4 w-full rounded-xl border border-white/10 bg-ink-950 px-3 py-2 font-mono text-sm text-mist-100 outline-none focus:border-signal/40"
-              placeholder="http://127.0.0.1:8001"
+              placeholder="http://127.0.0.1:8011"
             />
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -521,14 +546,22 @@ export function AgentsPageView() {
           <StatusPill status={selected.status} />
           <p className="mt-3 text-sm text-mist-400">{selected.description || "无描述"}</p>
           <div className="mt-4 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-            Skills
+            Agent key / skills
           </div>
           <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className="rounded-full border border-signal/30 px-2 py-0.5 text-xs text-signal">
+              {selected.agent_key}
+            </span>
             {(selected.skills || []).map((s) => (
               <span key={s} className="rounded-full border border-white/10 px-2 py-0.5 text-xs text-mist-200">
                 {s}
               </span>
             ))}
+            {(selected.skills || []).length === 0 ? (
+              <span className="font-mono text-[10px] text-mist-400">
+                skill-less（按 agent_key 路由）
+              </span>
+            ) : null}
           </div>
           <div className="mt-4 truncate font-mono text-[11px] text-mist-400">
             {selected.endpoint || "—"}

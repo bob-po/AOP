@@ -190,17 +190,138 @@ class TaskService:
         Prefers recorded Agent→Agent runtime edges. When none exist (typical for
         orchestrator-driven plan DAGs), synthesizes caller→task→target links from
         the Task plan + assigned agents so the console still shows who ran what.
+
+        Always enriches with per-node handoff (中间传递) and MinIO artifacts
+        (最终产物) for the console collaboration view.
         """
         graph = self.runtime_graph.collaboration_graph(root_task_id)
-        if graph.get("links"):
-            return graph
         row = self.get(root_task_id)
-        if not row:
-            return graph
-        synthesized = self.runtime_graph.collaboration_from_plan(row)
-        if synthesized.get("links"):
-            return synthesized
-        return graph
+        if not graph.get("links") and row:
+            synthesized = self.runtime_graph.collaboration_from_plan(row)
+            if synthesized.get("links"):
+                graph = synthesized
+        return self._enrich_collaboration_graph(graph, root_task_id, row)
+
+    def _enrich_collaboration_graph(
+        self,
+        graph: dict[str, Any],
+        root_task_id: str,
+        row: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Attach handoff summaries + artifact file lists for the UI."""
+        out = dict(graph or {})
+        nodes = [dict(n) for n in (out.get("nodes") or []) if isinstance(n, dict)]
+        links = [dict(l) for l in (out.get("links") or []) if isinstance(l, dict)]
+
+        by_key: dict[str, dict[str, Any]] = {}
+        if row:
+            for n in row.get("nodes") or []:
+                if not isinstance(n, dict):
+                    continue
+                key = str(n.get("id") or n.get("node_key") or "")
+                if key:
+                    by_key[key] = n
+
+        arts: list[dict[str, Any]] = []
+        try:
+            arts = list(self.list_artifacts(root_task_id) or [])
+        except Exception:  # noqa: BLE001
+            arts = []
+
+        arts_by_node: dict[str, list[dict[str, Any]]] = {}
+        for a in arts:
+            if not isinstance(a, dict):
+                continue
+            nid = str(a.get("node_id") or "").strip()
+            if nid:
+                arts_by_node.setdefault(nid, []).append(a)
+
+        # Plan deps → find leaf node keys (最终结果所属节点)
+        deps_map: dict[str, list[str]] = {}
+        if row:
+            plan = row.get("plan_json") or {}
+            if isinstance(plan, str):
+                import json as _json
+
+                try:
+                    plan = _json.loads(plan)
+                except Exception:
+                    plan = {}
+            for pn in plan.get("nodes") or []:
+                if not isinstance(pn, dict):
+                    continue
+                nid = str(pn.get("id") or "")
+                if nid:
+                    deps_map[nid] = [str(d) for d in (pn.get("depends_on") or [])]
+        referenced: set[str] = set()
+        for deps in deps_map.values():
+            referenced.update(deps)
+        leaf_keys = {k for k in deps_map if k not in referenced} or set(deps_map.keys())
+
+        handoffs_summary: list[dict[str, Any]] = []
+        for node in nodes:
+            if node.get("type") != "task":
+                continue
+            plan_nid = str(node.get("plan_node_id") or "")
+            tid = str(node.get("task_id") or "")
+            key = plan_nid or (tid.split(":")[-1] if ":" in tid else tid)
+            src = by_key.get(key) or {}
+            ho = node.get("handoff") if isinstance(node.get("handoff"), dict) else None
+            if not ho and isinstance(src.get("handoff"), dict):
+                ho = src["handoff"]
+            if isinstance(ho, dict):
+                node["handoff"] = ho
+                if not node.get("handoff_reason") and ho.get("reason"):
+                    node["handoff_reason"] = str(ho["reason"])
+                if not node.get("artifact_ids") and isinstance(ho.get("artifact_ids"), list):
+                    node["artifact_ids"] = [str(a) for a in ho["artifact_ids"] if a]
+                handoffs_summary.append(
+                    {
+                        "node_key": key,
+                        "task_id": tid,
+                        "skill": node.get("skill") or src.get("skill"),
+                        "status": node.get("status") or src.get("status"),
+                        "reason": node.get("handoff_reason") or ho.get("reason"),
+                        "from": ho.get("from") or key,
+                        "to": ho.get("to") or [],
+                        "artifact_ids": node.get("artifact_ids") or [],
+                        "confidence": ho.get("confidence"),
+                    }
+                )
+
+            node_arts = list(arts_by_node.get(key) or [])
+            if node_arts:
+                node["artifacts"] = node_arts
+                if not node.get("artifact_ids"):
+                    node["artifact_ids"] = [
+                        str(a.get("uri") or a.get("url"))
+                        for a in node_arts
+                        if a.get("uri") or a.get("url")
+                    ]
+            node["is_leaf"] = key in leaf_keys if leaf_keys else False
+
+        # Do NOT copy mid-task outputs onto links — that made orchestrator
+        # dispatch edges look like they "passed" the node's own result files.
+        # Inbound handoff files already live on links from plan synthesis.
+
+        final_arts: list[dict[str, Any]] = []
+        for key in sorted(leaf_keys):
+            final_arts.extend(arts_by_node.get(key) or [])
+        if not final_arts and arts:
+            # Parallel fan-out: every node is a leaf → show all non-meta files
+            final_arts = [
+                a
+                for a in arts
+                if isinstance(a, dict)
+                and str(a.get("name") or "").lower() not in {"meta.json"}
+            ]
+
+        out["nodes"] = nodes
+        out["links"] = links
+        out["artifacts"] = arts
+        out["handoffs"] = handoffs_summary
+        out["final_artifacts"] = final_arts
+        return out
 
     def get_with_graph(self, task_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
         """Central Task plus associated runtime collaboration graph (Phase 2)."""
@@ -208,7 +329,7 @@ class TaskService:
         if not row:
             return None
         try:
-            graph = self.runtime_graph.collaboration_graph(task_id)
+            graph = self.collaboration_graph_view(task_id)
         except Exception:  # noqa: BLE001 - graph is best-effort enrichment
             graph = {
                 "root_task_id": task_id,
@@ -217,6 +338,9 @@ class TaskService:
                 "links": [],
                 "tree": [],
                 "edges": [],
+                "handoffs": [],
+                "final_artifacts": [],
+                "artifacts": [],
             }
         out = dict(row)
         out["collaboration_graph"] = graph

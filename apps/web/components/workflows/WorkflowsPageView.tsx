@@ -14,6 +14,8 @@ import ReactFlow, {
   type Node,
 } from "reactflow";
 import "reactflow/dist/style.css";
+
+const WF_PRO_OPTIONS = { hideAttribution: true };
 import {
   createWorkflow,
   listWorkflows,
@@ -82,24 +84,24 @@ export function WorkflowsPageView() {
   const [items, setItems] = useState<Workflow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [goal, setGoal] = useState(
-    "用 researcher agent 调研一个 AI 产品，整理公开资料并给出研究摘要",
+    "使用目前所有的 agent，调研一个 AI 产品，整理公开资料并输出研究摘要",
   );
   const [running, setRunning] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState("Custom Workflow");
-  const [desc, setDesc] = useState("");
-  const [skillInput, setSkillInput] = useState("web-research");
-  const [nodeId, setNodeId] = useState("research");
+  const [name, setName] = useState("Harness Parallel Research");
+  const [desc, setDesc] = useState("并行 claude-code / deepseek-harness / pi");
+  const [skillInput, setSkillInput] = useState("claude-code");
+  const [nodeId, setNodeId] = useState("claude");
   const [busy, setBusy] = useState(false);
 
   const initial = useMemo(
     () =>
       dagToFlow({
-        title: "Custom",
+        title: "Harness Parallel",
         nodes: [
-          { id: "research", skill: "web-research" },
-          { id: "summarize", skill: "research-summarize", depends_on: ["research"] },
-          { id: "code", skill: "code-assist", depends_on: ["summarize"] },
+          { id: "claude", skill: "claude-code" },
+          { id: "deepseek", skill: "deepseek-harness" },
+          { id: "pi", skill: "pi" },
         ],
       }),
     [],
@@ -219,13 +221,15 @@ export function WorkflowsPageView() {
         <div>
           <h1 className="font-display text-3xl text-mist-100">编排模板</h1>
           <p className="mt-1 text-sm text-mist-400">
-            预制 DAG 工作流。可视化编辑后保存，一键启动任务。
+            预制 DAG 工作流。节点 skill = harness agent_key（claude-code / deepseek-harness / pi）。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <label className="cursor-pointer rounded-xl border border-white/15 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-mist-300">
             导入 JSON
             <input
+              id="workflow-import-json"
+              name="workflow-import-json"
               type="file"
               accept="application/json,.json"
               className="hidden"
@@ -245,11 +249,13 @@ export function WorkflowsPageView() {
         </div>
       </div>
 
-      <label className="mt-6 block max-w-3xl">
+      <label className="mt-6 block max-w-3xl" htmlFor="workflow-run-goal">
         <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-mist-400">
           运行输入
         </span>
         <textarea
+          id="workflow-run-goal"
+          name="goal"
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           rows={2}
@@ -292,29 +298,43 @@ export function WorkflowsPageView() {
           <div className="flex h-[90vh] w-full max-w-5xl flex-col rounded-2xl border border-white/10 bg-ink-950">
             <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-4">
               <input
+                id="workflow-edit-name"
+                name="workflow-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="rounded-lg border border-white/10 bg-ink-900 px-3 py-1.5 text-sm text-mist-100"
                 placeholder="名称"
               />
               <input
+                id="workflow-edit-desc"
+                name="workflow-description"
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
                 className="min-w-[180px] flex-1 rounded-lg border border-white/10 bg-ink-900 px-3 py-1.5 text-sm text-mist-100"
                 placeholder="描述"
               />
               <input
+                id="workflow-edit-node-id"
+                name="workflow-node-id"
                 value={nodeId}
                 onChange={(e) => setNodeId(e.target.value)}
                 className="w-28 rounded-lg border border-white/10 bg-ink-900 px-2 py-1.5 font-mono text-xs text-mist-100"
                 placeholder="node id"
               />
               <input
+                id="workflow-edit-skill"
+                name="workflow-skill"
                 value={skillInput}
                 onChange={(e) => setSkillInput(e.target.value)}
                 className="w-36 rounded-lg border border-white/10 bg-ink-900 px-2 py-1.5 font-mono text-xs text-mist-100"
-                placeholder="skill"
+                placeholder="agent_key"
+                list="harness-agent-keys"
               />
+              <datalist id="harness-agent-keys">
+                <option value="claude-code" />
+                <option value="deepseek-harness" />
+                <option value="pi" />
+              </datalist>
               <button
                 type="button"
                 onClick={addNode}
@@ -355,14 +375,14 @@ export function WorkflowsPageView() {
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
                 fitView
-                proOptions={{ hideAttribution: true }}
+                proOptions={WF_PRO_OPTIONS}
               >
                 <Background color="#3dffa822" gap={22} />
                 <Controls />
               </ReactFlow>
             </div>
             <div className="border-t border-white/10 px-4 py-2 font-mono text-[10px] text-mist-400">
-              拖拽连线配置 depends_on；节点标签第二行为 skill。
+              拖拽连线配置 depends_on；节点标签第二行为 agent_key（勿填旧 specialty skill）。
             </div>
           </div>
         </div>

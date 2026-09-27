@@ -103,7 +103,6 @@ npm run dev
 | `/tasks` | 任务 + ReactFlow DAG |
 | `/agents` | Agent 注册中心（含市场） |
 | `/workflows` | 编排模板 |
-| `/artifacts` | 产物仓库 |
 | `/settings` | API Keys · RBAC · 审计 · 用量 · 配额 · 出站 |
 
 默认开发账号：`admin@aop.local` / `aop_admin_dev`（需先跑迁移并 seed，见 Phase 25）。

@@ -369,6 +369,8 @@ export function SettingsPageView() {
               <label className="block">
                 <span className="font-mono text-[10px] uppercase text-mist-400">名称</span>
                 <input
+                  id="settings-key-name"
+                  name="api-key-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1 block rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
@@ -377,6 +379,8 @@ export function SettingsPageView() {
               <label className="block">
                 <span className="font-mono text-[10px] uppercase text-mist-400">角色</span>
                 <select
+                  id="settings-key-role"
+                  name="api-key-role"
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
                   className="mt-1 block rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
@@ -736,6 +740,8 @@ export function SettingsPageView() {
                 <label key={key} className="block">
                   <span className="font-mono text-[10px] uppercase text-mist-400">{label}</span>
                   <input
+                    id={`settings-quota-${key}`}
+                    name={key}
                     type="number"
                     step={key.includes("usd") ? "0.01" : "1"}
                     value={quotaForm[key]}
@@ -753,6 +759,8 @@ export function SettingsPageView() {
               ))}
               <label className="flex items-center gap-2 font-mono text-xs text-mist-300">
                 <input
+                  id="settings-quota-enabled"
+                  name="quota-enabled"
                   type="checkbox"
                   checked={quotaForm.enabled}
                   onChange={(e) =>
@@ -784,6 +792,8 @@ export function SettingsPageView() {
             <label className="block">
               <span className="font-mono text-[10px] uppercase text-mist-400">Mode</span>
               <select
+                id="settings-egress-mode"
+                name="egress-mode"
                 value={egressForm.mode}
                 onChange={(e) => setEgressForm((f) => ({ ...f, mode: e.target.value }))}
                 className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
@@ -796,6 +806,8 @@ export function SettingsPageView() {
             <label className="block">
               <span className="font-mono text-[10px] uppercase text-mist-400">Patterns</span>
               <input
+                id="settings-egress-patterns"
+                name="egress-patterns"
                 value={egressForm.patterns}
                 onChange={(e) => setEgressForm((f) => ({ ...f, patterns: e.target.value }))}
                 placeholder="example.com, *.wikipedia.org"
@@ -804,6 +816,8 @@ export function SettingsPageView() {
             </label>
             <label className="flex items-center gap-2 font-mono text-xs text-mist-300">
               <input
+                id="settings-egress-enabled"
+                name="egress-enabled"
                 type="checkbox"
                 checked={egressForm.enabled}
                 onChange={(e) => setEgressForm((f) => ({ ...f, enabled: e.target.checked }))}

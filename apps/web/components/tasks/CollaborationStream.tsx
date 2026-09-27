@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   apiErrorMessage,
   getCollaborationEvents,
+  type CollaborationGraph,
   type ExecutionEventDict,
 } from "@/lib/api";
 import { useWebSocket, type WebSocketMessage } from "@/hooks/useWebSocket";
@@ -18,11 +19,17 @@ export function CollaborationStream({
   rootTaskId,
   onConnectionChange,
   onEventsHint,
+  onGraphUpdate,
+  silent = false,
 }: {
   rootTaskId: string | null;
   onConnectionChange?: (connected: boolean) => void;
   /** Fired when snapshot/event arrives (parent may refresh graph). */
   onEventsHint?: () => void;
+  /** Live graph push from WS (handoffs / final artifacts). */
+  onGraphUpdate?: (graph: CollaborationGraph) => void;
+  /** Keep WS / poll alive without rendering the event log. */
+  silent?: boolean;
 }) {
   const [events, setEvents] = useState<ExecutionEventDict[]>([]);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -46,6 +53,14 @@ export function CollaborationStream({
       const data = message as unknown as Record<string, unknown>;
       const type = message.type || (data.type as string);
       if (type === "ping") return;
+      if (type === "graph") {
+        const g = data.graph as CollaborationGraph | undefined;
+        if (g && typeof g === "object") {
+          setLiveMode("ws");
+          onGraphUpdate?.(g);
+        }
+        return;
+      }
       if (type === "snapshot") {
         const list = (data.events as ExecutionEventDict[]) || [];
         mergeEvents(list);
@@ -61,7 +76,7 @@ export function CollaborationStream({
         onEventsHint?.();
       }
     },
-    [mergeEvents, onEventsHint],
+    [mergeEvents, onEventsHint, onGraphUpdate],
   );
 
   const path = rootTaskId
@@ -109,6 +124,7 @@ export function CollaborationStream({
   const rows = useMemo(() => events.slice(-40).reverse(), [events]);
 
   if (!rootTaskId) return null;
+  if (silent) return null;
 
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-ink-900/50 p-3">

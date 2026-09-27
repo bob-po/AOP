@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
@@ -699,17 +700,20 @@ def runtime_graph(root_task_id: str) -> dict[str, Any]:
         ) from exc
 
 
-@app.get("/v1/collaboration/graph/{root_task_id}")
-def collaboration_graph(root_task_id: str, request: Request) -> dict[str, Any]:
-    """A2A OS: frontend-ready collaboration graph (nodes + links + tree)."""
-    _forbid_cross_tenant(request, _resource_tenant_from_graph(root_task_id))
-    try:
-        graph = tasks.collaboration_graph_view(root_task_id)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "runtime_graph_error", "message": str(exc)},
-        ) from exc
+def _json_safe(value: Any) -> Any:
+    """Convert datetimes / nested structures for WebSocket JSON frames."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _collaboration_graph_payload(root_task_id: str) -> dict[str, Any]:
+    """Build enriched collaboration graph (handoffs / artifacts / lifecycle)."""
+    graph = tasks.collaboration_graph_view(root_task_id)
     for node in graph.get("nodes") or []:
         if node.get("type") == "agent":
             life = agent_lifecycle.get(node["id"])
@@ -718,7 +722,20 @@ def collaboration_graph(root_task_id: str, request: Request) -> dict[str, Any]:
                 node["active_tasks"] = life.get("active_tasks")
                 node["last_seen"] = life.get("last_seen")
                 node["task_count"] = life.get("active_tasks")
-    return graph
+    return _json_safe(graph)
+
+
+@app.get("/v1/collaboration/graph/{root_task_id}")
+def collaboration_graph(root_task_id: str, request: Request) -> dict[str, Any]:
+    """A2A OS: frontend-ready collaboration graph (nodes + links + tree)."""
+    _forbid_cross_tenant(request, _resource_tenant_from_graph(root_task_id))
+    try:
+        return _collaboration_graph_payload(root_task_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "runtime_graph_error", "message": str(exc)},
+        ) from exc
 
 
 @app.get("/v1/collaboration/events/{root_task_id}")
@@ -740,9 +757,23 @@ def collaboration_events(root_task_id: str, request: Request) -> dict[str, Any]:
 
 @app.websocket("/v1/collaboration/stream/{root_task_id}")
 async def collaboration_stream(websocket: WebSocket, root_task_id: str):
-    """P4.16: realtime collaboration events ordered by per-root sequence."""
+    """P4.16: realtime collaboration events + graph snapshots (handoff/artifacts)."""
     await websocket.accept()
-    # Snapshot existing events first
+
+    async def _push_graph() -> None:
+        try:
+            graph = _collaboration_graph_payload(root_task_id)
+            await websocket.send_json(
+                {
+                    "type": "graph",
+                    "root_task_id": root_task_id,
+                    "graph": graph,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("collaboration graph push skipped: %s", exc)
+
+    # Snapshot existing events + current graph first
     try:
         snapshot = execution.events.list_for_root(root_task_id)
         await websocket.send_json(
@@ -755,6 +786,7 @@ async def collaboration_stream(websocket: WebSocket, root_task_id: str):
         )
     except Exception as exc:  # noqa: BLE001
         await websocket.send_json({"type": "error", "message": str(exc)})
+    await _push_graph()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=256)
 
@@ -782,6 +814,8 @@ async def collaboration_stream(websocket: WebSocket, root_task_id: str):
                     t.cancel()
                 if not done:
                     await websocket.send_json({"type": "ping"})
+                    # Keep handoff / final artifacts fresh even without new events
+                    await _push_graph()
                     continue
                 if event_task in done and not event_task.cancelled():
                     payload = event_task.result()
@@ -793,6 +827,7 @@ async def collaboration_stream(websocket: WebSocket, root_task_id: str):
                             "event": payload,
                         }
                     )
+                    await _push_graph()
                 if receive_task in done and not receive_task.cancelled():
                     data = receive_task.result()
                     if data.strip().lower() in {"ping", '{"type":"ping"}'}:
@@ -1362,7 +1397,7 @@ def task_collaboration_graph(task_id: str) -> dict[str, Any]:
     if not row:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "task not found"})
     try:
-        graph = tasks.collaboration_graph_view(task_id)
+        graph = _collaboration_graph_payload(task_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503,
@@ -1374,14 +1409,6 @@ def task_collaboration_graph(task_id: str) -> dict[str, Any]:
         "title": row.get("title"),
         "created_at": row.get("created_at"),
     }
-    # Phase 3: enrich agent nodes with lifecycle
-    for node in graph.get("nodes") or []:
-        if node.get("type") == "agent":
-            life = agent_lifecycle.get(node["id"])
-            if life:
-                node["state"] = life.get("state")
-                node["active_tasks"] = life.get("active_tasks")
-                node["last_seen"] = life.get("last_seen")
     return graph
 
 

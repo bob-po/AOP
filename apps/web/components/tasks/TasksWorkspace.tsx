@@ -69,6 +69,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const statusFilter = searchParams.get("status") || "";
 
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [listQuery, setListQuery] = useState("");
   const [listError, setListError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(initialTaskId || null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -129,11 +130,22 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     };
   }, [selectedId, task?.execution?.execute?.root_task_id]);
 
+  const filteredTasks = useMemo(() => {
+    const q = listQuery.trim().toLowerCase();
+    if (!q) return tasks;
+    return tasks.filter(
+      (t) =>
+        t.task_id.toLowerCase().includes(q) ||
+        (t.title || "").toLowerCase().includes(q) ||
+        (t.status || "").toLowerCase().includes(q),
+    );
+  }, [tasks, listQuery]);
+
   useEffect(() => {
-    if (!selectedId && tasks.length > 0) {
-      setSelectedId(tasks[0].task_id);
+    if (!selectedId && filteredTasks.length > 0) {
+      setSelectedId(filteredTasks[0].task_id);
     }
-  }, [tasks, selectedId]);
+  }, [filteredTasks, selectedId]);
 
   function selectTask(id: string) {
     setSelectedId(id);
@@ -320,6 +332,13 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       task.execution.execute.root_task_id) ||
     selectedId;
 
+  const openDenials = useCallback(() => {
+    if (!rootTaskId) return;
+    router.push(
+      `/settings?tab=governance&root_task_id=${encodeURIComponent(rootTaskId)}`,
+    );
+  }, [rootTaskId, router]);
+
   function copyArtifactsToClipboard() {
     if (artifacts.length === 0) return;
 
@@ -345,10 +364,21 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     navigator.clipboard.writeText(text).catch(() => undefined);
   }
 
-  function openNodeDetail(nodeId: string) {
+  const openNodeDetail = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
     setDetailNodeId(nodeId);
-  }
+  }, []);
+
+  const onSelectDagNode = useCallback(
+    (id: string | null) => {
+      if (id) openNodeDetail(id);
+      else {
+        setSelectedNodeId(null);
+        setDetailNodeId(null);
+      }
+    },
+    [openNodeDetail],
+  );
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] min-h-[560px] flex-col lg:flex-row">
@@ -356,6 +386,15 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       <aside className="flex w-full shrink-0 flex-col border-b border-white/10 lg:w-72 lg:border-b-0 lg:border-r">
         <div className="border-b border-white/10 px-3 py-3">
           <div className="font-display text-lg text-mist-100">任务</div>
+          <input
+            id="tasks-list-search"
+            name="tasks-list-search"
+            value={listQuery}
+            onChange={(e) => setListQuery(e.target.value)}
+            placeholder="搜索标题 / Task ID / 状态"
+            autoComplete="off"
+            className="mt-2 w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 font-mono text-xs text-mist-100 outline-none placeholder:text-mist-500 focus:border-signal/40"
+          />
           <div className="mt-2 flex flex-wrap gap-1">
             {FILTERS.map((f) => (
               <Link
@@ -376,10 +415,12 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
           {listError ? (
             <div className="p-3 font-mono text-[11px] text-signal-warm">{listError}</div>
           ) : null}
-          {tasks.length === 0 ? (
-            <div className="p-4 font-mono text-xs text-mist-400">暂无任务</div>
+          {filteredTasks.length === 0 ? (
+            <div className="p-4 font-mono text-xs text-mist-400">
+              {tasks.length === 0 ? "暂无任务" : "无匹配任务"}
+            </div>
           ) : null}
-          {tasks.map((t) => (
+          {filteredTasks.map((t) => (
             <button
               key={t.task_id}
               type="button"
@@ -461,25 +502,14 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
               plan={task?.plan_json}
               nodes={task?.nodes || []}
               selectedNodeId={selectedNodeId}
-              onSelectNode={(id) => {
-                if (id) openNodeDetail(id);
-                else {
-                  setSelectedNodeId(null);
-                  setDetailNodeId(null);
-                }
-              }}
+              onSelectNode={onSelectDagNode}
             />
           ) : (
             <CollaborationGraphView
               rootTaskId={rootTaskId}
               denialCount={denialCount}
               highlightNodeKey={highlightNodeKey}
-              onOpenDenials={() => {
-                if (!rootTaskId) return;
-                router.push(
-                  `/settings?tab=governance&root_task_id=${encodeURIComponent(rootTaskId)}`,
-                );
-              }}
+              onOpenDenials={openDenials}
             />
           )
         ) : (
@@ -563,6 +593,8 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                 人工审批闸门：可补充指导后批准（下游节点会收到这段人类输入）。
               </p>
               <textarea
+                id="tasks-hitl-input"
+                name="tasks-hitl-input"
                 value={hitlInput}
                 onChange={(e) => setHitlInput(e.target.value)}
                 rows={3}
@@ -764,6 +796,8 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                     </span>
                   </div>
                   <input
+                    id="tasks-checkpoint-slider"
+                    name="tasks-checkpoint-slider"
                     type="range"
                     min={0}
                     max={Math.max(0, checkpoints.length - 1)}

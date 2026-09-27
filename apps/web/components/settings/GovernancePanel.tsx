@@ -89,15 +89,21 @@ export function GovernancePanel({
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <input
+            id="gov-filter-root"
+            name="filter-root-task-id"
             value={filterRoot}
             onChange={(e) => setFilterRoot(e.target.value)}
             placeholder="root_task_id"
+            autoComplete="off"
             className="rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 font-mono text-xs text-mist-100"
           />
           <input
+            id="gov-filter-code"
+            name="filter-code"
             value={filterCode}
             onChange={(e) => setFilterCode(e.target.value)}
             placeholder="code"
+            autoComplete="off"
             className="rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 font-mono text-xs text-mist-100"
           />
           <button
@@ -148,15 +154,19 @@ export function GovernancePanel({
             <label key={key} className="block sm:col-span-1">
               <span className="font-mono text-[10px] uppercase text-mist-400">{label}</span>
               <input
+                id={`gov-check-${key}`}
+                name={key}
                 value={form[key]}
                 onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                 className="mt-1 w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 font-mono text-xs text-mist-100"
               />
             </label>
           ))}
-          <label className="block">
+          <label className="block" htmlFor="gov-check-claimed-depth">
             <span className="font-mono text-[10px] uppercase text-mist-400">claimed_depth</span>
             <input
+              id="gov-check-claimed-depth"
+              name="claimed_depth"
               type="number"
               value={form.claimed_depth}
               onChange={(e) => setForm((f) => ({ ...f, claimed_depth: Number(e.target.value) }))}

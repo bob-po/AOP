@@ -423,6 +423,10 @@ class RuntimeGraphService:
             task_node_id = f"task:{tid}"
             if tid not in seen_tasks:
                 seen_tasks.add(tid)
+                ho = info.get("handoff") if isinstance(info.get("handoff"), dict) else None
+                art_ids: list[str] = []
+                if ho and isinstance(ho.get("artifact_ids"), list):
+                    art_ids = [str(a) for a in ho["artifact_ids"] if a]
                 nodes.append({
                     "id": task_node_id,
                     "type": "task",
@@ -433,6 +437,9 @@ class RuntimeGraphService:
                     "depth": depth_of.get(nid, 1),
                     "agent_id": target_id,
                     "plan_node_id": nid,
+                    "handoff": ho,
+                    "artifact_ids": art_ids,
+                    "handoff_reason": (str(ho["reason"]) if ho and ho.get("reason") else None),
                 })
 
             callers: list[str] = []
@@ -452,21 +459,25 @@ class RuntimeGraphService:
                 if not caller:
                     continue
                 link_i += 1
-                # Prefer upstream node's handoff.reason ("why call me"); fall back
-                # to the mid-task node's own handoff or skill.
+                # Only upstream handoff counts as "传递文件". Mid-task outputs stay on
+                # the task node — never paint them onto orchestrator dispatch edges.
                 reason = None
-                if deps:
+                pass_arts: list[str] = []
+                pass_ho: dict[str, Any] | None = None
+                is_dispatch = not deps or caller == orch_id
+                if deps and not is_dispatch:
                     for dep in deps:
-                        dep_agent = (assigned.get(dep) or {}).get("agent_id")
+                        dep_info = assigned.get(dep) or {}
+                        dep_agent = dep_info.get("agent_id")
                         if dep_agent and self._canonical_agent(str(dep_agent), directory)[0] == caller:
-                            ho = (assigned.get(dep) or {}).get("handoff")
-                            if isinstance(ho, dict) and ho.get("reason"):
-                                reason = str(ho["reason"])
+                            ho = dep_info.get("handoff")
+                            if isinstance(ho, dict):
+                                pass_ho = ho
+                                if ho.get("reason"):
+                                    reason = str(ho["reason"])
+                                if isinstance(ho.get("artifact_ids"), list):
+                                    pass_arts = [str(a) for a in ho["artifact_ids"] if a]
                                 break
-                if not reason:
-                    mid_ho = info.get("handoff")
-                    if isinstance(mid_ho, dict) and mid_ho.get("reason"):
-                        reason = str(mid_ho["reason"])
                 links.append({
                     "id": f"plan-edge:{nid}:{link_i}",
                     "source": caller,
@@ -475,11 +486,14 @@ class RuntimeGraphService:
                     "parent_task_id": None,
                     "skill": skills.get(nid) or info.get("skill"),
                     "reason": reason,
+                    "artifact_ids": pass_arts,
+                    "handoff": pass_ho,
                     "depth": depth_of.get(nid, 1),
                     "status": info.get("status") or "completed",
                     "correlation_id": task_id or None,
                     "created_at": task_row.get("created_at"),
                     "source_kind": "plan",
+                    "kind": "handoff" if pass_arts or (reason and deps) else "dispatch",
                 })
 
         max_depth = max(depth_of.values(), default=0)

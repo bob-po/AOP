@@ -1,18 +1,25 @@
 "use client";
 
-import { memo, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import ReactFlow, {
   Background,
+  BezierEdge,
   Controls,
   Handle,
   MarkerType,
   MiniMap,
   Position,
+  SimpleBezierEdge,
+  SmoothStepEdge,
+  StepEdge,
+  StraightEdge,
   useEdgesState,
   useNodesState,
   type Edge,
+  type EdgeTypes,
   type Node,
   type NodeProps,
+  type NodeTypes,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import type { TaskNode, TaskPlan } from "@/lib/api";
@@ -99,7 +106,22 @@ function DagNodeCard({ data }: NodeProps<DagNodeData>) {
   );
 }
 
-const nodeTypes = { dagNode: memo(DagNodeCard) };
+/** Stable across renders — inline `{ dagNode: … }` triggers React Flow error #002. */
+const DagNode = memo(DagNodeCard);
+const NODE_TYPES: NodeTypes = Object.freeze({ dagNode: DagNode });
+const EDGE_TYPES: EdgeTypes = Object.freeze({
+  default: BezierEdge,
+  straight: StraightEdge,
+  step: StepEdge,
+  smoothstep: SmoothStepEdge,
+  simplebezier: SimpleBezierEdge,
+});
+const PRO_OPTIONS = Object.freeze({ hideAttribution: true });
+
+function minimapNodeColor(n: Node) {
+  const st = (n.data as DagNodeData | undefined)?.status;
+  return STATUS_COLOR[st || ""] || "#7eaea0";
+}
 
 type Props = {
   plan?: TaskPlan | null;
@@ -196,7 +218,14 @@ const LEGEND = [
   ["failed", "失败"],
 ] as const;
 
-export function TaskFlowDag({ plan, nodes, selectedNodeId, onSelectNode }: Props) {
+export const TaskFlowDag = memo(function TaskFlowDag({
+  plan,
+  nodes,
+  selectedNodeId,
+  onSelectNode,
+}: Props) {
+  const nodeTypes = useRef(NODE_TYPES).current;
+  const edgeTypes = useRef(EDGE_TYPES).current;
   const layout = useMemo(() => buildLayout(plan, nodes), [plan, nodes]);
   const [rfNodes, setNodes, onNodesChange] = useNodesState(layout.rfNodes);
   const [rfEdges, setEdges, onEdgesChange] = useEdgesState(layout.rfEdges);
@@ -219,6 +248,17 @@ export function TaskFlowDag({ plan, nodes, selectedNodeId, onSelectNode }: Props
     );
   }, [selectedNodeId, setNodes]);
 
+  const onNodeClick = useCallback(
+    (_: unknown, node: Node) => {
+      onSelectNode?.(node.id);
+    },
+    [onSelectNode],
+  );
+
+  const onPaneClick = useCallback(() => {
+    onSelectNode?.(null);
+  }, [onSelectNode]);
+
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-xl border border-white/10 bg-ink-950/40">
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap gap-2">
@@ -239,23 +279,18 @@ export function TaskFlowDag({ plan, nodes, selectedNodeId, onSelectNode }: Props
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         fitView
-        onNodeClick={(_, node) => onSelectNode?.(node.id)}
-        onPaneClick={() => onSelectNode?.(null)}
-        proOptions={{ hideAttribution: true }}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
+        proOptions={PRO_OPTIONS}
       >
         <Background color="#3dffa822" gap={22} />
         <Controls showInteractive={false} />
-        <MiniMap
-          nodeColor={(n) => {
-            const st = (n.data as DagNodeData | undefined)?.status;
-            return STATUS_COLOR[st || ""] || "#7eaea0";
-          }}
-          maskColor="rgba(10,18,16,0.7)"
-        />
+        <MiniMap nodeColor={minimapNodeColor} maskColor="rgba(10,18,16,0.7)" />
       </ReactFlow>
     </div>
   );
-}
+});

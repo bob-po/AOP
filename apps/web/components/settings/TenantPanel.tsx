@@ -225,6 +225,8 @@ export function TenantPanel() {
             <label key={key} className="block">
               <span className="font-mono text-[10px] uppercase text-mist-400">{label}</span>
               <input
+                id={`tenant-policy-${key}`}
+                name={key}
                 type="number"
                 step="any"
                 value={policy[key] ?? ""}
@@ -242,6 +244,8 @@ export function TenantPanel() {
         <div className="flex flex-wrap gap-4">
           <label className="flex items-center gap-2 font-mono text-[11px] text-mist-300">
             <input
+              id="tenant-policy-require-gpu"
+              name="require_gpu"
               type="checkbox"
               checked={Boolean(policy.require_gpu)}
               onChange={(e) => setPolicy((p) => ({ ...p, require_gpu: e.target.checked }))}
@@ -250,6 +254,8 @@ export function TenantPanel() {
           </label>
           <label className="flex items-center gap-2 font-mono text-[11px] text-mist-300">
             <input
+              id="tenant-policy-require-streaming"
+              name="require_streaming"
               type="checkbox"
               checked={Boolean(policy.require_streaming)}
               onChange={(e) => setPolicy((p) => ({ ...p, require_streaming: e.target.checked }))}
