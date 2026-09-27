@@ -71,7 +71,8 @@ CARD = {
     "url": "http://127.0.0.1:9999/",
     "version": "0.0.1",
     "protocolVersion": "0.3.0",
-    "capabilities": {"streaming": True},
+    "preferredTransport": "JSONRPC",
+    "capabilities": {"streaming": True, "pushNotifications": False},
     "skills": [
         {"id": "code-assist", "name": "Code Assist", "tags": ["code"]},
     ],
@@ -261,3 +262,34 @@ def test_failed_runner(monkeypatch):
     }
     result = tc.post("/", json=body).json()["result"]
     assert result["status"]["state"] == "failed"
+
+
+def test_message_stream_sse(client):
+    tc, runner = client
+    body = {
+        "jsonrpc": "2.0",
+        "id": "stream-1",
+        "method": "message/stream",
+        "params": {
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}]},
+            "metadata": {"skillId": "code-assist"},
+        },
+    }
+    with tc.stream("POST", "/", json=body) as resp:
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        text = "".join(resp.iter_text())
+    assert "event: status" in text or "event: final" in text
+    assert runner.runs >= 1
+    # Artifacts use official kind discriminator
+    send = {
+        "jsonrpc": "2.0",
+        "id": 99,
+        "method": "message/send",
+        "params": {
+            "message": {"role": "user", "parts": [{"kind": "text", "text": "k"}]},
+            "metadata": {"skillId": "code-assist"},
+        },
+    }
+    parts = tc.post("/", json=send).json()["result"]["artifacts"][0]["parts"]
+    assert parts[0].get("kind") == "text"

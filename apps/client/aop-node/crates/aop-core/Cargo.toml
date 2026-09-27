@@ -1,0 +1,17 @@
+[package]
+name = "aop-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AOP Node config, manifests, and whitelist"
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

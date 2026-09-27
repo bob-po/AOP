@@ -1,0 +1,15 @@
+id = "hermes"
+version = "local"
+kind = "agent"
+command = "python"
+args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8015"]
+workdir = "../../../../../agents/harness-agent"
+health_url = "http://127.0.0.1:8015/health"
+description = "Hermes harness agent"
+
+[env]
+PORT = "8015"
+AGENT_URL = "http://127.0.0.1:8015/"
+HARNESS_PROFILE = "hermes"
+AGENT_ID = "hermes"
+HARNESS_HEARTBEAT = "1"

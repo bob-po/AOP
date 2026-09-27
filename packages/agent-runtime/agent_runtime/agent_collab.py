@@ -269,9 +269,13 @@ class AgentCollaborator:
         )
 
     def after_complete(self, params: dict[str, Any], task: dict[str, Any]) -> None:
-        """Fire optional ``callbackUrl`` after a task reaches a terminal state."""
+        """Fire optional push/callback after a task reaches a terminal state."""
         lin = extract_lineage(params)
-        notify_callback(lin.get("callback_url"), task)
+        notify_callback(
+            lin.get("callback_url"),
+            task,
+            push_notification_config=lin.get("push_notification_config"),
+        )
 
     # ── lifecycle heartbeat ──────────────────────────────────────────────
 

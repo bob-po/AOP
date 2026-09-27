@@ -35,14 +35,24 @@ def _first_key(d: dict[str, Any], *keys: str) -> Any:
 def extract_lineage(params: dict[str, Any]) -> dict[str, Any]:
     """Pull A2A lineage fields out of a JSON-RPC ``message/send`` params block.
 
-    Lineage may sit at the top level of ``params`` or nested on the ``message``;
-    both camelCase and snake_case wire names are accepted.
+    Preferred home is ``params.metadata`` / ``message.metadata`` (official
+    extension surface). Deprecated top-level fields on ``params`` / ``message``
+    are still accepted for older AOP clients.
     """
     message = params.get("message") or {}
-    src: dict[str, Any] = {**message, **params}
+    msg_meta = message.get("metadata") if isinstance(message, dict) else None
+    params_meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+    if not isinstance(msg_meta, dict):
+        msg_meta = {}
+    # Precedence: params.metadata > message.metadata > top-level params > message
+    src: dict[str, Any] = {**message, **params, **msg_meta, **params_meta}
     visited = _first_key(src, "visitedAgents", "visited_agents")
     if isinstance(visited, str):
         visited = [v for v in visited.split(",") if v]
+    callback = _first_key(src, "callbackUrl", "callback_url")
+    push = _first_key(src, "pushNotificationConfig", "push_notification_config")
+    if not callback and isinstance(push, dict):
+        callback = push.get("url")
     return {
         "correlation_id": _first_key(src, "correlationId", "correlation_id"),
         "root_task_id": _first_key(src, "rootTaskId", "root_task_id"),
@@ -52,8 +62,11 @@ def extract_lineage(params: dict[str, Any]) -> dict[str, Any]:
         "caller_agent_id": _first_key(src, "callerAgentId", "caller_agent_id"),
         "governance_policy_id": _first_key(src, "governancePolicyId", "governance_policy_id"),
         "deadline": _first_key(src, "deadline"),
-        "callback_url": _first_key(src, "callbackUrl", "callback_url"),
+        "callback_url": callback,
         "idempotency_key": _first_key(src, "idempotencyKey", "idempotency_key"),
+        "push_notification_config": push if isinstance(push, dict) else (
+            {"url": callback} if callback else None
+        ),
     }
 
 
@@ -201,22 +214,35 @@ def subscribe_events(
     yield {"event": "timeout", "taskId": task_id, "lastStatus": last_state}
 
 
-def notify_callback(callback_url: Optional[str], task: dict[str, Any], *, timeout: float = 10.0) -> bool:
-    """Best-effort POST of a completed task to the caller's ``callbackUrl``.
+def notify_callback(
+    callback_url: Optional[str],
+    task: dict[str, Any],
+    *,
+    timeout: float = 10.0,
+    push_notification_config: Optional[dict[str, Any]] = None,
+) -> bool:
+    """Best-effort POST of a completed task to the caller's push URL.
 
-    Failures are logged and swallowed — a callback miss must never fail the task.
+    Accepts legacy ``callbackUrl`` or official-shaped
+    ``pushNotificationConfig.url``. Failures are logged and swallowed.
     """
-    if not callback_url:
+    url = callback_url
+    if not url and isinstance(push_notification_config, dict):
+        url = push_notification_config.get("url")
+    if not url:
         return False
     try:
         import httpx
 
+        # Official-ish payload: task at top level; keep ``{"task": ...}`` wrapper
+        # for AOP callers that already expect it.
+        body = {"task": task, **{k: v for k, v in task.items() if k in {"id", "status", "artifacts"}}}
         with httpx.Client(timeout=timeout) as client:
-            resp = client.post(callback_url, json={"task": task})
+            resp = client.post(str(url), json=body)
             resp.raise_for_status()
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.debug("callback notify failed (%s): %s", callback_url, exc)
+        logger.debug("callback notify failed (%s): %s", url, exc)
         return False
 
 

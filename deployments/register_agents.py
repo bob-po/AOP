@@ -22,6 +22,8 @@ AGENTS = [
     ("claude-code", "AOP_AGENT_CLAUDE_CODE_URL", "http://claude-code:8011"),
     ("deepseek-harness", "AOP_AGENT_DEEPSEEK_HARNESS_URL", "http://deepseek-harness:8012"),
     ("pi", "AOP_AGENT_PI_URL", "http://pi:8013"),
+    ("openclaw", "AOP_AGENT_OPENCLAW_URL", "http://openclaw:8014"),
+    ("hermes", "AOP_AGENT_HERMES_URL", "http://hermes:8015"),
 ]
 
 

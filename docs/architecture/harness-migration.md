@@ -35,6 +35,8 @@ Runners:
 | `claude-code` | 8011 | Claude Code Agent |
 | `deepseek-harness` | 8012 | DeepSeek Harness Agent |
 | `pi` | 8013 | Pi Agent |
+| `openclaw` | 8014 | OpenClaw (`agent exec --json`) |
+| `hermes` | 8015 | Hermes Agent (`hermes chat`) |
 
 Default planner: single node → `claude-code` (`DEFAULT_AGENT`). Override to route to another product.
 
@@ -54,24 +56,30 @@ platform already parallelized.
 | `claude-code` | `claude` CLI on PATH (or `CLAUDE_CLI_PATH`) |
 | `deepseek-harness` | `DEEPSEEK_API_KEY`（或 `OPENAI_API_KEY`）必填；可选 `DSH_HOME`（默认 `~/.aop/dsh-home`） |
 | `pi` | `pi` CLI, **or** `PI_API_KEY` / `OPENAI_API_KEY` (tool_loop) |
+| `openclaw` | `openclaw` CLI on PATH (or `OPENCLAW_CLI_PATH`) |
+| `hermes` | `hermes` CLI on PATH (or `HERMES_CLI_PATH`) |
 
-All three runners share **`HARNESS_WORKDIR`** as the CLI/SDK cwd (Read/Write/Bash).
+All harness runners share **`HARNESS_WORKDIR`** as the CLI/SDK cwd (Read/Write/Bash).
 Default when unset: `~/.aop/workspaces/default` (not the uvicorn/`agents/harness-agent` cwd).
-Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` only apply if `HARNESS_WORKDIR` is empty.
+Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` only apply if `HARNESS_WORKDIR` is empty.
 
 ## Environment
 
 | Variable | Meaning |
 |----------|---------|
 | `HARNESS_PROFILE` | Profile dir name (default `claude-code`) |
-| `HARNESS_RUNNER` | Override: `claude_cli` / `pi_cli` / `deepseek` |
+| `HARNESS_RUNNER` | Override: `claude_cli` / `pi_cli` / `deepseek` / `openclaw` / `hermes` |
 | `HARNESS_ENABLED` | Default on in start script; `0` to skip |
-| `HARNESS_PROFILES` | Comma filter, e.g. `claude-code,pi` |
+| `HARNESS_PROFILES` | Comma filter, e.g. `claude-code,pi,openclaw,hermes` |
 | `HARNESS_WORKDIR` | Shared CLI/SDK working directory (default `~/.aop/workspaces/default`) |
 | `DEFAULT_AGENT` | Planner target agent_key (default `claude-code`) |
-| `CLAUDE_CLI_PATH` / `PI_CLI_PATH` / `DSH_CLI_PATH` | Binaries |
-| `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` | Legacy per-runner cwd (ignored when `HARNESS_WORKDIR` is set) |
+| `CLAUDE_CLI_PATH` / `PI_CLI_PATH` / `DSH_CLI_PATH` / `OPENCLAW_CLI_PATH` / `HERMES_CLI_PATH` | Binaries |
+| `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` | Legacy per-runner cwd (ignored when `HARNESS_WORKDIR` is set) |
 | `CLAUDE_CLI_PERMISSION_MODE` | Claude `-p` permission mode (default `bypassPermissions`) |
+
+## Edge Node（可选）
+
+本机 / 远端可用 [`apps/client/aop-node`](../../apps/client/aop-node) 以 `aopd` Supervisor 拉起上述 harness 进程，并向 Gateway 注册、向 Orchestrator 心跳。业务能力仍是子 agent/插件；CLI `aop` 只做本地管理。
 | `CLAUDE_CLI_ALLOWED_TOOLS` | Comma list for `--allowed-tools` (default includes WebSearch/WebFetch); `none` to omit |
 | `A2A_OS_URL` / `GATEWAY_URL` | Heartbeat + optional cost POST |
 

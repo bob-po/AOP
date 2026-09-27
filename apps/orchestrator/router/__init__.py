@@ -564,6 +564,8 @@ def normalize_endpoint(url: str) -> str:
         "claude-code": 8011,
         "deepseek-harness": 8012,
         "pi": 8013,
+        "openclaw": 8014,
+        "hermes": 8015,
         "harness-agent": 8011,
         # Legacy aliases
         "claude-coder": 8011,

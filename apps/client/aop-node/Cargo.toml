@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aop-core",
+    "crates/aop-os",
+    "crates/aop-supervisor",
+    "crates/aopd",
+    "crates/aop-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["AOP"]
+repository = "https://github.com/aop-platform/aop"
+
+[workspace.dependencies]
+aop-core = { path = "crates/aop-core" }
+aop-os = { path = "crates/aop-os" }
+aop-supervisor = { path = "crates/aop-supervisor" }
+anyhow = "1"
+axum = "0.7"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "5"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+hex = "0.4"
+tempfile = "3"
+tower-http = { version = "0.5", features = ["cors"] }
+windows-service = "0.7"

@@ -39,12 +39,16 @@ DEFAULT_PORTS: dict[str, int] = {
     "claude-code": 8011,
     "deepseek-harness": 8012,
     "pi": 8013,
+    "openclaw": 8014,
+    "hermes": 8015,
 }
 
 HARNESS_BY_PREFIX: tuple[tuple[str, str], ...] = (
     ("pi", "pi_cli"),
     ("deepseek", "deepseek"),
     ("dsh", "deepseek"),
+    ("openclaw", "openclaw"),
+    ("hermes", "hermes"),
     ("claude", "claude_cli"),
 )
 

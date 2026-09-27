@@ -7,6 +7,8 @@ Select a virtual agent profile via ``HARNESS_PROFILE`` (directory under
 - ``claude-*`` / ``claude-code`` → Claude Code CLI
 - ``pi`` / ``pi-*`` → Pi CLI ``--mode json``
 - ``deepseek-*`` / ``dsh-*`` → DeepSeek Harness SDK / dsh / tool_loop
+- ``openclaw`` / ``openclaw-*`` → OpenClaw ``agent exec --json``
+- ``hermes`` / ``hermes-*`` → Hermes Agent ``chat --query-file``
 """
 
 from __future__ import annotations
@@ -69,6 +71,10 @@ def _default_runner_for_profile(profile: str) -> str:
         return "pi_cli"
     if p.startswith("deepseek") or p.startswith("dsh"):
         return "deepseek"
+    if p.startswith("openclaw"):
+        return "openclaw"
+    if p.startswith("hermes"):
+        return "hermes"
     return "claude_cli"
 
 

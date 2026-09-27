@@ -33,7 +33,13 @@ type Tab = "registry" | "routing";
 type ViewMode = "cards" | "list";
 
 /** Current harness products — plan node.skill is agent_key. */
-const HARNESS_AGENT_KEYS = ["claude-code", "deepseek-harness", "pi"] as const;
+const HARNESS_AGENT_KEYS = [
+  "claude-code",
+  "deepseek-harness",
+  "pi",
+  "openclaw",
+  "hermes",
+] as const;
 
 const LIFE_COLOR: Record<string, string> = {
   REGISTERED: "text-mist-400",
@@ -245,7 +251,7 @@ export function AgentsPageView() {
         <div>
           <h1 className="font-display text-3xl text-mist-100">Agent 注册中心</h1>
           <p className="mt-1 text-sm text-mist-400">
-            虚拟 Agent = harness 产品（claude-code / deepseek-harness / pi）。注册表、智能路由与运行指标。
+            虚拟 Agent = harness 产品（claude-code / deepseek-harness / pi / openclaw / hermes）。注册表、智能路由与运行指标。
           </p>
         </div>
         <button

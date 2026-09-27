@@ -83,6 +83,8 @@ python scripts/start_and_register_agents.py
 | claude-code | 8011 | Claude Code Agent |
 | deepseek-harness | 8012 | DeepSeek Harness Agent |
 | pi | 8013 | Pi Agent |
+| openclaw | 8014 | OpenClaw Agent |
+| hermes | 8015 | Hermes Agent |
 
 默认规划打到 `claude-code`（`DEFAULT_AGENT`）。详见 [harness-migration.md](./docs/architecture/harness-migration.md)。远端：`irm http://<os>:8000/install/claude-code.ps1 | iex`
 
@@ -106,6 +108,23 @@ npm run dev
 | `/settings` | API Keys · RBAC · 审计 · 用量 · 配额 · 出站 |
 
 默认开发账号：`admin@aop.local` / `aop_admin_dev`（需先跑迁移并 seed，见 Phase 25）。
+
+### 6. Edge Node（可选 · 本机 Supervisor）
+
+在远端/本机用 Rust 守护进程对接 A2A OS：拉起 harness/插件、心跳、白名单执行、装服务。参考实现见 [`apps/client/aop-node`](./apps/client/aop-node)（模式借鉴同目录下的 `cc-switch` / `tabby`，不依赖其源码）。
+
+```bash
+cd apps/client/aop-node
+copy config\aop-node.example.toml aop-node.toml
+cargo run -p aopd -- --config aop-node.toml --offline   # 本地冒烟
+# 对接已启动的 Gateway 时去掉 --offline，并填写 gateway_url / api_key
+cargo run -p aop-cli -- status
+```
+
+| Binary | 说明 |
+|--------|------|
+| `aopd` | Supervisor：register / heartbeat / 子进程生命周期 / 本机管理口 `:7920` |
+| `aop` | 本地 CLI：`status` / `agents` / `logs` / `exec` / `service` / `update` |
 
 ## 云服务器单机部署
 

@@ -24,6 +24,8 @@ _DEFAULT_AGENTS = (
     "claude-code",
     "deepseek-harness",
     "pi",
+    "openclaw",
+    "hermes",
 )
 
 
@@ -80,6 +82,14 @@ _AGENT_DISPATCH_ROLES: dict[str, str] = {
         "你是 Pi。平台已并行调度其他 agent，请独立完成本任务。"
         "侧重产品/市场/可用性视角整理公开资料，并引用链接。"
     ),
+    "openclaw": (
+        "你是 OpenClaw。平台已并行调度其他 agent，请独立完成本任务。"
+        "侧重自动化、多通道与工具编排视角完成工作，并给出可执行结论。"
+    ),
+    "hermes": (
+        "你是 Hermes。平台已并行调度其他 agent，请独立完成本任务。"
+        "侧重终端/工程实现与可复现步骤，补充与其他视角不同的细节。"
+    ),
 }
 
 
@@ -115,6 +125,9 @@ def extract_work_goal(goal: str) -> str:
         "claude code",
         "claude",
         "pi agent",
+        "openclaw",
+        "hermes",
+        "hermes agent",
     ):
         cleaned = re.sub(rf"\b{re.escape(name)}\b", " ", cleaned, flags=re.IGNORECASE)
     # Bare "pi" only at word boundaries when used as agent name (avoid English "pi" in math).
@@ -161,6 +174,8 @@ def parallel_harness_nodes(
         "claude-code": "claude",
         "deepseek-harness": "deepseek",
         "pi": "pi",
+        "openclaw": "openclaw",
+        "hermes": "hermes",
     }
     work = (work_goal or "").strip()
     nodes: list[PlanNode] = []

@@ -158,6 +158,53 @@ services:
       retries: 10
     restart: unless-stopped
 
+  openclaw:
+    build: *harness-build
+    container_name: aop-openclaw
+    environment:
+      HARNESS_PROFILE: openclaw
+      AGENT_ID: openclaw
+      PORT: "8014"
+      AGENT_URL: http://openclaw:8014/
+      A2A_OS_URL: http://gateway:8080
+      OPENCLAW_CLI_PATH: ${OPENCLAW_CLI_PATH:-openclaw}
+      OPENCLAW_MODEL: ${OPENCLAW_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8014:8014"
+    <<: [*agent-resources, *code-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  hermes:
+    build: *harness-build
+    container_name: aop-hermes
+    environment:
+      HARNESS_PROFILE: hermes
+      AGENT_ID: hermes
+      PORT: "8015"
+      AGENT_URL: http://hermes:8015/
+      A2A_OS_URL: http://gateway:8080
+      HERMES_CLI_PATH: ${HERMES_CLI_PATH:-hermes}
+      HERMES_MODEL: ${HERMES_MODEL:-}
+      HERMES_PROVIDER: ${HERMES_PROVIDER:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8015:8015"
+    <<: [*agent-resources, *code-security]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   gateway:
     build:
       context: ../apps/gateway
@@ -205,6 +252,8 @@ services:
       AOP_AGENT_CLAUDE_CODE_URL: http://claude-code:8011
       AOP_AGENT_DEEPSEEK_HARNESS_URL: http://deepseek-harness:8012
       AOP_AGENT_PI_URL: http://pi:8013
+      AOP_AGENT_OPENCLAW_URL: http://openclaw:8014
+      AOP_AGENT_HERMES_URL: http://hermes:8015
       METRICS_PORT: "9091"
       ORCHESTRATOR_PORT: "8090"
       AOP_RUNTIME: docker
@@ -304,6 +353,8 @@ services:
       AOP_AGENT_CLAUDE_CODE_URL: http://claude-code:8011
       AOP_AGENT_DEEPSEEK_HARNESS_URL: http://deepseek-harness:8012
       AOP_AGENT_PI_URL: http://pi:8013
+      AOP_AGENT_OPENCLAW_URL: http://openclaw:8014
+      AOP_AGENT_HERMES_URL: http://hermes:8015
     depends_on:
       gateway:
         condition: service_healthy
@@ -312,6 +363,10 @@ services:
       deepseek-harness:
         condition: service_started
       pi:
+        condition: service_started
+      openclaw:
+        condition: service_started
+      hermes:
         condition: service_started
     restart: "no"
 

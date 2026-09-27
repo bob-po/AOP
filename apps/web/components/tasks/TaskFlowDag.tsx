@@ -51,6 +51,8 @@ const STATUS_LABEL: Record<string, string> = {
 const AGENT_LABEL: Record<string, string> = {
   "claude-code": "Claude Code",
   "deepseek-harness": "DeepSeek",
+  openclaw: "OpenClaw",
+  hermes: "Hermes",
   pi: "Pi",
 };
 

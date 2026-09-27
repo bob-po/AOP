@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .protocol import PROTOCOL_VERSION, TASK_STATES
+
 
 class TaskStatus(str, Enum):
     SUBMITTED = "submitted"
@@ -12,18 +14,68 @@ class TaskStatus(str, Enum):
     FAILED = "failed"
     CANCELED = "canceled"
     INPUT_REQUIRED = "input-required"
+    REJECTED = "rejected"
+    AUTH_REQUIRED = "auth-required"
+
+    @classmethod
+    def parse(cls, value: Any) -> TaskStatus:
+        if isinstance(value, cls):
+            return value
+        raw = value
+        if isinstance(value, dict):
+            raw = value.get("state") or value.get("status") or "submitted"
+        text = str(raw or "submitted").strip().lower()
+        # British spelling alias
+        if text == "cancelled":
+            text = "canceled"
+        try:
+            return cls(text)
+        except ValueError:
+            if text in TASK_STATES:
+                return cls(text)
+            return cls.WORKING
+
+
+# AOP platform extensions nested under message/params metadata (not top-level RPC).
+_GOVERNANCE_META_KEYS = (
+    ("idempotencyKey", "idempotency_key"),
+    ("correlationId", "correlation_id"),
+    ("parentTaskId", "parent_task_id"),
+    ("rootTaskId", "root_task_id"),
+    ("depth", "depth"),
+    ("callerAgentId", "caller_agent_id"),
+    ("targetAgentId", "target_agent_id"),
+    ("visitedAgents", "visited_agents"),
+    ("governancePolicyId", "governance_policy_id"),
+    ("deadline", "deadline"),
+    ("callbackUrl", "callback_url"),
+)
+
+
+def _meta_get(meta: dict[str, Any], *keys: str) -> Any:
+    for k in keys:
+        if k in meta and meta[k] is not None:
+            return meta[k]
+    return None
 
 
 @dataclass
 class Part:
-    type: str  # text | data | file
+    """A2A Part. Wire discriminator is ``kind`` (official); ``type`` accepted on read."""
+
+    type: str  # text | data | file  (internal name; wire uses kind)
     text: str | None = None
     data: dict[str, Any] | None = None
     file: dict[str, Any] | None = None
     mime_type: str | None = None
 
+    @property
+    def kind(self) -> str:
+        return self.type
+
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"type": self.type}
+        # Official wire: kind. Keep type as deprecated alias for AOP readers.
+        payload: dict[str, Any] = {"kind": self.type, "type": self.type}
         if self.text is not None:
             payload["text"] = self.text
         if self.data is not None:
@@ -37,7 +89,7 @@ class Part:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Part:
         return cls(
-            type=raw.get("type") or raw.get("kind") or "text",
+            type=raw.get("kind") or raw.get("type") or "text",
             text=raw.get("text"),
             data=raw.get("data"),
             file=raw.get("file"),
@@ -50,72 +102,116 @@ class Message:
     role: str  # user | agent
     parts: list[Part]
     message_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    # Platform governance — preferred home is metadata; fields kept for API ergonomics.
     idempotency_key: str | None = None
     correlation_id: str | None = None
     parent_task_id: str | None = None
     root_task_id: str | None = None
     depth: int = 0
-    # Phase 2.1: cross-process governance context carried on the A2A wire.
     caller_agent_id: str | None = None
     target_agent_id: str | None = None
     visited_agents: list[str] = field(default_factory=list)
     governance_policy_id: str | None = None
-    deadline: str | None = None  # ISO-8601; absolute, so it survives clock skew
-    # Phase 2: async completion webhook for long-running / non-blocking tasks.
+    deadline: str | None = None
     callback_url: str | None = None
 
+    def _governance_into_metadata(self) -> dict[str, Any]:
+        meta = dict(self.metadata or {})
+        if self.idempotency_key:
+            meta.setdefault("idempotencyKey", self.idempotency_key)
+        if self.correlation_id:
+            meta.setdefault("correlationId", self.correlation_id)
+        if self.parent_task_id:
+            meta.setdefault("parentTaskId", self.parent_task_id)
+        if self.root_task_id:
+            meta.setdefault("rootTaskId", self.root_task_id)
+        if self.depth > 0:
+            meta.setdefault("depth", self.depth)
+        if self.caller_agent_id:
+            meta.setdefault("callerAgentId", self.caller_agent_id)
+        if self.target_agent_id:
+            meta.setdefault("targetAgentId", self.target_agent_id)
+        if self.visited_agents:
+            meta.setdefault("visitedAgents", list(self.visited_agents))
+        if self.governance_policy_id:
+            meta.setdefault("governancePolicyId", self.governance_policy_id)
+        if self.deadline:
+            meta.setdefault("deadline", self.deadline)
+        if self.callback_url:
+            meta.setdefault("callbackUrl", self.callback_url)
+            # Official-shaped push config (Phase 3).
+            meta.setdefault(
+                "pushNotificationConfig",
+                {"url": self.callback_url},
+            )
+        return meta
+
     def to_dict(self) -> dict[str, Any]:
+        """Serialize for official-shaped wire.
+
+        Governance/lineage live under ``metadata``. Deprecated top-level
+        mirrors are still emitted for older AOP agents (Phase 5 cleanup).
+        """
+        meta = self._governance_into_metadata()
         payload: dict[str, Any] = {
             "role": self.role,
             "parts": [p.to_dict() for p in self.parts],
         }
         if self.message_id:
             payload["messageId"] = self.message_id
-        if self.idempotency_key:
-            payload["idempotencyKey"] = self.idempotency_key
-        if self.correlation_id:
-            payload["correlationId"] = self.correlation_id
-        if self.parent_task_id:
-            payload["parentTaskId"] = self.parent_task_id
-        if self.root_task_id:
-            payload["rootTaskId"] = self.root_task_id
-        if self.depth > 0:
-            payload["depth"] = self.depth
-        if self.caller_agent_id:
-            payload["callerAgentId"] = self.caller_agent_id
-        if self.target_agent_id:
-            payload["targetAgentId"] = self.target_agent_id
-        if self.visited_agents:
-            payload["visitedAgents"] = list(self.visited_agents)
-        if self.governance_policy_id:
-            payload["governancePolicyId"] = self.governance_policy_id
-        if self.deadline:
-            payload["deadline"] = self.deadline
-        if self.callback_url:
-            payload["callbackUrl"] = self.callback_url
+        if meta:
+            payload["metadata"] = meta
+        # Deprecated top-level mirrors (dual-write for AOP ≤ current).
+        for camel, _snake in _GOVERNANCE_META_KEYS:
+            if camel in meta and meta[camel] is not None:
+                payload[camel] = meta[camel]
         return payload
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Message:
         parts = [Part.from_dict(p) for p in raw.get("parts", [])]
-        visited = raw.get("visitedAgents") or raw.get("visited_agents") or []
+        meta = dict(raw.get("metadata") or {})
+
+        def pick(*keys: str) -> Any:
+            for k in keys:
+                if k in meta and meta[k] is not None:
+                    return meta[k]
+                if k in raw and raw[k] is not None:
+                    return raw[k]
+            return None
+
+        visited = pick("visitedAgents", "visited_agents")
         if isinstance(visited, str):
             visited = [v for v in visited.split(",") if v]
+
+        push = meta.get("pushNotificationConfig") or raw.get("pushNotificationConfig")
+        callback = pick("callbackUrl", "callback_url")
+        if not callback and isinstance(push, dict):
+            callback = push.get("url")
+
+        depth_raw = pick("depth")
+        try:
+            depth = int(depth_raw or 0)
+        except (TypeError, ValueError):
+            depth = 0
+
         return cls(
             role=raw.get("role", "agent"),
             parts=parts,
             message_id=raw.get("messageId") or raw.get("message_id"),
-            idempotency_key=raw.get("idempotencyKey") or raw.get("idempotency_key"),
-            correlation_id=raw.get("correlationId") or raw.get("correlation_id"),
-            parent_task_id=raw.get("parentTaskId") or raw.get("parent_task_id"),
-            root_task_id=raw.get("rootTaskId") or raw.get("root_task_id"),
-            depth=raw.get("depth", 0),
-            caller_agent_id=raw.get("callerAgentId") or raw.get("caller_agent_id"),
-            target_agent_id=raw.get("targetAgentId") or raw.get("target_agent_id"),
-            visited_agents=list(visited),
-            governance_policy_id=raw.get("governancePolicyId") or raw.get("governance_policy_id"),
-            deadline=raw.get("deadline"),
-            callback_url=raw.get("callbackUrl") or raw.get("callback_url"),
+            metadata=meta,
+            idempotency_key=pick("idempotencyKey", "idempotency_key"),
+            correlation_id=pick("correlationId", "correlation_id"),
+            parent_task_id=pick("parentTaskId", "parent_task_id"),
+            root_task_id=pick("rootTaskId", "root_task_id"),
+            depth=depth,
+            caller_agent_id=pick("callerAgentId", "caller_agent_id"),
+            target_agent_id=pick("targetAgentId", "target_agent_id"),
+            visited_agents=list(visited or []),
+            governance_policy_id=pick("governancePolicyId", "governance_policy_id"),
+            deadline=pick("deadline"),
+            callback_url=callback,
         )
 
 
@@ -135,6 +231,18 @@ class Artifact:
             if p.type == "data" and p.data is not None:
                 return p.data
         return None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "parts": [p.to_dict() for p in self.parts],
+        }
+        if self.name is not None:
+            payload["name"] = self.name
+        if self.artifact_id:
+            payload["artifactId"] = self.artifact_id
+        if self.description is not None:
+            payload["description"] = self.description
+        return payload
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Artifact:
@@ -160,19 +268,22 @@ class Task:
     caller_agent_id: str | None = None
     target_agent_id: str | None = None
     depth: int = 0
+    context_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "contextId": self.context_id or self.id,
+            "status": {"state": self.status.value},
+            "artifacts": [a.to_dict() for a in self.artifacts],
+            "history": [m.to_dict() for m in self.history],
+            "metadata": dict(self.metadata or {}),
+        }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Task:
-        # Simplified status parsing - directly use the status value
         status_raw = raw.get("status", "submitted")
-        if isinstance(status_raw, dict):
-            status_value = status_raw.get("state", "submitted")
-        else:
-            status_value = str(status_raw)
-        try:
-            status = TaskStatus(status_value)
-        except ValueError:
-            status = TaskStatus.WORKING
+        status = TaskStatus.parse(status_raw)
 
         artifacts = [Artifact.from_dict(a) for a in raw.get("artifacts", [])]
         history = [Message.from_dict(m) for m in raw.get("history", [])]
@@ -181,20 +292,45 @@ class Task:
             msg = status_raw.get("message")
             if isinstance(msg, dict):
                 parts = msg.get("parts") or []
-                texts = [p.get("text") for p in parts if p.get("text")]
+                texts = [
+                    p.get("text")
+                    for p in parts
+                    if isinstance(p, dict) and p.get("text")
+                ]
                 error = "\n".join(texts) if texts else None
+
+        meta = dict(raw.get("metadata") or {})
+
+        def pick(*keys: str) -> Any:
+            for k in keys:
+                if k in meta and meta[k] is not None:
+                    return meta[k]
+                if k in raw and raw[k] is not None:
+                    return raw[k]
+            return None
 
         return cls(
             id=str(raw.get("id") or raw.get("taskId") or ""),
             status=status,
             artifacts=artifacts,
             history=history,
-            metadata=raw.get("metadata") or {},
+            metadata=meta,
             error=error,
-            parent_task_id=raw.get("parentTaskId") or raw.get("parent_task_id"),
-            root_task_id=raw.get("rootTaskId") or raw.get("root_task_id"),
-            correlation_id=raw.get("correlationId") or raw.get("correlation_id"),
-            caller_agent_id=raw.get("callerAgentId") or raw.get("caller_agent_id"),
-            target_agent_id=raw.get("targetAgentId") or raw.get("target_agent_id"),
-            depth=raw.get("depth", 0),
+            parent_task_id=pick("parentTaskId", "parent_task_id"),
+            root_task_id=pick("rootTaskId", "root_task_id"),
+            correlation_id=pick("correlationId", "correlation_id"),
+            caller_agent_id=pick("callerAgentId", "caller_agent_id"),
+            target_agent_id=pick("targetAgentId", "target_agent_id"),
+            depth=int(pick("depth") or 0),
+            context_id=raw.get("contextId") or raw.get("context_id"),
         )
+
+
+__all__ = [
+    "Artifact",
+    "Message",
+    "Part",
+    "PROTOCOL_VERSION",
+    "Task",
+    "TaskStatus",
+]

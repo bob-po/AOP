@@ -89,7 +89,7 @@ export function WorkflowsPageView() {
   const [running, setRunning] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("Harness Parallel Research");
-  const [desc, setDesc] = useState("并行 claude-code / deepseek-harness / pi");
+  const [desc, setDesc] = useState("并行 claude-code / deepseek-harness / pi / openclaw / hermes");
   const [skillInput, setSkillInput] = useState("claude-code");
   const [nodeId, setNodeId] = useState("claude");
   const [busy, setBusy] = useState(false);
@@ -221,7 +221,7 @@ export function WorkflowsPageView() {
         <div>
           <h1 className="font-display text-3xl text-mist-100">编排模板</h1>
           <p className="mt-1 text-sm text-mist-400">
-            预制 DAG 工作流。节点 skill = harness agent_key（claude-code / deepseek-harness / pi）。
+            预制 DAG 工作流。节点 skill = harness agent_key（claude-code / deepseek-harness / pi / openclaw / hermes）。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -334,6 +334,8 @@ export function WorkflowsPageView() {
                 <option value="claude-code" />
                 <option value="deepseek-harness" />
                 <option value="pi" />
+                <option value="openclaw" />
+                <option value="hermes" />
               </datalist>
               <button
                 type="button"

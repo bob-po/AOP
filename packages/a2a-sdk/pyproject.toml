@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aop-a2a-sdk"
-version = "0.2.0"
-description = "AOP A2A SDK with streaming, cancellation, and delegation support"
+version = "0.3.0"
+description = "AOP A2A SDK aligned with a2aproject/A2A (Card, message/send|stream, tasks/*)"
 authors = [
     {name = "AOP Team", email = "team@aop.com"},
 ]

@@ -1,0 +1,29 @@
+{
+  "name": "Official Sample Agent",
+  "description": "Minimal A2A-compliant agent card for compliance fixtures.",
+  "url": "http://127.0.0.1:9090/",
+  "version": "1.0.0",
+  "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "skills": [
+    {
+      "id": "echo",
+      "name": "Echo",
+      "description": "Echoes the user text",
+      "tags": ["demo"],
+      "examples": ["say hello"],
+      "inputModes": ["text"],
+      "outputModes": ["text"]
+    }
+  ],
+  "securitySchemes": {},
+  "security": [],
+  "supportsAuthenticatedExtendedCard": false,
+  "extensions": []
+}

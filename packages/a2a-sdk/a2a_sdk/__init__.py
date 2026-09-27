@@ -1,12 +1,13 @@
-"""AOP A2A SDK — Agent Card discovery + message/send client.
+"""AOP A2A SDK — Agent Card discovery + JSON-RPC client.
 
-Protocol baseline: A2A-compatible subset (Agent Card well-known + JSON-RPC).
-Internal DTOs stay stable; wire format lives in this package only.
+Aligned with a2aproject/A2A (see ``a2a_sdk.protocol``). Platform extensions
+live under ``metadata``; OS control plane stays on ``/v1/*``.
 """
 
 from .card import AgentCard, AgentSkill, fetch_agent_card
-from .client import A2AClient, A2AError
+from .client import A2AClient, A2AError, first_data_artifact, first_text_artifact
 from .models import Artifact, Message, Part, Task, TaskStatus
+from .protocol import PROTOCOL_VERSION, SPEC_COMMIT, SPEC_URL
 
 __all__ = [
     "A2AClient",
@@ -16,12 +17,14 @@ __all__ = [
     "Artifact",
     "Message",
     "Part",
+    "PROTOCOL_VERSION",
+    "SPEC_COMMIT",
+    "SPEC_URL",
     "Task",
     "TaskStatus",
     "fetch_agent_card",
-    "stream_tasks",
-    "cancel_task",
-    "delegate_task",
+    "first_data_artifact",
+    "first_text_artifact",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Start harness virtual agents (Windows-friendly) and register to Gateway.
 
-One profile per harness product: ``claude-code``, ``deepseek-harness``, ``pi``.
+One profile per harness product: ``claude-code``, ``deepseek-harness``, ``pi``,
+``openclaw``, ``hermes``.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ HARNESS_PROFILES = [
     ("claude-code", 8011),
     ("deepseek-harness", 8012),
     ("pi", 8013),
+    ("openclaw", 8014),
+    ("hermes", 8015),
 ]
 
 GATEWAY = os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")

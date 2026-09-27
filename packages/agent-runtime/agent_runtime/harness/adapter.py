@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 except ImportError:  # pragma: no cover
     FastAPI = None  # type: ignore[misc, assignment]
     Request = None  # type: ignore[misc, assignment]
     JSONResponse = None  # type: ignore[misc, assignment]
+    StreamingResponse = None  # type: ignore[misc, assignment]
 
 
 def load_agent_card(card_path: str | Path, *, agent_url: Optional[str] = None) -> dict[str, Any]:
@@ -41,6 +42,13 @@ def load_agent_card(card_path: str | Path, *, agent_url: Optional[str] = None) -
     override = agent_url or os.getenv("AGENT_URL")
     if override:
         card["url"] = override if override.endswith("/") else f"{override}/"
+    # Official-shaped defaults (a2aproject/A2A).
+    card.setdefault("protocolVersion", "0.3.0")
+    card.setdefault("preferredTransport", "JSONRPC")
+    caps = card.setdefault("capabilities", {})
+    if isinstance(caps, dict):
+        caps.setdefault("streaming", False)
+        caps.setdefault("pushNotifications", False)
     return card
 
 
@@ -116,7 +124,7 @@ def create_harness_app(
     version: str = "0.1.0",
 ) -> Any:
     """Build a FastAPI app that speaks A2A and runs tasks via ``runner``."""
-    if FastAPI is None or Request is None or JSONResponse is None:
+    if FastAPI is None or Request is None or JSONResponse is None or StreamingResponse is None:
         raise ImportError(
             "create_harness_app requires fastapi — pip install fastapi uvicorn"
         )
@@ -125,6 +133,15 @@ def create_harness_app(
         if not card_path:
             raise ValueError("card or card_path is required")
         card = load_agent_card(card_path)
+    else:
+        card = dict(card)
+        card.setdefault("protocolVersion", "0.3.0")
+        card.setdefault("preferredTransport", "JSONRPC")
+        caps = card.setdefault("capabilities", {})
+        if isinstance(caps, dict):
+            # Harness implements message/stream — advertise honestly.
+            caps.setdefault("streaming", True)
+            caps.setdefault("pushNotifications", bool(caps.get("pushNotifications")))
 
     tasks: dict[str, dict[str, Any]] = {}
     idempotency_cache: dict[str, dict[str, Any]] = {}
@@ -364,9 +381,106 @@ def create_harness_app(
             return JSONResponse(payload)
         return JSONResponse(joined if isinstance(joined, dict) else {"task": joined})
 
+    def _prepare_message_task(
+        params: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], str, dict[str, Any], Any] | JSONResponse:
+        """Validate message/send|stream params and create the working task shell.
+
+        Returns (task_id, task, skill, run_message, idem) or an error JSONResponse.
+        """
+        meta = params.get("metadata") if isinstance(params.get("metadata"), dict) else {}
+        idem = (
+            params.get("idempotencyKey")
+            or params.get("idempotency_key")
+            or meta.get("idempotencyKey")
+            or meta.get("idempotency_key")
+        )
+        if idem and idem in idempotency_cache:
+            return JSONResponse(
+                {"jsonrpc": "2.0", "id": None, "result": idempotency_cache[idem]}
+            )
+
+        message = params.get("message") or {}
+        _extract_text(message)
+        skill = _skill_id(params, card)
+        if not _skill_allowed(skill, card):
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32602, "message": f"Unsupported skill: {skill}"},
+                }
+            )
+
+        client_id = params.get("id") or params.get("taskId") or params.get("task_id")
+        task_id = str(client_id) if client_id else str(uuid.uuid4())
+        if idem and task_id in tasks:
+            return JSONResponse({"jsonrpc": "2.0", "id": None, "result": tasks[task_id]})
+
+        lin = extract_lineage(params)
+        ctx = collab.context(params, task_id=task_id)
+        task = new_working_task(
+            task_id,
+            skill_id=skill,
+            correlation_id=lin.get("correlation_id") or (ctx.correlation_id if ctx else None),
+            root_task_id=lin.get("root_task_id"),
+            parent_task_id=lin.get("parent_task_id"),
+        )
+        task["metadata"]["agentId"] = agent_id
+        if sys_prompt:
+            task["metadata"]["systemPromptBytes"] = len(sys_prompt)
+
+        run_message = dict(message)
+        run_message.setdefault("metadata", {})
+        if isinstance(run_message["metadata"], dict) and sys_prompt:
+            run_message["metadata"]["systemPrompt"] = sys_prompt
+        return task_id, task, skill, run_message, idem
+
+    def _spawn_background(
+        *,
+        task_id: str,
+        task: dict[str, Any],
+        params: dict[str, Any],
+        skill: str,
+        run_message: dict[str, Any],
+        idem: Any,
+        initial_state: str = "submitted",
+    ) -> None:
+        task["status"] = {"state": initial_state, "timestamp": utc_now()}
+        task["metadata"]["async"] = True
+        tasks[task_id] = task
+        collab.bump_active(1)
+        if idem:
+            idempotency_cache[idem] = task
+
+        async def _bg() -> None:
+            try:
+                current = tasks.get(task_id)
+                if current and isinstance(current.get("status"), dict):
+                    if current["status"].get("state") == "submitted":
+                        current["status"]["state"] = "working"
+                        current["status"]["timestamp"] = utc_now()
+                await _finalize_run(
+                    task_id=task_id,
+                    task=task,
+                    params=params,
+                    skill=skill,
+                    run_message=run_message,
+                    idem=idem,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("[%s] async harness job failed task=%s", agent_id, task_id)
+            finally:
+                job = asyncio.current_task()
+                if job is not None:
+                    background_jobs.discard(job)
+
+        job = asyncio.create_task(_bg())
+        background_jobs.add(job)
+
     @app.post("/")
     @app.post("/a2a")
-    async def a2a_rpc(request: Request) -> JSONResponse:
+    async def a2a_rpc(request: Request):
         body = await request.json()
         req_id = body.get("id")
         method = body.get("method")
@@ -388,83 +502,138 @@ def create_harness_app(
                 if handled is not None:
                     return JSONResponse(handled)
 
-            if method == "message/send":
-                idem = params.get("idempotencyKey") or params.get("idempotency_key")
-                if idem and idem in idempotency_cache:
-                    return JSONResponse(
-                        {"jsonrpc": "2.0", "id": req_id, "result": idempotency_cache[idem]}
+            if method in {"message/send", "message/stream"}:
+                prepared = _prepare_message_task(params)
+                if isinstance(prepared, JSONResponse):
+                    # Patch request id onto cached/error responses.
+                    try:
+                        payload = json.loads(prepared.body.decode("utf-8"))
+                        payload["id"] = req_id
+                        return JSONResponse(payload, status_code=prepared.status_code)
+                    except Exception:  # noqa: BLE001
+                        return prepared
+
+                task_id, task, skill, run_message, idem = prepared
+
+                if method == "message/stream":
+                    if not bool((card.get("capabilities") or {}).get("streaming")):
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "error": {
+                                    "code": -32601,
+                                    "message": "Streaming not advertised on Agent Card",
+                                },
+                            }
+                        )
+                    _spawn_background(
+                        task_id=task_id,
+                        task=task,
+                        params=params,
+                        skill=skill,
+                        run_message=run_message,
+                        idem=idem,
+                        initial_state="submitted",
                     )
 
-                message = params.get("message") or {}
-                _extract_text(message)
-                skill = _skill_id(params, card)
-                if not _skill_allowed(skill, card):
-                    return JSONResponse(
-                        {
+                    terminal = frozenset(
+                        {"completed", "failed", "canceled", "cancelled", "rejected"}
+                    )
+                    timeout_s = float(os.getenv("A2A_STREAM_TIMEOUT", "600"))
+
+                    async def _event_stream():
+                        last_state: str | None = None
+                        first = {
+                            "event": "status",
+                            "taskId": task_id,
+                            "status": "submitted",
+                            "task": tasks.get(task_id) or task,
                             "jsonrpc": "2.0",
                             "id": req_id,
-                            "error": {"code": -32602, "message": f"Unsupported skill: {skill}"},
                         }
+                        yield (
+                            f"event: status\ndata: {json.dumps(first, default=str)}\n\n".encode(
+                                "utf-8"
+                            )
+                        )
+                        last_state = "submitted"
+                        deadline = asyncio.get_event_loop().time() + max(1.0, timeout_s)
+                        while asyncio.get_event_loop().time() < deadline:
+                            current = tasks.get(task_id)
+                            if current is None:
+                                miss = {"event": "not_found", "taskId": task_id}
+                                yield (
+                                    f"event: not_found\ndata: {json.dumps(miss)}\n\n".encode(
+                                        "utf-8"
+                                    )
+                                )
+                                return
+                            status = current.get("status")
+                            state = (
+                                str(status.get("state") or "submitted")
+                                if isinstance(status, dict)
+                                else str(status or "submitted")
+                            )
+                            if state != last_state:
+                                last_state = state
+                                frame = {
+                                    "event": "status",
+                                    "taskId": task_id,
+                                    "status": state,
+                                    "task": current,
+                                }
+                                yield (
+                                    f"event: status\ndata: {json.dumps(frame, default=str)}\n\n".encode(
+                                        "utf-8"
+                                    )
+                                )
+                            if state in terminal:
+                                done = {
+                                    "event": "final",
+                                    "taskId": task_id,
+                                    "status": state,
+                                    "task": current,
+                                }
+                                yield (
+                                    f"event: final\ndata: {json.dumps(done, default=str)}\n\n".encode(
+                                        "utf-8"
+                                    )
+                                )
+                                return
+                            await asyncio.sleep(0.25)
+                        timed = {
+                            "event": "timeout",
+                            "taskId": task_id,
+                            "lastStatus": last_state,
+                        }
+                        yield (
+                            f"event: timeout\ndata: {json.dumps(timed, default=str)}\n\n".encode(
+                                "utf-8"
+                            )
+                        )
+
+                    return StreamingResponse(
+                        _event_stream(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "X-Accel-Buffering": "no",
+                        },
                     )
 
-                client_id = params.get("id") or params.get("taskId") or params.get("task_id")
-                task_id = str(client_id) if client_id else str(uuid.uuid4())
-                if idem and task_id in tasks:
-                    return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": tasks[task_id]})
-
-                lin = extract_lineage(params)
-                ctx = collab.context(params, task_id=task_id)
-                task = new_working_task(
-                    task_id,
-                    skill_id=skill,
-                    correlation_id=lin.get("correlation_id") or (ctx.correlation_id if ctx else None),
-                    root_task_id=lin.get("root_task_id"),
-                    parent_task_id=lin.get("parent_task_id"),
-                )
-                task["metadata"]["agentId"] = agent_id
-                if sys_prompt:
-                    task["metadata"]["systemPromptBytes"] = len(sys_prompt)
-
-                run_message = dict(message)
-                run_message.setdefault("metadata", {})
-                if isinstance(run_message["metadata"], dict) and sys_prompt:
-                    run_message["metadata"]["systemPrompt"] = sys_prompt
-
+                # message/send
                 async_mode = wants_async_send(params)
                 if async_mode:
-                    task["status"] = {"state": "submitted", "timestamp": utc_now()}
-                    task["metadata"]["async"] = True
-                    tasks[task_id] = task
-                    collab.bump_active(1)
-                    if idem:
-                        idempotency_cache[idem] = task
-
-                    async def _bg() -> None:
-                        try:
-                            current = tasks.get(task_id)
-                            if current and isinstance(current.get("status"), dict):
-                                if current["status"].get("state") == "submitted":
-                                    current["status"]["state"] = "working"
-                                    current["status"]["timestamp"] = utc_now()
-                            await _finalize_run(
-                                task_id=task_id,
-                                task=task,
-                                params=params,
-                                skill=skill,
-                                run_message=run_message,
-                                idem=idem,
-                            )
-                        except Exception:  # noqa: BLE001
-                            logger.exception(
-                                "[%s] async harness job failed task=%s", agent_id, task_id
-                            )
-                        finally:
-                            job = asyncio.current_task()
-                            if job is not None:
-                                background_jobs.discard(job)
-
-                    job = asyncio.create_task(_bg())
-                    background_jobs.add(job)
+                    _spawn_background(
+                        task_id=task_id,
+                        task=task,
+                        params=params,
+                        skill=skill,
+                        run_message=run_message,
+                        idem=idem,
+                        initial_state="submitted",
+                    )
                     return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": task})
 
                 tasks[task_id] = task

@@ -76,6 +76,28 @@ CATALOG: list[dict[str, Any]] = [
         "agent_key": "pi",
         "tags": ["harness", "pi"],
     },
+    {
+        "package_id": "pkg-openclaw",
+        "name": "OpenClaw Agent",
+        "description": "Unified OpenClaw harness agent (agent exec)",
+        "publisher": "AOP Official",
+        "version": "0.1.0",
+        "skills": [],
+        "default_endpoint": _agent_endpoint("AOP_AGENT_OPENCLAW_URL", "http://127.0.0.1:8014"),
+        "agent_key": "openclaw",
+        "tags": ["harness", "openclaw"],
+    },
+    {
+        "package_id": "pkg-hermes",
+        "name": "Hermes Agent",
+        "description": "Unified Hermes Agent harness (hermes chat)",
+        "publisher": "AOP Official",
+        "version": "0.1.0",
+        "skills": [],
+        "default_endpoint": _agent_endpoint("AOP_AGENT_HERMES_URL", "http://127.0.0.1:8015"),
+        "agent_key": "hermes",
+        "tags": ["harness", "hermes"],
+    },
 ]
 
 

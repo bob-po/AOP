@@ -14,11 +14,12 @@ def utc_now() -> str:
 
 
 def text_part(text: str) -> dict[str, Any]:
-    return {"type": "text", "text": text}
+    # Official A2A discriminator is ``kind``; keep ``type`` for older readers.
+    return {"kind": "text", "type": "text", "text": text}
 
 
 def data_part(data: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "data", "data": data}
+    return {"kind": "data", "type": "data", "data": data}
 
 
 def new_working_task(
@@ -71,8 +72,10 @@ def apply_event(task: dict[str, Any], event: HarnessEvent) -> dict[str, Any]:
             prev = ""
             existing = status.get("message") or {}
             parts = existing.get("parts") if isinstance(existing, dict) else None
-            if parts and parts[0].get("type") == "text":
-                prev = str(parts[0].get("text") or "")
+            part0 = parts[0] if parts else {}
+            kind = str(part0.get("kind") or part0.get("type") or "")
+            if kind == "text":
+                prev = str(part0.get("text") or "")
             status["message"] = {"role": "agent", "parts": [text_part((prev + delta)[:8000])]}
             status["state"] = "working"
     elif et == HarnessEventType.ERROR:

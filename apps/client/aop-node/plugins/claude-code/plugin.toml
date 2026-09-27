@@ -1,0 +1,15 @@
+id = "claude-code"
+version = "local"
+kind = "agent"
+command = "python"
+args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8011"]
+workdir = "../../../../../agents/harness-agent"
+health_url = "http://127.0.0.1:8011/health"
+description = "Claude Code harness agent"
+
+[env]
+PORT = "8011"
+AGENT_URL = "http://127.0.0.1:8011/"
+HARNESS_PROFILE = "claude-code"
+AGENT_ID = "claude-code"
+HARNESS_HEARTBEAT = "1"

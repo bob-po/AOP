@@ -1,0 +1,15 @@
+id = "deepseek-harness"
+version = "local"
+kind = "agent"
+command = "python"
+args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8012"]
+workdir = "../../../../../agents/harness-agent"
+health_url = "http://127.0.0.1:8012/health"
+description = "DeepSeek Harness agent"
+
+[env]
+PORT = "8012"
+AGENT_URL = "http://127.0.0.1:8012/"
+HARNESS_PROFILE = "deepseek-harness"
+AGENT_ID = "deepseek-harness"
+HARNESS_HEARTBEAT = "1"

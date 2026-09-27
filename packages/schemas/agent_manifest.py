@@ -1,7 +1,7 @@
 """Agent Manifest Schema Definitions for AOP Reference Agents.
 
 This module provides unified schema definitions for Agent Cards and related structures,
-compatible with A2A protocol 0.3.0 and current Agent Card implementations.
+compatible with A2A protocol 0.3.0 (a2aproject/A2A) and current Agent Card implementations.
 """
 
 from __future__ import annotations

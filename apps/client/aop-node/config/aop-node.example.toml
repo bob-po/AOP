@@ -1,0 +1,43 @@
+gateway_url = "http://127.0.0.1:8080"
+orchestrator_url = "http://127.0.0.1:8090"
+# Leave empty when Gateway AUTH_REQUIRED=false. A non-empty key requires Postgres for validation.
+api_key = ""
+node_id = "node-local-1"
+plugins_dir = "./plugins"
+versions_dir = "~/.aop/node/versions"
+log_dir = "~/.aop/node/logs"
+heartbeat_interval_secs = 30
+mgmt_listen = "127.0.0.1:7920"
+register_endpoint = "http://127.0.0.1:7920/"
+update_manifest_url = ""
+autostart = true
+
+# Optional inline agents (in addition to plugins/*/plugin.toml)
+# [[agents]]
+# id = "claude-code"
+# version = "local"
+# command = "python"
+# args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8011"]
+# workdir = "../../../agents/harness-agent"
+# enabled = true
+
+[whitelist]
+allowed_binaries = [
+  "python",
+  "python3",
+  "openclaw",
+  "hermes",
+  "pi",
+  "claude",
+  "cmd",
+  "sh",
+]
+allowed_plugin_ids = [
+  "claude-code",
+  "deepseek-harness",
+  "pi",
+  "openclaw",
+  "hermes",
+  "echo",
+]
+allowed_path_prefixes = []

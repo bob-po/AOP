@@ -1,0 +1,25 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-1",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "messageId": "msg-1",
+      "parts": [
+        {
+          "kind": "text",
+          "text": "hello a2a"
+        }
+      ],
+      "metadata": {
+        "skillId": "echo",
+        "correlationId": "corr-1"
+      }
+    },
+    "metadata": {
+      "skillId": "echo",
+      "correlationId": "corr-1"
+    }
+  }
+}

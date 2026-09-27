@@ -1,0 +1,26 @@
+{
+  "jsonrpc": "2.0",
+  "id": "req-1",
+  "result": {
+    "id": "task-1",
+    "contextId": "task-1",
+    "status": {
+      "state": "completed"
+    },
+    "artifacts": [
+      {
+        "artifactId": "art-1",
+        "name": "summary",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "hello a2a"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "skillId": "echo"
+    }
+  }
+}

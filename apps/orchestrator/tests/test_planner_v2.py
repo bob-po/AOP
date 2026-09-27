@@ -23,7 +23,7 @@ SKILLS = {
     "text-to-video",
 }
 
-HARNESS = {"claude-code", "deepseek-harness", "pi"}
+HARNESS = {"claude-code", "deepseek-harness", "pi", "openclaw", "hermes"}
 
 
 def test_extract_json_from_fence():

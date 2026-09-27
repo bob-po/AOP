@@ -94,8 +94,9 @@ class BaseAgent:
     def text_of(self, task) -> str:
         for a in task.get("artifacts", []):
             for p in a.get("parts", []):
-                if p.get("type") == "text" and p.get("text"):
-                    return p["text"]
+                if p.get("kind") == "text" or p.get("type") == "text":
+                    if p.get("text"):
+                        return p["text"]
         return ""
 
     def _task(self, text, task_id):
@@ -180,9 +181,18 @@ class FakeA2AClient:
                   parent_task_id=None, root_task_id=None, depth=0,
                   caller_agent_id=None, target_agent_id=None,
                   visited_agents=None, governance_policy_id=None, deadline=None,
-                  idempotency_key=None, callback_url=None):
+                  idempotency_key=None, callback_url=None, task_id=None,
+                  async_mode=False):
         params = {
-            "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "type": "text", "text": text}],
+                "metadata": {
+                    "skillId": skill_id,
+                    "correlationId": correlation_id,
+                    "callbackUrl": callback_url,
+                },
+            },
             "correlationId": correlation_id,
             "parentTaskId": parent_task_id,
             "rootTaskId": root_task_id,
@@ -194,8 +204,15 @@ class FakeA2AClient:
             "deadline": deadline,
             "idempotencyKey": idempotency_key,
             "callbackUrl": callback_url,
-            "metadata": {"skillId": skill_id},
+            "metadata": {
+                "skillId": skill_id,
+                "async": bool(async_mode),
+                "correlationId": correlation_id,
+                "callbackUrl": callback_url,
+            },
         }
+        if task_id:
+            params["id"] = task_id
         return self._dispatch(self.endpoint, text, params)
 
 

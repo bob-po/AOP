@@ -1,0 +1,15 @@
+id = "openclaw"
+version = "local"
+kind = "agent"
+command = "python"
+args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8014"]
+workdir = "../../../../../agents/harness-agent"
+health_url = "http://127.0.0.1:8014/health"
+description = "OpenClaw harness agent"
+
+[env]
+PORT = "8014"
+AGENT_URL = "http://127.0.0.1:8014/"
+HARNESS_PROFILE = "openclaw"
+AGENT_ID = "openclaw"
+HARNESS_HEARTBEAT = "1"

@@ -21,7 +21,7 @@ Open http://127.0.0.1:3000
 |-------|---------|
 | `/` | Central dialog — create Task |
 | `/tasks/[id]` | DAG + Live Trace + Artifacts |
-| `/agents` | Registry + router preview by **agent_key** (`claude-code` / `deepseek-harness` / `pi`) |
+| `/agents` | Registry + router preview by **agent_key** (`claude-code` / `deepseek-harness` / `pi` / `openclaw` / `hermes`) |
 | `/workflows` | Workflow templates — nodes use harness agent_key (not legacy specialty skills) |
 | `/settings` | Console settings |
 

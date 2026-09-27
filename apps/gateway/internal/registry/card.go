@@ -13,15 +13,22 @@ import (
 )
 
 type AgentCard struct {
-	Name               string         `json:"name"`
-	Description        string         `json:"description"`
-	URL                string         `json:"url"`
-	Version            string         `json:"version"`
-	ProtocolVersion    string         `json:"protocolVersion"`
-	Capabilities       map[string]any `json:"capabilities"`
-	DefaultInputModes  []string       `json:"defaultInputModes"`
-	DefaultOutputModes []string       `json:"defaultOutputModes"`
-	Skills             []Skill        `json:"skills"`
+	Name                              string           `json:"name"`
+	Description                       string           `json:"description"`
+	URL                               string           `json:"url"`
+	Version                           string           `json:"version"`
+	ProtocolVersion                   string           `json:"protocolVersion"`
+	Capabilities                      map[string]any   `json:"capabilities"`
+	DefaultInputModes                 []string         `json:"defaultInputModes"`
+	DefaultOutputModes                []string         `json:"defaultOutputModes"`
+	Skills                            []Skill          `json:"skills"`
+	PreferredTransport                string           `json:"preferredTransport,omitempty"`
+	AdditionalInterfaces              []map[string]any `json:"additionalInterfaces,omitempty"`
+	SecuritySchemes                   map[string]any   `json:"securitySchemes,omitempty"`
+	Security                          []any            `json:"security,omitempty"`
+	SupportsAuthenticatedExtendedCard bool             `json:"supportsAuthenticatedExtendedCard,omitempty"`
+	Extensions                        []map[string]any `json:"extensions,omitempty"`
+	Provider                          map[string]any   `json:"provider,omitempty"`
 }
 
 type Skill struct {

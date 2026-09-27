@@ -25,9 +25,11 @@ def test_message_wire_roundtrip_carries_governance_context():
         deadline="2026-01-01T00:00:00+00:00",
     )
     wire = msg.to_dict()
+    assert wire["metadata"]["visitedAgents"] == ["agent-a", "agent-b"]
+    assert wire["metadata"]["governancePolicyId"] == "policy-default"
+    assert wire["metadata"]["deadline"] == "2026-01-01T00:00:00+00:00"
+    # Deprecated top-level mirrors still present for older agents:
     assert wire["visitedAgents"] == ["agent-a", "agent-b"]
-    assert wire["governancePolicyId"] == "policy-default"
-    assert wire["deadline"] == "2026-01-01T00:00:00+00:00"
     assert wire["callerAgentId"] == "agent-a"
     assert wire["targetAgentId"] == "agent-b"
 
@@ -79,16 +81,21 @@ def test_send_text_emits_governance_context_on_params():
     )
     assert captured["method"] == "message/send"
     params = captured["params"]
-    # Top-level mirror (what OS-side / inbound parsers read directly):
+    # Preferred home: params.metadata (official extension surface)
+    meta = params["metadata"]
+    assert meta["visitedAgents"] == ["agent-a"]
+    assert meta["governancePolicyId"] == "policy-x"
+    assert meta["deadline"] == "2026-01-01T00:00:00+00:00"
+    assert meta["callerAgentId"] == "agent-a"
+    assert meta["targetAgentId"] == "agent-b"
+    assert meta["correlationId"] == "corr-9"
+    assert meta["depth"] == 1
+    assert meta["callbackUrl"] == "http://cb/done"
+    assert meta["pushNotificationConfig"]["url"] == "http://cb/done"
+    # Deprecated top-level mirrors (compat):
     assert params["visitedAgents"] == ["agent-a"]
-    assert params["governancePolicyId"] == "policy-x"
-    assert params["deadline"] == "2026-01-01T00:00:00+00:00"
-    assert params["callerAgentId"] == "agent-a"
-    assert params["targetAgentId"] == "agent-b"
-    assert params["correlationId"] == "corr-9"
-    assert params["depth"] == 1
     assert params["callbackUrl"] == "http://cb/done"
-    # Nested message carries the same context:
-    assert params["message"]["visitedAgents"] == ["agent-a"]
-    assert params["message"]["governancePolicyId"] == "policy-x"
-    assert params["message"]["callbackUrl"] == "http://cb/done"
+    # Nested message metadata carries the same context:
+    assert params["message"]["metadata"]["visitedAgents"] == ["agent-a"]
+    assert params["message"]["metadata"]["governancePolicyId"] == "policy-x"
+    assert params["message"]["metadata"]["callbackUrl"] == "http://cb/done"

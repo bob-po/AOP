@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROFILES = ROOT / "profiles"
 
-EXPECTED = {"claude-code", "deepseek-harness", "pi"}
+EXPECTED = {"claude-code", "deepseek-harness", "pi", "openclaw", "hermes"}
 
 
 def test_all_profiles_load_without_skills():

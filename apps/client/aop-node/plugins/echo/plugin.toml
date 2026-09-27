@@ -1,0 +1,7 @@
+id = "echo"
+version = "0.1.0"
+kind = "plugin"
+command = "python"
+args = ["-u", "run.py"]
+workdir = "."
+description = "Sample plugin: prints a heartbeat line then sleeps (for Supervisor smoke tests)"

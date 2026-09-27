@@ -7,8 +7,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from a2a_sdk import A2AClient, AgentCard, Task
+from a2a_sdk import A2AClient, AgentCard, Message, Part, Task
 from a2a_sdk.client import first_data_artifact, first_text_artifact
+from a2a_sdk.protocol import TERMINAL_TASK_STATES
 
 from sandbox import SandboxPolicy, SandboxViolation, clamp_output, guard_call
 
@@ -117,21 +118,70 @@ class A2AExecutor:
             root = task_id
             corr = correlation_id or task_id
             a2a_task_id = str(uuid.uuid4())
-            task = client.send_text(
-                q,
-                skill_id=skill_id,
-                idempotency_key=idempotency_key,
-                correlation_id=corr,
-                parent_task_id=None,
-                root_task_id=root,
-                depth=depth,
-                caller_agent_id=caller_agent_id or "orchestrator",
-                target_agent_id=target_agent_id,
-                visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
-                task_id=a2a_task_id,
-                async_mode=async_mode,
-                callback_url=callback_url,
-            )
+            # Prefer message/stream only for real AgentCard with streaming=true.
+            if isinstance(card, AgentCard):
+                use_stream = (not async_mode) and card.supports_streaming()
+            else:
+                caps = getattr(card, "capabilities", None)
+                use_stream = (not async_mode) and isinstance(caps, dict) and bool(
+                    caps.get("streaming")
+                )
+            if use_stream:
+                message = Message(
+                    role="user",
+                    parts=[Part(type="text", text=q)],
+                    message_id=str(uuid.uuid4()),
+                    idempotency_key=idempotency_key,
+                    correlation_id=corr,
+                    root_task_id=root,
+                    depth=depth,
+                    caller_agent_id=caller_agent_id or "orchestrator",
+                    target_agent_id=target_agent_id,
+                    visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
+                    callback_url=callback_url,
+                )
+                task = None
+                for frame in client.stream_message(
+                    message,
+                    skill_id=skill_id,
+                    task_id=a2a_task_id,
+                    correlation_id=corr,
+                    root_task_id=root,
+                    depth=depth,
+                ):
+                    raw_task = frame.get("task") if isinstance(frame, dict) else None
+                    if isinstance(raw_task, dict):
+                        task = Task.from_dict(raw_task)
+                    if isinstance(frame, dict) and frame.get("event") in {"final", "timeout"}:
+                        break
+                if task is None:
+                    task = client.poll_task(a2a_task_id, timeout_s=min(timeout, 120.0))
+            else:
+                task = client.send_text(
+                    q,
+                    skill_id=skill_id,
+                    idempotency_key=idempotency_key,
+                    correlation_id=corr,
+                    parent_task_id=None,
+                    root_task_id=root,
+                    depth=depth,
+                    caller_agent_id=caller_agent_id or "orchestrator",
+                    target_agent_id=target_agent_id,
+                    visited_agents=list(visited_agents or (["orchestrator"] if root else [])),
+                    task_id=a2a_task_id,
+                    async_mode=async_mode,
+                    callback_url=callback_url,
+                )
+                # Sync path that only ACK'd: poll until terminal (async callers use join_task).
+                if not async_mode:
+                    state = getattr(task.status, "value", str(task.status)).lower()
+                    if state == "submitted":
+                        task = client.poll_task(
+                            task.id or a2a_task_id,
+                            timeout_s=max(timeout, 60.0),
+                            terminal=TERMINAL_TASK_STATES
+                            | {"input-required", "auth-required"},
+                        )
             text = clamp_output(first_text_artifact(task), self.policy)
             result = ExecutionResult(
                 agent_name=card.name,
@@ -161,29 +211,22 @@ class A2AExecutor:
         poll_interval_s: float = 2.0,
     ) -> ExecutionResult:
         """Poll ``tasks/get`` until the A2A task reaches a terminal state."""
-        import time
-
         client = A2AClient(agent_url, timeout=min(60.0, max(5.0, poll_interval_s * 4)))
         card = client.card
-        deadline = time.monotonic() + max(1.0, float(timeout_s))
-        terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
-        last: Task | None = None
-        while time.monotonic() < deadline:
-            last = client.get_task(a2a_task_id)
-            state = getattr(last.status, "value", str(last.status)).lower()
-            if state in terminal:
-                text = clamp_output(first_text_artifact(last), self.policy)
-                return ExecutionResult(
-                    agent_name=card.name,
-                    agent_url=agent_url.rstrip("/"),
-                    skill_id=None,
-                    task=last,
-                    text=text,
-                    data=first_data_artifact(last),
-                )
-            time.sleep(max(0.2, float(poll_interval_s)))
-        raise TimeoutError(
-            f"A2A join timed out after {timeout_s}s for task {a2a_task_id}"
+        last = client.poll_task(
+            a2a_task_id,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+            terminal=TERMINAL_TASK_STATES | {"input-required", "auth-required"},
+        )
+        text = clamp_output(first_text_artifact(last), self.policy)
+        return ExecutionResult(
+            agent_name=card.name,
+            agent_url=agent_url.rstrip("/"),
+            skill_id=None,
+            task=last,
+            text=text,
+            data=first_data_artifact(last),
         )
     def _result_from_cache(
         self,

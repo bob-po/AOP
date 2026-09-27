@@ -1,6 +1,7 @@
 # Agent 开发规范
 
-> 完整平台设计见 [技术方案](./A2A-Agent-调度平台-v1.0-技术方案.md)
+> 完整平台设计见 [技术方案](./A2A-Agent-调度平台-v1.0-技术方案.md)  
+> 协议基线见 [a2a-protocol.md](./a2a-protocol.md)（对齐 [a2aproject/A2A](https://github.com/a2aproject/A2A)）
 
 ## 最小交付物
 
@@ -15,18 +16,33 @@ agents/<name>/
 └── README.md         # 输入/输出/依赖
 ```
 
-## Agent Card 必填字段
+## 合规 Agent Card
+
+必填：
 
 - `name` / `description` / `url` / `version`
-- `skills[]`（含 `id` / `name` / `description`）
-- `capabilities`（至少声明是否 streaming）
-- 建议 `protocolVersion` 与平台约定一致（`0.3.0`）
+- `protocolVersion`：`0.3.0`（与平台钉扎的官方 spec 一致）
+- `preferredTransport`：建议 `JSONRPC`
+- `skills[]`（含 `id` / `name` / `description`）；无 skills 的透传 harness 可为空数组
+- `capabilities`：必须**诚实**声明 `streaming` / `pushNotifications`
+
+推荐：
+
+- `defaultInputModes` / `defaultOutputModes`
+- `securitySchemes` / `security`（无认证可为空）
+- `extensions`：平台扩展声明（可选）
+
+Wire 约定：
+
+- Message parts 使用官方判别字段 **`kind`**（`text` / `data` / `file`）；平台仍可读旧字段 `type`
+- 平台治理字段（`correlationId`、`visitedAgents`、…）放在 `metadata`；勿发明新的顶层 RPC
+- 长任务：`message/send` 可先返回 `submitted`，客户端用 `tasks/get` 轮询；支持流式则实现 `message/stream`（SSE）
 
 ## 生命周期
 
 ```
 启动 → POST /v1/agents/register →（可选）周期性 health
-     → 接收 A2A message/send → 返回 Artifact
+     → 接收 A2A message/send 或 message/stream → 返回 Artifact
 ```
 
 平台侧还会：
@@ -38,23 +54,16 @@ agents/<name>/
 ## 约束
 
 - 对外只暴露 A2A 接口；内部技术栈自定
+- OS 控制面（注册 / 路由 / DAG / HITL）走 `/v1/*`，不是 A2A 方法
 - 不假设可访问平台数据库
 - 产物可返回内联 Text/JSON；平台会落盘 MinIO
-- Code / Browser / RPA 类 Agent 必须容器隔离（见 [agent-sandbox.md](./agent-sandbox.md)；Phase 27 已提供 seccomp + AST/egress 沙箱）
-- 本地开发时 Docker 主机名（如 `claude-coder`）在 `AOP_RUNTIME=host` 时会被 Router 映射为 `127.0.0.1:端口`；Compose 内设 `AOP_RUNTIME=docker` 保留服务 DNS
+- Code / Browser / RPA 类 Agent 必须容器隔离（见 [agent-sandbox.md](./agent-sandbox.md)）
+- 本地开发时 Docker 主机名在 `AOP_RUNTIME=host` 时会被 Router 映射为 `127.0.0.1:端口`
+- 废弃（仍可读，勿新写）：`tasks/delegate`、Part 仅写 `type`、governance 顶层字段（请用 `metadata`）
 
-## 已落地 Agents（harness × 角色）
+## 已落地 Agents（harness profiles）
 
-专项 Agent（search/rag/report/…）已下线。仅保留 [`agents/harness-agent`](../../agents/harness-agent/)；每个 profile 是一个虚拟 Agent。
-
-| Profile | Port | Skills | Harness |
-|---------|------|--------|---------|
-| claude-coder | 8011 | `code-execution`, `code-assist` | Claude Code CLI |
-| claude-researcher | 8012 | `web-research`, `research-summarize`, `web-search` | Claude Code CLI |
-| pi-coder | 8013 | `code-execution`, `code-assist` | Pi CLI |
-| pi-researcher | 8014 | `web-research`, `research-summarize`, `web-search` | Pi CLI |
-| deepseek-coder | 8015 | `code-execution`, `code-assist` | DeepSeek Harness |
-| deepseek-researcher | 8016 | `web-research`, `research-summarize`, `web-search` | DeepSeek Harness |
+专项 Agent 已下线。仅保留 [`agents/harness-agent`](../../agents/harness-agent/)；每个 profile 是一个虚拟 Agent（含 openclaw / hermes）。
 
 详见 [harness-migration.md](./harness-migration.md)。
 
@@ -63,11 +72,3 @@ agents/<name>/
 ```bash
 python scripts/start_and_register_agents.py
 ```
-
-远端主机（Claude Code 风格）：
-
-```powershell
-irm http://<a2a-os>:8000/install/claude-coder.ps1 | iex
-```
-
-Marketplace：`GET /v1/marketplace`（含 `install.windows` / `download`）。
