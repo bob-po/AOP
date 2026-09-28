@@ -32,6 +32,7 @@ from ._cli_common import (
     resolve_binary,
     resolve_harness_workdir,
     system_prompt_from_message,
+    workdir_from_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,9 +103,14 @@ class OpenClawCliRunner:
         self.binary = binary or os.getenv("OPENCLAW_CLI_PATH") or "openclaw"
         self.timeout_s = float(os.getenv("OPENCLAW_CLI_TIMEOUT_S") or timeout_s)
         self.extra_args = list(extra_args or [])
-        self.cwd = resolve_harness_workdir(cwd, legacy_env=("OPENCLAW_WORKDIR",))
+        self.base_workdir = resolve_harness_workdir(cwd, legacy_env=("OPENCLAW_WORKDIR",))
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
+
+    @property
+    def cwd(self) -> str:
+        """Parent workdir root (per-run cwd is nested under task × agent)."""
+        return self.base_workdir
 
     def resolve_binary(self) -> Optional[str]:
         return resolve_binary(self.binary)
@@ -183,12 +189,13 @@ class OpenClawCliRunner:
         msg_file = Path(path)
         msg_file.write_text(prompt, encoding="utf-8")
 
+        run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
         argv = [
             binary,
             "agent",
             "exec",
             "--cwd",
-            self.cwd,
+            run_cwd,
             "--message-file",
             str(msg_file),
             "--json",
@@ -207,7 +214,7 @@ class OpenClawCliRunner:
         stderr_bits: list[str] = []
 
         try:
-            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=self.cwd)
+            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)
         except FileNotFoundError:
             err = f"Failed to spawn OpenClaw CLI: {binary}"
             await emit_event(

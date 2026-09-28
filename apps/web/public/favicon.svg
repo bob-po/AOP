@@ -1,4 +1,124 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
-  <rect width="32" height="32" rx="8" fill="#0f172a"/>
-  <path d="M8 22V10h4.2c2.6 0 4.2 1.4 4.2 3.5 0 1.4-.7 2.5-1.9 3.1L19 22h-3.2l-3.5-4.8H11V22H8zm3-7.2h1.1c1.1 0 1.7-.5 1.7-1.4s-.6-1.4-1.7-1.4H11v2.8zM20 22l3.8-12H27L23.1 22H20z" fill="#38bdf8"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">A2A OS Logo</title>
+  <desc id="desc">A modern logo representing autonomous agents communicating bidirectionally around an A2A OS core.</desc>
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#315CFF"/>
+      <stop offset="52%" stop-color="#7657FF"/>
+      <stop offset="100%" stop-color="#23D6D2"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6F52FF"/>
+      <stop offset="55%" stop-color="#2D8CFF"/>
+      <stop offset="100%" stop-color="#20D5D0"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1738"/>
+      <stop offset="100%" stop-color="#102A61"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-opacity=".16"/>
+    </filter>
+  </defs>
+
+  <!-- transparent background -->
+
+  <!-- central OS core -->
+  <g filter="url(#shadow)">
+    <path d="M512 275
+             C535 275 548 291 562 303
+             C580 299 602 304 616 318
+             C629 331 634 350 630 368
+             C648 382 658 399 658 420
+             C658 441 648 458 630 472
+             C634 491 629 510 616 523
+             C602 537 580 542 562 538
+             C548 550 535 566 512 566
+             C489 566 476 550 462 538
+             C444 542 422 537 408 523
+             C395 510 390 491 394 472
+             C376 458 366 441 366 420
+             C366 399 376 382 394 368
+             C390 350 395 331 408 318
+             C422 304 444 299 462 303
+             C476 291 489 275 512 275Z"
+          fill="url(#g1)"/>
+    <circle cx="512" cy="420" r="112" fill="url(#g3)"/>
+    <!-- white linear network node mark -->
+    <g fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="512" y1="420" x2="512" y2="358"/>
+      <line x1="512" y1="420" x2="566" y2="390"/>
+      <line x1="512" y1="420" x2="566" y2="450"/>
+      <line x1="512" y1="420" x2="512" y2="482"/>
+      <line x1="512" y1="420" x2="458" y2="450"/>
+      <line x1="512" y1="420" x2="458" y2="390"/>
+      <line x1="512" y1="358" x2="566" y2="390"/>
+      <line x1="566" y1="390" x2="566" y2="450"/>
+      <line x1="566" y1="450" x2="512" y2="482"/>
+      <line x1="512" y1="482" x2="458" y2="450"/>
+      <line x1="458" y1="450" x2="458" y2="390"/>
+      <line x1="458" y1="390" x2="512" y2="358"/>
+    </g>
+    <g fill="#fff">
+      <circle cx="512" cy="420" r="14"/>
+      <circle cx="512" cy="358" r="10"/>
+      <circle cx="566" cy="390" r="10"/>
+      <circle cx="566" cy="450" r="10"/>
+      <circle cx="512" cy="482" r="10"/>
+      <circle cx="458" cy="450" r="10"/>
+      <circle cx="458" cy="390" r="10"/>
+    </g>
+  </g>
+
+  <!-- orbital communication ring -->
+  <path d="M332 318 C244 354 226 464 277 545"
+        fill="none" stroke="url(#g2)" stroke-width="30" stroke-linecap="round"/>
+  <path d="M692 318 C780 354 798 464 747 545"
+        fill="none" stroke="url(#g2)" stroke-width="30" stroke-linecap="round"/>
+  <path d="M350 690 C433 762 591 762 674 690"
+        fill="none" stroke="url(#g2)" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- bidirectional arrows -->
+  <path d="M306 374 C338 348 372 337 406 337"
+        fill="none" stroke="#36B8FF" stroke-width="17" stroke-linecap="round"/>
+  <path d="M406 337 l-27 -18 M406 337 l-20 25"
+        fill="none" stroke="#36B8FF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M618 337 C652 337 686 348 718 374"
+        fill="none" stroke="#36D8D1" stroke-width="17" stroke-linecap="round"/>
+  <path d="M718 374 l-4 -31 M718 374 l-31 -5"
+        fill="none" stroke="#36D8D1" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M438 690 C470 709 554 709 586 690"
+        fill="none" stroke="#6B61FF" stroke-width="17" stroke-linecap="round"/>
+  <path d="M438 690 l24 -20 M438 690 l29 10"
+        fill="none" stroke="#6B61FF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- agent nodes -->
+  <g filter="url(#shadow)">
+    <!-- top -->
+    <circle cx="512" cy="214" r="82" fill="url(#g2)"/>
+    <circle cx="512" cy="214" r="49" fill="#0B1738"/>
+    <rect x="494" y="195" width="11" height="25" rx="5.5" fill="#50D5FF"/>
+    <rect x="519" y="195" width="11" height="25" rx="5.5" fill="#50D5FF"/>
+    <circle cx="512" cy="124" r="15" fill="#2F91FF"/>
+    <rect x="507" y="132" width="10" height="28" rx="5" fill="#2F91FF"/>
+
+    <!-- left -->
+    <circle cx="255" cy="613" r="82" fill="url(#g1)"/>
+    <circle cx="255" cy="613" r="49" fill="#0B1738"/>
+    <rect x="237" y="594" width="11" height="25" rx="5.5" fill="#A77AFF"/>
+    <rect x="262" y="594" width="11" height="25" rx="5.5" fill="#A77AFF"/>
+    <circle cx="255" cy="523" r="15" fill="#7657FF"/>
+    <rect x="250" y="531" width="10" height="28" rx="5" fill="#7657FF"/>
+
+    <!-- right -->
+    <circle cx="769" cy="613" r="82" fill="url(#g2)"/>
+    <circle cx="769" cy="613" r="49" fill="#0B1738"/>
+    <rect x="751" y="594" width="11" height="25" rx="5.5" fill="#4EE3D7"/>
+    <rect x="776" y="594" width="11" height="25" rx="5.5" fill="#4EE3D7"/>
+    <circle cx="769" cy="523" r="15" fill="#25CFCB"/>
+    <rect x="764" y="531" width="10" height="28" rx="5" fill="#25CFCB"/>
+  </g>
+
 </svg>

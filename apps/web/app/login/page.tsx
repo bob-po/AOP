@@ -31,7 +31,10 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-4 py-12">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-ink-900/60 p-8 shadow-xl">
-        <div className="font-display text-3xl text-mist-100">A2A OS</div>
+        <div className="flex items-center gap-3">
+          <img src="/logo.svg" alt="" width={72} height={72} className="h-[72px] w-[72px]" />
+          <div className="font-display text-3xl text-mist-100">A2A OS</div>
+        </div>
         <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-mist-400">
           Control plane login
         </p>

@@ -21,7 +21,12 @@ from ..protocol import (
     HarnessStatus,
     TokenUsage,
 )
-from ._cli_common import bump_stream_limit, readline_unlimited, resolve_harness_workdir
+from ._cli_common import (
+    bump_stream_limit,
+    readline_unlimited,
+    resolve_harness_workdir,
+    workdir_from_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +83,14 @@ class ClaudeCliRunner:
         self.binary = binary or os.getenv("CLAUDE_CLI_PATH") or "claude"
         self.timeout_s = float(os.getenv("CLAUDE_CLI_TIMEOUT_S") or timeout_s)
         self.extra_args = list(extra_args or [])
-        self.cwd = resolve_harness_workdir(cwd, legacy_env=("CLAUDE_WORKDIR",))
+        self.base_workdir = resolve_harness_workdir(cwd, legacy_env=("CLAUDE_WORKDIR",))
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
+
+    @property
+    def cwd(self) -> str:
+        """Parent workdir root (per-run cwd is nested under task × agent)."""
+        return self.base_workdir
 
     def resolve_binary(self) -> Optional[str]:
         path = shutil.which(self.binary) if self.binary else None
@@ -167,9 +177,10 @@ class ClaudeCliRunner:
         chunks: list[str] = []
         stderr_bits: list[str] = []
         canceled = False
+        run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
 
         try:
-            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=self.cwd)
+            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)
         except FileNotFoundError:
             err = f"Failed to spawn Claude CLI: {binary}"
             await _emit(HarnessEventType.ERROR, {"error": err})

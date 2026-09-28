@@ -209,6 +209,13 @@ def create_harness_app(
         async def _on_event(event: HarnessEvent) -> None:
             apply_event(tasks[task_id], event)
 
+        # Isolate CLI cwd per platform task × agent (runners read these keys).
+        meta = run_message.setdefault("metadata", {})
+        if isinstance(meta, dict):
+            root = task.get("rootTaskId") or task.get("correlationId") or task_id
+            meta.setdefault("rootTaskId", root)
+            meta.setdefault("agentId", agent_id)
+
         try:
             result = await runner.run(
                 task_id=task_id,

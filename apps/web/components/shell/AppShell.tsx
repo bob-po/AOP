@@ -74,8 +74,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="relative z-10 flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-white/10 bg-ink-950/80 px-4 backdrop-blur-md md:px-6">
-        <Link href="/" className="group flex items-baseline gap-2">
+      <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-white/10 bg-ink-950/80 px-4 backdrop-blur-md md:px-6">
+        <Link href="/" className="group flex items-center gap-2.5">
+          <img
+            src="/logo.svg"
+            alt=""
+            width={52}
+            height={52}
+            className="h-[52px] w-[52px] shrink-0"
+          />
           <span className="font-display text-xl tracking-tight text-mist-100 transition group-hover:text-signal md:text-2xl">
             A2A OS
           </span>

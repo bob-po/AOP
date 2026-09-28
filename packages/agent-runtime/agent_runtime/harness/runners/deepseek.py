@@ -35,6 +35,7 @@ from ._cli_common import (
     resolve_binary,
     resolve_harness_workdir,
     system_prompt_from_message,
+    workdir_from_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,12 +119,17 @@ class DeepSeekHarnessRunner:
     ):
         self.binary = binary or os.getenv("DSH_CLI_PATH") or "dsh"
         self.timeout_s = float(os.getenv("DSH_CLI_TIMEOUT_S") or timeout_s)
-        self.workspace = resolve_harness_workdir(workspace, legacy_env=("DSH_WORKSPACE",))
+        self.base_workdir = resolve_harness_workdir(workspace, legacy_env=("DSH_WORKSPACE",))
         self.dsh_home = _ensure_dsh_home(dsh_home)
         self.prefer = (prefer or os.getenv("DSH_RUNNER_MODE") or "auto").lower()
         self.env = env
         self.supervisor = supervisor or ProcessSupervisor()
         self._cancel_flags: dict[str, asyncio.Event] = {}
+
+    @property
+    def workspace(self) -> str:
+        """Parent workdir root (per-run cwd is nested under task × agent)."""
+        return self.base_workdir
 
     def resolve_binary(self) -> Optional[str]:
         return resolve_binary(self.binary)
@@ -211,7 +217,9 @@ class DeepSeekHarnessRunner:
             payload={"state": "working", "message": "starting deepseek sdk"},
         )
 
-        workspace = Path(self.workspace).resolve()
+        workspace = Path(
+            workdir_from_message(self.base_workdir, task_id=task_id, message=message)
+        ).resolve()
         dsh_home = Path(self.dsh_home).resolve()
         dsh_home.mkdir(parents=True, exist_ok=True)
         workspace.mkdir(parents=True, exist_ok=True)
@@ -341,8 +349,9 @@ class DeepSeekHarnessRunner:
 
         chunks: list[str] = []
         stderr_bits: list[str] = []
+        run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
         try:
-            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=self.workspace)
+            mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)
         except FileNotFoundError:
             return await self._run_tool_loop(task_id=task_id, message=message, skill_id=skill_id, on_event=on_event)
 

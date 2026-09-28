@@ -60,9 +60,18 @@ platform already parallelized.
 | `openclaw` | `openclaw` CLI on PATH (or `OPENCLAW_CLI_PATH`) |
 | `hermes` | `hermes` CLI on PATH (or `HERMES_CLI_PATH`) |
 
-All harness runners share **`HARNESS_WORKDIR`** as the CLI/SDK cwd (Read/Write/Bash).
-Default when unset: `~/.aop/workspaces/default` (not the uvicorn/`agents/harness-agent` cwd).
-Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` only apply if `HARNESS_WORKDIR` is empty.
+All harness runners use **`HARNESS_WORKDIR`** as the **parent root** for CLI/SDK
+cwd (Read/Write/Bash). Each run nests under that root as:
+
+```text
+<HARNESS_WORKDIR>/<rootTaskId>/<agentId>/
+```
+
+- `rootTaskId`：平台任务 ID（入站 `rootTaskId` / `correlationId`）；没有则用本次 A2A `task_id`
+- `agentId`：`HARNESS_PROFILE` / `AGENT_ID`（如 `claude-code`、`pi`）
+
+Default parent root when unset: `~/.aop/workspaces`（不再共用单一的 `default` 目录）。
+Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` only apply if `HARNESS_WORKDIR` is empty（同样作为父根再嵌套）。
 
 ## Environment
 
@@ -72,10 +81,10 @@ Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` /
 | `HARNESS_RUNNER` | Override: `claude_cli` / `pi_cli` / `deepseek` / `openclaw` / `hermes` |
 | `HARNESS_ENABLED` | Default on in start script; `0` to skip |
 | `HARNESS_PROFILES` | Comma filter, e.g. `claude-code,pi,openclaw,hermes` |
-| `HARNESS_WORKDIR` | Shared CLI/SDK working directory (default `~/.aop/workspaces/default`) |
+| `HARNESS_WORKDIR` | Parent workdir root; per-run cwd is `<root>/<task>/<agent>/` (default `~/.aop/workspaces`) |
 | `DEFAULT_AGENT` | Planner target agent_key (default `claude-code`) |
 | `CLAUDE_CLI_PATH` / `PI_CLI_PATH` / `DSH_CLI_PATH` / `OPENCLAW_CLI_PATH` / `HERMES_CLI_PATH` | Binaries |
-| `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` | Legacy per-runner cwd (ignored when `HARNESS_WORKDIR` is set) |
+| `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` | Legacy per-runner parent root (ignored when `HARNESS_WORKDIR` is set) |
 | `CLAUDE_CLI_PERMISSION_MODE` | Claude `-p` permission mode (default `bypassPermissions`) |
 
 ## Edge Node（可选）
