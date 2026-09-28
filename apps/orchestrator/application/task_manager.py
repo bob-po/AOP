@@ -80,7 +80,7 @@ class TaskManager:
         if not wf:
             raise ValueError(f"workflow not found: {workflow_id}")
         plan: TaskPlan = self.workflows.build_plan(workflow_id, goal=content, title=title)
-        available = set(self.planning.list_available_skills())
+        available = set(self.planning.list_available_agents())
         validate_plan(plan, available_skills=available)
         scheduled = self.scheduling.create_and_enqueue(
             goal=content,

@@ -21,9 +21,10 @@
 | **Outbox Processor** | Python | 无（轮询 PG） | P36.2 outbox 投递（**必需**） |
 | **Gateway** | Go | `8080` | 注册中心 + 反向代理 + 鉴权 |
 | **Web Console** | Next.js 15 | `3000` | 前端 |
-| **Harness agents** | Python | `8011`–`8013` | Claude Code / DeepSeek Harness / Pi（`agents/harness-agent`） |
+| **Harness agents** | Python | `8011`–`8015` | claude-code / deepseek / pi / openclaw / hermes |
+| **aop-node**（可选） | Rust | `7920` | 边缘 Supervisor：拉起本地 harness、注册、Windows 服务 |
 
-启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → Agents → Web**。
+启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → Agents（或 aop-node）→ Web**。
 
 > ⚠️ **Outbox Processor 是 Phase 36.2 新增的必需服务**。缺少它时，任务的首批就绪节点会一直卡在 PostgreSQL `outbox_events` 表（状态 `pending`），任务表现为 `running` 但节点永远停在 `ready`。
 
@@ -121,11 +122,22 @@ Gateway 启动时会：连接 PG/Redis、`SEED_DEV_KEY` 时种入开发 Key、`E
 ### 3.6 启动 Agents 并注册
 
 ```bash
-pip install -e packages/a2a-sdk      # 确保已装
+pip install -e "packages/agent-runtime[harness]"
+pip install -e packages/a2a-sdk
 python scripts/start_and_register_agents.py
 ```
 
-脚本会拉起 `claude-code`（:8011）、`deepseek-harness`（:8012）、`pi`（:8013），健康检查通过后向 Gateway 注册。远端主机可用 Marketplace 一键安装（`irm …/install.ps1 | iex`），见 [harness-migration.md](../architecture/harness-migration.md)。
+脚本默认拉起五套 profile，健康检查通过后向 Gateway 注册：
+
+| Profile | Port |
+|---------|------|
+| `claude-code` | 8011 |
+| `deepseek-harness` | 8012 |
+| `pi` | 8013 |
+| `openclaw` | 8014 |
+| `hermes` | 8015 |
+
+远端主机可用 Marketplace 一键安装，见 [harness-migration.md](../architecture/harness-migration.md)。
 
 ```powershell
 # 仅启动部分 profile（可选）
@@ -133,6 +145,21 @@ $env:HARNESS_PROFILES="claude-code,pi"
 python scripts/start_and_register_agents.py
 ```
 
+### 3.6b Edge Node（可选，代替本机手动起 Agents）
+
+若本机用 Windows 服务托管 harness，见 [aop-node README](../../apps/client/aop-node/README.md)：
+
+```powershell
+cd apps\client\aop-node
+# 管理员安装服务
+.\scripts\install-service.cmd
+sc start aop-node
+# 管理口
+curl http://127.0.0.1:7920/health
+curl http://127.0.0.1:7920/v1/status
+```
+
+> 勿与控制台手动 `aopd` / 旧脚本同时抢占 `:7920` 与同一批 Agent 端口。
 ### 3.7 启动 Web Console
 
 ```bash
@@ -165,8 +192,9 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess -ErrorActio
 | `6379` | Redis | `9091` | 指标服务（orchestrator & worker 默认都抢） |
 | `9000/9001` | MinIO | `8080` | Gateway |
 | `9090` | Prometheus | `3000` | Web |
-| `3001` | Grafana | `8011–8013` | Claude / DeepSeek / Pi |
-| `9093` | Alertmanager | `5000` | Webhook |
+| `3001` | Grafana | `8011–8015` | Harness agents |
+| `9093` | Alertmanager | `7920` | aop-node（可选） |
+| `5000` | Webhook | | |
 
 ---
 
@@ -214,8 +242,10 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess -ErrorActio
 
 ```bash
 curl http://127.0.0.1:8090/health          # orchestrator ok
-curl http://127.0.0.1:8080/v1/agents       # gateway 返回注册的 agents
-curl http://127.0.0.1:3000                  # web console
+curl http://127.0.0.1:8080/health          # gateway ok
+curl http://127.0.0.1:8080/v1/agents       # 已注册 agents
+curl http://127.0.0.1:3000/login           # web console
+curl http://127.0.0.1:7920/health          # aop-node（若启用）
 
 # outbox 处理器是否在跑（应该看到 "Starting outbox processor service"）
 # 建任务后确认 outbox_events 里 pending 被及时清空：
@@ -331,7 +361,7 @@ docker exec aop-redis redis-cli XLEN a2a.execution.queue
 
 ### 7.14 Stripe / 计费相关报错
 
-本地未配 `STRIPE_SECRET_KEY` 时，`/v1/billing/*` 相关接口会返回 500 或 dry-run 提示，属预期。完整走 Stripe Checkout 需配 `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`（见 [billing-invoice.md](./billing-invoice.md)）。
+本地未配 `STRIPE_SECRET_KEY` 时，`/v1/billing/*` 相关接口会返回 500 或 dry-run 提示，属预期。完整走 Stripe Checkout 需配 `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`（见 [billing-invoice.md](../reference/billing-invoice.md)）。
 
 ### 7.15 改了 `NEXT_PUBLIC_*` 不生效
 
@@ -372,7 +402,8 @@ chmod +x deploy.sh
 - [根 README](../../README.md) — 总览与快速开始
 - [文档中心](../README.md) — 分类索引
 - [overview.md](../architecture/overview.md) — 架构
-- [database.md](../reference/database.md) — 表结构与迁移
-- [redis.md](../reference/redis.md) — 队列/锁
-- [a2a-protocol.md](../architecture/a2a-protocol.md) / [agent-dev-guide.md](../architecture/agent-dev-guide.md) — 协议与 Agent 规范
+- [harness-migration.md](../architecture/harness-migration.md) — Harness Agent
+- [a2a-protocol.md](../architecture/a2a-protocol.md) · [agent-dev-guide.md](../architecture/agent-dev-guide.md) — 协议与 Agent 规范
+- [aop-node](../../apps/client/aop-node/README.md) — 边缘 Supervisor
+- [database.md](../reference/database.md) · [redis.md](../reference/redis.md) — 数据与队列
 - [deployments/README.md](../../deployments/README.md) — 云部署

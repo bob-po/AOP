@@ -2,20 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import ReactFlow, {
+import {
   Background,
   Controls,
   MarkerType,
+  ReactFlow,
   addEdge,
   useEdgesState,
   useNodesState,
   type Connection,
   type Edge,
   type Node,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 
-const WF_PRO_OPTIONS = { hideAttribution: true };
 import {
   createWorkflow,
   listWorkflows,
@@ -23,6 +23,7 @@ import {
   type TaskPlan,
   type Workflow,
 } from "@/lib/api";
+import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
 
 function dagToFlow(dag?: TaskPlan | null): { nodes: Node[]; edges: Edge[] } {
   const planNodes = dag?.nodes || [];
@@ -81,6 +82,7 @@ function flowToDag(nodes: Node[], edges: Edge[], title: string): TaskPlan {
 
 export function WorkflowsPageView() {
   const router = useRouter();
+  const mounted = useClientMounted();
   const [items, setItems] = useState<Workflow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [goal, setGoal] = useState(
@@ -370,18 +372,20 @@ export function WorkflowsPageView() {
               </div>
             </div>
             <div className="min-h-0 flex-1">
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                fitView
-                proOptions={WF_PRO_OPTIONS}
-              >
-                <Background color="#3dffa822" gap={22} />
-                <Controls />
-              </ReactFlow>
+              {mounted ? (
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={onConnect}
+                  fitView
+                  onError={reactFlowOnError}
+                >
+                  <Background color="#3dffa822" gap={22} />
+                  <Controls />
+                </ReactFlow>
+              ) : null}
             </div>
             <div className="border-t border-white/10 px-4 py-2 font-mono text-[10px] text-mist-400">
               拖拽连线配置 depends_on；节点标签第二行为 agent_key（勿填旧 specialty skill）。

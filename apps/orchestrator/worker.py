@@ -7,9 +7,6 @@ import os
 
 from executor.engine import ExecutionEngine
 
-# Backward-compatible alias
-ExecutionWorker = ExecutionEngine
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AOP execution worker")

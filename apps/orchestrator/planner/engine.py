@@ -20,5 +20,5 @@ class PlanningEngine:
     def plan(self, goal: str, *, title: str | None = None) -> PlannerResult:
         return self._planner.plan(goal, title=title)
 
-    def list_available_skills(self) -> list[str]:
-        return self._planner.list_available_skills()
+    def list_available_agents(self) -> list[str]:
+        return self._planner.list_available_agents()

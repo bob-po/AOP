@@ -1,12 +1,13 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactFlow, {
+import {
   Background,
   BezierEdge,
   Controls,
   Handle,
   Position,
+  ReactFlow,
   SimpleBezierEdge,
   SmoothStepEdge,
   StepEdge,
@@ -19,8 +20,8 @@ import ReactFlow, {
   type NodeProps,
   type NodeTypes,
   type OnNodesChange,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import {
   apiErrorMessage,
   getCollaborationGraph,
@@ -32,6 +33,7 @@ import {
   type CollaborationLink,
   type CollaborationNode,
 } from "@/lib/api";
+import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
 import { CollaborationStream } from "./CollaborationStream";
 
 function fileNameFromUri(uri?: string): string {
@@ -169,6 +171,8 @@ type CircleData = {
   running?: boolean;
 };
 
+type BranchCircleFlowNode = Node<CircleData, "branchCircle">;
+
 /** Handoff reasons like "Completed claude-code" are status noise — ring conveys done. */
 function isCompletionBlurb(text: string): boolean {
   return /^(completed|success|succeeded|done|finished)\b/i.test(text.trim());
@@ -182,7 +186,7 @@ function statusKind(status?: string | null): "done" | "failed" | "running" | "ot
   return "other";
 }
 
-function BranchCircle({ data }: NodeProps<CircleData>) {
+function BranchCircle({ data }: NodeProps<BranchCircleFlowNode>) {
   const size = NODE_SIZE;
   const ring = data.done
     ? "#3dffa8"
@@ -252,15 +256,16 @@ function BranchCircle({ data }: NodeProps<CircleData>) {
 
 const BranchCircleNode = memo(BranchCircle);
 /** Module-level + frozen — React Flow #002 if recreated each render. */
-const NODE_TYPES: NodeTypes = Object.freeze({ branchCircle: BranchCircleNode });
-const EDGE_TYPES: EdgeTypes = Object.freeze({
+const NODE_TYPES = Object.freeze({
+  branchCircle: BranchCircleNode,
+}) as unknown as NodeTypes;
+const EDGE_TYPES = Object.freeze({
   default: BezierEdge,
   straight: StraightEdge,
   step: StepEdge,
   smoothstep: SmoothStepEdge,
   simplebezier: SimpleBezierEdge,
-});
-const PRO_OPTIONS = Object.freeze({ hideAttribution: true });
+}) as EdgeTypes;
 const FIT_VIEW_OPTIONS = Object.freeze({ padding: 0.35, minZoom: 0.45, maxZoom: 1.35 });
 const DEFAULT_EDGE_OPTIONS = Object.freeze({ type: "default" as const });
 
@@ -679,6 +684,7 @@ export function CollaborationGraphView({
   // Pin identities for this component instance (survives parent re-renders / HMR churn)
   const nodeTypes = useRef(NODE_TYPES).current;
   const edgeTypes = useRef(EDGE_TYPES).current;
+  const mounted = useClientMounted();
   const [graph, setGraph] = useState<CollaborationGraph | null>(null);
   const [agentIndex, setAgentIndex] = useState<AgentIndex>(() => buildAgentIndex([]));
   const [error, setError] = useState<string | null>(null);
@@ -981,26 +987,28 @@ export function CollaborationGraphView({
             ) : null}
           </div>
         )}
-        <ReactFlow
-          nodes={empty ? [] : nodes}
-          edges={empty ? [] : edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodesChange={onNodesChange}
-          onNodeClick={onNodeClick}
-          onEdgeClick={onEdgeClick}
-          onPaneClick={onPaneClick}
-          fitView
-          fitViewOptions={FIT_VIEW_OPTIONS}
-          proOptions={PRO_OPTIONS}
-          nodesDraggable={false}
-          minZoom={0.3}
-          maxZoom={1.5}
-          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-        >
-          <Background color="rgba(255,255,255,0.04)" gap={20} />
-          <Controls showInteractive={false} />
-        </ReactFlow>
+        {mounted ? (
+          <ReactFlow
+            nodes={empty ? [] : nodes}
+            edges={empty ? [] : edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodesChange={onNodesChange}
+            onNodeClick={onNodeClick}
+            onEdgeClick={onEdgeClick}
+            onPaneClick={onPaneClick}
+            fitView
+            fitViewOptions={FIT_VIEW_OPTIONS}
+            nodesDraggable={false}
+            minZoom={0.3}
+            maxZoom={1.5}
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+            onError={reactFlowOnError}
+          >
+            <Background color="rgba(255,255,255,0.04)" gap={20} />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        ) : null}
       </div>
 
       {listsVisible ? (

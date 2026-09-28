@@ -21,11 +21,12 @@ Open http://127.0.0.1:3000
 |-------|---------|
 | `/` | Central dialog — create Task |
 | `/tasks/[id]` | DAG + Live Trace + Artifacts |
-| `/agents` | Registry + router preview by **agent_key** (`claude-code` / `deepseek-harness` / `pi` / `openclaw` / `hermes`) |
-| `/workflows` | Workflow templates — nodes use harness agent_key (not legacy specialty skills) |
-| `/settings` | Console settings |
+| `/agents` | Registry + router preview by **agent_key**（`claude-code` / `deepseek-harness` / `pi` / `openclaw` / `hermes`） |
+| `/workflows` | 编排模板（节点用 harness agent_key） |
+| `/settings` | API Keys · RBAC · 审计 · 用量 · 配额 · 出站 |
+| `/login` | 开发账号 `admin@aop.local` / `aop_admin_dev` |
 
-Legacy `/marketplace` and `/scheduling` redirect to `/agents`.
+全栈启动见 [docs/guides/getting-started.md](../../docs/guides/getting-started.md)。
 
 ## Stack
 

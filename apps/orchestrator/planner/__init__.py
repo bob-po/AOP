@@ -1,4 +1,4 @@
-"""Planner: natural language goal → Task DAG (skill-based). Phase 19 = v2."""
+"""Planner: natural language goal → Task DAG (registered agent hops)."""
 
 from __future__ import annotations
 
@@ -6,10 +6,8 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable, Sequence
 
-import psycopg
-from psycopg.rows import dict_row
 from db import connect
 
 from .dag import DAGValidationError, PlanNode, TaskPlan, validate_plan
@@ -19,227 +17,11 @@ from router import hitl_skills
 
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
-# Preferred default agent (agent_key). Override via DEFAULT_AGENT.
-_DEFAULT_AGENTS = (
-    "claude-code",
-    "deepseek-harness",
-    "pi",
-    "openclaw",
-    "hermes",
-)
+_NO_SPAWN = "请独立完成本任务，不要再 spawn/委派同伴。"
 
+# Platform supervisor keys are registered for heartbeat, not task work.
+_SUPERVISOR_KEY_PREFIXES = ("aop-node",)
 
-def pick_agent(available: set[str], *candidates: str) -> str | None:
-    """Return the first candidate agent_key present in ``available``."""
-    for key in candidates:
-        if key in available:
-            return key
-    return None
-
-
-def default_agent(available: set[str]) -> str | None:
-    preferred = (os.getenv("DEFAULT_AGENT") or "claude-code").strip()
-    # Legacy env aliases
-    if not preferred or preferred == "claude-code":
-        preferred = (
-            os.getenv("DEFAULT_RESEARCH_AGENT")
-            or os.getenv("DEFAULT_CODE_AGENT")
-            or preferred
-        ).strip()
-        if preferred in {"claude-researcher", "claude-coder"}:
-            preferred = "claude-code"
-    ordered = (preferred,) + tuple(a for a in _DEFAULT_AGENTS if a != preferred)
-    return pick_agent(available, *ordered)
-
-
-def wants_all_agents(goal: str) -> bool:
-    """True when the goal asks to involve every available harness agent."""
-    low = (goal or "").lower()
-    if any(m.lower() in low for m in _MULTI_AGENT_MARKERS):
-        return True
-    # Explicitly names ≥2 known harness products
-    named = [a for a in _DEFAULT_AGENTS if a in low or a.replace("-", " ") in low]
-    if "deepseek" in low and "claude" in low:
-        return True
-    if "deepseek" in low and "pi" in low:
-        return True
-    if len(named) >= 2:
-        return True
-    return False
-
-
-# Role framing for parallel fan-out — same work goal, complementary angles.
-_AGENT_DISPATCH_ROLES: dict[str, str] = {
-    "claude-code": (
-        "你是 Claude Code。平台已并行调度其他 agent，请独立完成本任务，"
-        "不要再 spawn/委派同伴。侧重用 WebSearch/WebFetch 收集一手公开资料并引用链接。"
-    ),
-    "deepseek-harness": (
-        "你是 DeepSeek Harness。平台已并行调度其他 agent，请独立完成本任务。"
-        "尽量补充与其他视角不同的公开来源、技术细节或实现向信息，并引用链接。"
-    ),
-    "pi": (
-        "你是 Pi。平台已并行调度其他 agent，请独立完成本任务。"
-        "侧重产品/市场/可用性视角整理公开资料，并引用链接。"
-    ),
-    "openclaw": (
-        "你是 OpenClaw。平台已并行调度其他 agent，请独立完成本任务。"
-        "侧重自动化、多通道与工具编排视角完成工作，并给出可执行结论。"
-    ),
-    "hermes": (
-        "你是 Hermes。平台已并行调度其他 agent，请独立完成本任务。"
-        "侧重终端/工程实现与可复现步骤，补充与其他视角不同的细节。"
-    ),
-}
-
-
-def extract_work_goal(goal: str) -> str:
-    """Strip orchestration / routing preamble; keep the actual user work request.
-
-    Example:
-      「使用目前所有的agent，调研ui2v这个网页…」
-      → 「调研ui2v这个网页…」
-    """
-    text = (goal or "").strip()
-    if not text:
-        return text
-
-    cleaned = text
-    for marker in sorted(_MULTI_AGENT_MARKERS, key=len, reverse=True):
-        cleaned = re.sub(re.escape(marker), " ", cleaned, flags=re.IGNORECASE)
-
-    # Leftover routing crumbs: 「的agent」「全部 agents」「多智能体」…
-    cleaned = re.sub(
-        r"(的)?(目前)?(全部|所有)?\s*agents?\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(r"(的)?(目前)?(全部|所有)?\s*智能体", " ", cleaned)
-
-    # Drop explicit product names when used as routing targets.
-    for name in (
-        "claude-code",
-        "deepseek-harness",
-        "deepseek",
-        "claude code",
-        "claude",
-        "pi agent",
-        "openclaw",
-        "hermes",
-        "hermes agent",
-    ):
-        cleaned = re.sub(rf"\b{re.escape(name)}\b", " ", cleaned, flags=re.IGNORECASE)
-    # Bare "pi" only at word boundaries when used as agent name (avoid English "pi" in math).
-    cleaned = re.sub(r"(?i)(?<![a-z])pi(?![a-z])", " ", cleaned)
-
-    # Glue left by Chinese punctuation after stripping markers.
-    cleaned = re.sub(r"[，,、；;]\s*[，,、；;]+", "，", cleaned)
-    cleaned = re.sub(r"^(请)?(使用|用|调用|让|请让)\s*", "", cleaned.strip())
-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
-    cleaned = cleaned.strip(" ，,、；;：:")
-    return cleaned or text
-
-
-def dispatch_agent_instruction(agent_key: str, work_goal: str) -> str:
-    """Build the per-agent brief that Worker will send (not the raw user goal)."""
-    work = (work_goal or "").strip()
-    role = _AGENT_DISPATCH_ROLES.get(
-        agent_key,
-        f"你是 {agent_key}。平台已分发本任务给你，请独立完成，不要再委派同伴。",
-    )
-    return f"{role}\n\n任务：\n{work}"
-
-
-def parallel_harness_nodes(
-    available: set[str],
-    *,
-    hitl: set[str],
-    work_goal: str = "",
-) -> list[PlanNode]:
-    """One independent DAG node per online harness agent (fan-out, no deps).
-
-    When only one agent remains after filtering, still returns a single node so
-    the multi-agent intent degrades gracefully instead of failing.
-
-    Each node gets an ``instruction`` brief derived from ``work_goal`` (routing
-    language should already be stripped by the caller).
-    """
-    keys = [a for a in _DEFAULT_AGENTS if a in available]
-    if not keys:
-        keys = sorted(available)
-    if not keys:
-        return []
-    id_by_key = {
-        "claude-code": "claude",
-        "deepseek-harness": "deepseek",
-        "pi": "pi",
-        "openclaw": "openclaw",
-        "hermes": "hermes",
-    }
-    work = (work_goal or "").strip()
-    nodes: list[PlanNode] = []
-    used_ids: set[str] = set()
-    for key in keys:
-        nid = id_by_key.get(key) or key.replace("-", "_")[:24]
-        base = nid
-        n = 2
-        while nid in used_ids:
-            nid = f"{base}{n}"
-            n += 1
-        used_ids.add(nid)
-        instruction = dispatch_agent_instruction(key, work) if work else None
-        nodes.append(
-            PlanNode(
-                id=nid,
-                skill=key,
-                depends_on=[],
-                requires_approval=key in hitl,
-                instruction=instruction,
-            )
-        )
-    return nodes
-
-
-def probe_agent_ready(endpoint: str, *, timeout_s: float = 2.0) -> bool:
-    """GET ``/health`` — treat missing flag as ready (older agents)."""
-    if os.getenv("PLANNER_SKIP_READY_PROBE", "").lower() in {"1", "true", "yes"}:
-        return True
-    url = (endpoint or "").rstrip("/") + "/health"
-    try:
-        import httpx
-
-        r = httpx.get(url, timeout=timeout_s)
-        if r.status_code >= 400:
-            return False
-        data = r.json() if r.content else {}
-        if not isinstance(data, dict):
-            return True
-        if "runner_ready" in data:
-            return bool(data.get("runner_ready"))
-        return True
-    except Exception:  # noqa: BLE001
-        # Unreachable → do not schedule (avoids guaranteed failure).
-        return False
-
-
-# Back-compat aliases
-pick_skill = pick_agent
-default_research_skill = default_agent
-default_research_agent = default_agent
-default_code_agent = default_agent
-
-_SIMPLE_QA_MARKERS = (
-    "一句话",
-    "一句话介绍",
-    "是什么",
-    "什么是",
-    "简述",
-    "简短",
-    "简单介绍",
-)
-
-# User explicitly wants every online harness agent in the plan.
 _MULTI_AGENT_MARKERS = (
     "使用目前所有的agent",
     "用目前所有的agent",
@@ -270,133 +52,297 @@ _MULTI_AGENT_MARKERS = (
     "全部智能体",
 )
 
-_REPORT_INTENT = (
-    "报告",
-    "report",
-    "总结",
-    "summary",
-    "调研",
-    "生成报告",
-)
-_PPT_INTENT = (
-    "ppt",
-    "pptx",
-    "powerpoint",
-    "幻灯片",
-    "演示文稿",
-    "课件",
-    "生成ppt",
-    "做个ppt",
-    "做一份ppt",
-)
-_SEARCH_INTENT = (
-    "搜索",
-    "检索",
-    "查找",
-    "搜一下",
-    "search",
-    "什么是",
-    "是什么",
-)
-_RAG_INTENT = (
-    "知识库",
-    "rag",
-    "资料库",
-    "本地文档",
-    "文档库",
-)
-_ANALYSIS_INTENT = (
-    "分析",
-    "对比",
-    "比较",
-    "研判",
-    "综述",
-)
-_DEEP_RESEARCH = (
-    "调研",
-    "研究",
-    "深入",
-    "全面了解",
-    "深度",
-)
-_RESEARCH_EXCLUDE_FROM_SIMPLE = (
-    "报告",
-    "report",
-    "ppt",
-    "pptx",
-    "幻灯片",
-    "演示文稿",
-    "总结",
-    "summary",
-    "调研",
-    "分析并",
-    "生成报告",
-)
-_MEDIA_EXCLUDE_FROM_SIMPLE = (
-    "图",
-    "image",
-    "宣传图",
-    "海报",
-    "插画",
-    "视频",
-    "video",
-    "短片",
-    "宣传片",
-)
+
+@dataclass(frozen=True)
+class RegisteredAgent:
+    """One schedulable agent from the registry (not a hardcoded catalog)."""
+
+    key: str
+    name: str = ""
+    priority: int = 100
+
+    @property
+    def label(self) -> str:
+        return (self.name or self.key).strip() or self.key
 
 
-def _wants_report(goal: str) -> bool:
-    text = (goal or "").lower()
-    return any(k in text for k in _REPORT_INTENT)
+def _env_on(name: str, *, default: str = "") -> bool:
+    return os.getenv(name, default).lower() in {"1", "true", "yes"}
 
 
-def _wants_ppt(goal: str) -> bool:
-    text = (goal or "").lower()
-    return any(k in text for k in _PPT_INTENT)
+def _env_off(name: str, *, default: str = "1") -> bool:
+    return os.getenv(name, default).lower() in {"0", "false", "no", "off"}
 
 
-def _wants_search(goal: str) -> bool:
-    text = (goal or "").lower()
-    return any(k in text for k in _SEARCH_INTENT)
+def is_work_agent(key: str) -> bool:
+    k = (key or "").strip().lower()
+    if not k:
+        return False
+    return not any(k.startswith(p) for p in _SUPERVISOR_KEY_PREFIXES)
 
 
-def _wants_rag(goal: str) -> bool:
-    text = (goal or "").lower()
-    return any(k in text for k in _RAG_INTENT)
+def coerce_registry(
+    agents: Sequence[RegisteredAgent] | Iterable[str] | None,
+) -> list[RegisteredAgent]:
+    """Accept RegisteredAgent rows or bare keys (tests / callers)."""
+    if agents is None:
+        return []
+    out: list[RegisteredAgent] = []
+    for a in agents:
+        if isinstance(a, RegisteredAgent):
+            if is_work_agent(a.key):
+                out.append(a)
+        else:
+            key = str(a).strip()
+            if is_work_agent(key):
+                out.append(RegisteredAgent(key=key, name=key))
+    return out
 
 
-def _wants_analysis(goal: str) -> bool:
-    return any(k in (goal or "") for k in _ANALYSIS_INTENT)
+def _alias_patterns(key: str, name: str = "") -> list[tuple[int, str]]:
+    """(specificity, regex) derived from registered key/name — longest first."""
+    keyed: list[tuple[int, str]] = []
+    seen: set[str] = set()
+
+    def add(pattern: str, weight: int) -> None:
+        if pattern in seen:
+            return
+        seen.add(pattern)
+        keyed.append((weight, pattern))
+
+    key = (key or "").strip()
+    name = (name or "").strip()
+    if not key:
+        return []
+
+    def add_token(token: str, weight: int) -> None:
+        """Long tokens may freestand; short ones need letter boundaries (pi ⊂ ping)."""
+        esc = re.escape(token)
+        if len(token) <= 2:
+            add(rf"(?:使用|用|调用|让|请让)\s*{esc}(?![a-zA-Z])", weight + 4)
+            add(rf"(?<![a-zA-Z]){esc}(?![a-zA-Z])", weight)
+        else:
+            add(esc, weight)
+
+    add_token(key, len(key) + 10)
+    spaced = key.replace("-", " ").replace("_", " ")
+    if spaced != key:
+        add_token(spaced, len(spaced) + 8)
+
+    for part in re.split(r"[-_\s]+", key):
+        part = part.strip()
+        if len(part) >= 2 and part.lower() != key.lower():
+            add_token(part, len(part))
+
+    if name and name.lower() not in {key.lower(), spaced.lower()}:
+        add(re.escape(name), len(name) + 6)
+        name_space = re.sub(r"\s+", r"\\s+", re.escape(name))
+        add(name_space, len(name) + 5)
+
+    keyed.sort(key=lambda x: (-x[0], -len(x[1])))
+    return keyed
 
 
-def _wants_deep_research(goal: str) -> bool:
-    return any(k in (goal or "") for k in _DEEP_RESEARCH)
+def default_agent(available: set[str]) -> str | None:
+    """Prefer DEFAULT_AGENT when online; else any registered work agent."""
+    work = {k for k in available if is_work_agent(k)}
+    if not work:
+        return None
+    preferred = (os.getenv("DEFAULT_AGENT") or "").strip()
+    if preferred and preferred in work:
+        return preferred
+    # Stable pick when env unset: lexicographic among online work agents.
+    return sorted(work)[0]
 
 
-def _is_simple_qa(goal: str) -> bool:
-    """True for short factual / one-sentence questions — search only, no report DAG."""
+def mentioned_agents(
+    goal: str,
+    registry: Sequence[RegisteredAgent] | Iterable[str] | None,
+) -> list[str]:
+    """Registered agent keys named in ``goal`` (specificity order)."""
+    agents = coerce_registry(registry)
+    text = goal or ""
+    # Build global pattern list: longer aliases win when overlapping.
+    ranked: list[tuple[int, str, str]] = []  # weight, pattern, key
+    for ag in agents:
+        for weight, pattern in _alias_patterns(ag.key, ag.name):
+            ranked.append((weight, pattern, ag.key))
+    ranked.sort(key=lambda x: (-x[0], -len(x[1])))
+
+    hits: list[str] = []
+    seen: set[str] = set()
+    for _w, pattern, key in ranked:
+        if key in seen:
+            continue
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            seen.add(key)
+            hits.append(key)
+    return hits
+
+
+def wants_all_agents(
+    goal: str,
+    registry: Sequence[RegisteredAgent] | Iterable[str] | None = None,
+) -> bool:
+    """True when the goal asks for every agent, or names ≥2 registered ones."""
+    low = (goal or "").lower()
+    if any(m.lower() in low for m in _MULTI_AGENT_MARKERS):
+        return True
+    if registry is None:
+        return False
+    return len(mentioned_agents(goal, registry)) >= 2
+
+
+def requested_agent(
+    goal: str,
+    available: set[str] | None = None,
+    registry: Sequence[RegisteredAgent] | Iterable[str] | None = None,
+) -> str | None:
+    """If the goal names exactly one registered agent, return its key."""
+    text = (goal or "").strip()
+    reg = coerce_registry(registry if registry is not None else available)
+    if not text or wants_all_agents(text, reg):
+        return None
+    hits = mentioned_agents(text, reg)
+    if len(hits) != 1:
+        return None
+    key = hits[0]
+    if available is not None and key not in available:
+        return None
+    return key
+
+
+def extract_work_goal(
+    goal: str,
+    registry: Sequence[RegisteredAgent] | Iterable[str] | None = None,
+) -> str:
+    """Strip orchestration / agent-name routing; keep the work request."""
     text = (goal or "").strip()
     if not text:
-        return False
-    lower = text.lower()
-    if any(k in lower for k in _RESEARCH_EXCLUDE_FROM_SIMPLE):
-        return False
-    if any(k in text for k in _MEDIA_EXCLUDE_FROM_SIMPLE):
-        return False
-    if any(k in text for k in ("分析", "对比", "比较", "研究", "调研")):
-        return False
-    if any(k in text for k in _SIMPLE_QA_MARKERS):
+        return text
+
+    cleaned = text
+    for marker in sorted(_MULTI_AGENT_MARKERS, key=len, reverse=True):
+        cleaned = re.sub(re.escape(marker), " ", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(
+        r"(的)?(目前)?(全部|所有)?\s*agents?\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"(的)?(目前)?(全部|所有)?\s*智能体", " ", cleaned)
+
+    for ag in coerce_registry(registry):
+        for _w, pattern in _alias_patterns(ag.key, ag.name):
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"[，,、；;]\s*[，,、；;]+", "，", cleaned)
+    cleaned = re.sub(r"^(请)?(使用|用|调用|让|请让)\s*", "", cleaned.strip())
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = cleaned.strip(" ，,、；;：:")
+    return cleaned or text
+
+
+def agent_instruction(
+    agent_key: str,
+    work_goal: str,
+    *,
+    parallel: bool = False,
+    label: str | None = None,
+) -> str:
+    """Generic brief — no hardcoded domain angles."""
+    work = (work_goal or "").strip()
+    who = (label or agent_key).strip() or agent_key
+    if parallel:
+        head = f"你是 {who}。平台已并行调度其他 agent，{_NO_SPAWN}"
+    else:
+        head = f"你是 {who}。{_NO_SPAWN}"
+    return f"{head}\n\n任务：\n{work}"
+
+
+def _node_id_for(key: str, used: set[str]) -> str:
+    base = re.sub(r"[^a-zA-Z0-9]+", "_", key).strip("_")[:24] or "agent"
+    nid = base
+    n = 2
+    while nid in used:
+        nid = f"{base}{n}"
+        n += 1
+    used.add(nid)
+    return nid
+
+
+def parallel_harness_nodes(
+    available: set[str] | Sequence[RegisteredAgent] | Sequence[str],
+    *,
+    hitl: set[str],
+    work_goal: str = "",
+    labels: dict[str, str] | None = None,
+) -> list[PlanNode]:
+    """One independent DAG node per registered work agent (fan-out)."""
+    items = list(available) if available is not None else []
+    if items and isinstance(items[0], RegisteredAgent):
+        agents = coerce_registry(items)  # type: ignore[arg-type]
+        keys = [a.key for a in agents]
+        label_map = {a.key: a.label for a in agents}
+    else:
+        keys = sorted(
+            {str(k).strip() for k in items if is_work_agent(str(k))}
+        )
+        label_map = {k: k for k in keys}
+    if labels:
+        label_map.update(labels)
+
+    if not keys:
+        return []
+
+    work = (work_goal or "").strip()
+    used: set[str] = set()
+    nodes: list[PlanNode] = []
+    for key in keys:
+        nodes.append(
+            PlanNode(
+                id=_node_id_for(key, used),
+                skill=key,
+                depends_on=[],
+                requires_approval=key in hitl,
+                instruction=(
+                    agent_instruction(
+                        key, work, parallel=True, label=label_map.get(key)
+                    )
+                    if work
+                    else None
+                ),
+            )
+        )
+    return nodes
+
+
+def probe_agent_ready(endpoint: str, *, timeout_s: float = 2.0) -> bool:
+    """GET ``/health`` — treat missing flag as ready (older agents)."""
+    if _env_on("PLANNER_SKIP_READY_PROBE"):
         return True
-    compact = re.sub(r"\s+", "", text)
-    if len(compact) > 28:
+    url = (endpoint or "").rstrip("/") + "/health"
+    try:
+        import httpx
+
+        r = httpx.get(url, timeout=timeout_s)
+        if r.status_code >= 400:
+            return False
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict):
+            return True
+        if "runner_ready" in data:
+            return bool(data.get("runner_ready"))
+        return True
+    except Exception:  # noqa: BLE001
         return False
-    return bool(re.search(r"(什么|吗|呢|\?|？)$", compact) or "什么" in compact)
 
 
 @dataclass
 class PlannerResult:
     plan: TaskPlan
-    method: str  # heuristic | heuristic_steps | llm | llm_repaired | fallback
+    method: str
     available_skills: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -424,48 +370,41 @@ class Planner:
         if not goal:
             raise ValueError("goal is required")
 
-        available = set(self.list_available_agents())
+        registry = self.list_registered_agents()
+        available = {a.key for a in registry}
+        labels = {a.key: a.label for a in registry}
         hitl = set(hitl_skills())
         method = "heuristic"
         nodes: list[PlanNode] = []
 
-        # 1) Explicit multi-agent fan-out (all *ready* online harness agents).
-        # Strip routing preamble ("使用所有 agent…") and dispatch a clean work
-        # brief per agent — do not dump the raw orchestration sentence into CLIs.
-        if wants_all_agents(goal):
-            ready = set(self.list_ready_agents(available))
-            work_goal = extract_work_goal(goal)
+        # 1) Fan-out to ready registered agents.
+        if wants_all_agents(goal, registry):
+            ready_keys = set(self.list_ready_agents(available))
+            pool = [a for a in registry if a.key in (ready_keys or available)]
             multi = parallel_harness_nodes(
-                ready or available,
+                pool or registry,
                 hitl=hitl,
-                work_goal=work_goal,
+                work_goal=extract_work_goal(goal, registry),
+                labels=labels,
             )
             if multi:
                 nodes = multi
                 method = "heuristic_multi"
 
-
-        # 2) Opt-in multi-step decompose (still single-agent hops unless step skills differ)
-        if (
-            not nodes
-            and _planner_v2()
-            and os.getenv("PLANNER_MULTI_STEP", "").lower() in {"1", "true", "yes"}
-        ):
+        # 2) Opt-in multi-step decompose (legacy specialty skills).
+        if not nodes and not _env_off("PLANNER_V2") and _env_on("PLANNER_MULTI_STEP"):
             stepped = decompose_to_nodes(goal, available, hitl=hitl)
             if stepped:
                 nodes = stepped
                 method = "heuristic_steps"
 
-        # 3) Default single-hop heuristic (plan node.skill = agent_key)
+        # 3) Single-hop: named registered agent, else default among registry.
         if not nodes:
-            nodes = self._heuristic_nodes(goal, available)
+            nodes = self._heuristic_nodes(goal, available, registry=registry, labels=labels)
             method = "heuristic"
 
-        # 4) Optional LLM — skip when user already forced multi-agent fan-out
-        if (
-            method != "heuristic_multi"
-            and os.getenv("PLANNER_LLM", "").lower() in {"1", "true", "yes"}
-        ):
+        # 4) Optional LLM — skip forced fan-out.
+        if method != "heuristic_multi" and _env_on("PLANNER_LLM"):
             llm_nodes, repaired = self._try_llm_nodes(goal, available, hitl=hitl)
             if llm_nodes:
                 try:
@@ -478,16 +417,15 @@ class Planner:
                     nodes = llm_nodes
                     method = "llm_repaired" if repaired else "llm"
                 except DAGValidationError:
-                    pass  # keep heuristic / steps
+                    pass
 
-        # 5) Last-resort fallback → default harness agent
+        # 5) Last-resort fallback.
         if not nodes:
             agent = default_agent(available)
             if agent:
                 nodes = [PlanNode(id="run", skill=agent)]
             elif available:
-                key = sorted(available)[0]
-                nodes = [PlanNode(id="step1", skill=key)]
+                nodes = [PlanNode(id="step1", skill=sorted(available)[0])]
             else:
                 raise ValueError("no online agents registered; cannot plan")
             method = "fallback"
@@ -496,10 +434,10 @@ class Planner:
         validate_plan(plan, available_skills=available)
         return PlannerResult(plan=plan, method=method, available_skills=sorted(available))
 
-    def list_available_agents(self) -> list[str]:
-        """Online agent_keys (skills removed — route by agent)."""
+    def list_registered_agents(self) -> list[RegisteredAgent]:
+        """Online work agents from the registry (excludes aop-node supervisor)."""
         sql = """
-            SELECT a.agent_key
+            SELECT a.agent_key, a.name, a.priority
             FROM agents a
             WHERE a.tenant_id = %s::uuid
               AND a.status IN ('online', 'running')
@@ -507,11 +445,27 @@ class Planner:
                 SELECT 1 FROM agent_endpoints e
                 WHERE e.agent_id = a.id AND e.is_primary = true
               )
-            ORDER BY a.agent_key
+            ORDER BY a.priority DESC, a.agent_key
         """
         with connect(self.database_url) as conn:
             rows = conn.execute(sql, (self.tenant_id,)).fetchall()
-        return [r["agent_key"] for r in rows if r.get("agent_key")]
+        out: list[RegisteredAgent] = []
+        for r in rows:
+            key = str(r.get("agent_key") or "").strip()
+            if not is_work_agent(key):
+                continue
+            out.append(
+                RegisteredAgent(
+                    key=key,
+                    name=str(r.get("name") or key),
+                    priority=int(r.get("priority") or 100),
+                )
+            )
+        return out
+
+    def list_available_agents(self) -> list[str]:
+        """Online work agent_keys."""
+        return [a.key for a in self.list_registered_agents()]
 
     def list_agent_endpoints(self) -> dict[str, str]:
         """Map online agent_key → primary endpoint URL."""
@@ -529,48 +483,62 @@ class Planner:
         for r in rows:
             key = r.get("agent_key")
             url = r.get("url")
-            if key and url:
+            if key and url and is_work_agent(str(key)):
                 out[str(key)] = str(url)
         return out
 
     def list_ready_agents(self, available: set[str] | None = None) -> list[str]:
-        """Online agents whose ``/health`` reports runner_ready (or older agents without the flag)."""
+        """Online agents whose ``/health`` reports runner_ready (or missing flag)."""
         keys = set(available) if available is not None else set(self.list_available_agents())
         endpoints = self.list_agent_endpoints()
         ready: list[str] = []
         for key in sorted(keys):
             ep = endpoints.get(key)
-            if not ep:
-                continue
-            if probe_agent_ready(ep):
+            if ep and probe_agent_ready(ep):
                 ready.append(key)
         return ready
 
-    def list_available_skills(self) -> list[str]:
-        """Deprecated alias — returns online agent_keys."""
-        return self.list_available_agents()
-
-    def _heuristic_nodes(self, goal: str, available: set[str]) -> list[PlanNode]:
-        """Default: one hop to preferred agent; multi-agent goals fan out in parallel."""
+    def _heuristic_nodes(
+        self,
+        goal: str,
+        available: set[str],
+        *,
+        registry: Sequence[RegisteredAgent] | None = None,
+        labels: dict[str, str] | None = None,
+    ) -> list[PlanNode]:
         hitl = set(hitl_skills())
-        if wants_all_agents(goal):
-            ready = set(self.list_ready_agents(available))
-            multi = parallel_harness_nodes(
-                ready or available,
-                hitl=hitl,
-                work_goal=extract_work_goal(goal),
-            )
-            if multi:
-                return multi
-        agent = default_agent(available)
+        reg = list(registry) if registry is not None else coerce_registry(available)
+        label_map = labels or {a.key: a.label for a in reg}
+        return self._single_hop(goal, available, hitl=hitl, registry=reg, labels=label_map)
+
+    def _single_hop(
+        self,
+        goal: str,
+        available: set[str],
+        *,
+        hitl: set[str],
+        registry: Sequence[RegisteredAgent],
+        labels: dict[str, str],
+    ) -> list[PlanNode]:
+        named = requested_agent(goal, available, registry)
+        agent = named or default_agent(available)
         if not agent:
             return []
+        work = extract_work_goal(goal, registry) if named else goal
+        instruction = (
+            agent_instruction(
+                agent, work, parallel=False, label=labels.get(agent)
+            )
+            if named and work.strip()
+            else None
+        )
         return [
             PlanNode(
                 id="run",
-                skill=agent,  # task_nodes.skill stores target agent_key
+                skill=agent,
                 depends_on=[],
                 requires_approval=agent in hitl,
+                instruction=instruction,
             )
         ]
 
@@ -581,7 +549,6 @@ class Planner:
         *,
         hitl: set[str],
     ) -> tuple[list[PlanNode] | None, bool]:
-        """Returns (nodes, repaired). nodes is None on hard miss."""
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             return None, False
@@ -635,7 +602,6 @@ class Planner:
 
         repaired = False
         try:
-            # Strict path: expect clean nodes
             raw_nodes = data.get("nodes") or []
             if not isinstance(raw_nodes, list) or not raw_nodes:
                 return None, False
@@ -670,11 +636,6 @@ class Planner:
             except DAGValidationError:
                 return None, False
             return fixed, True
-
-
-def _planner_v2() -> bool:
-    # Default on; set PLANNER_V2=0 to disable step decomposition
-    return os.getenv("PLANNER_V2", "1").lower() not in {"0", "false", "no", "off"}
 
 
 def _short_title(goal: str, limit: int = 48) -> str:

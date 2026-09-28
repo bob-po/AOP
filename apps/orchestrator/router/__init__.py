@@ -567,9 +567,6 @@ def normalize_endpoint(url: str) -> str:
         "openclaw": 8014,
         "hermes": 8015,
         "harness-agent": 8011,
-        # Legacy aliases
-        "claude-coder": 8011,
-        "claude-researcher": 8011,
     }
     if host in mapped:
         port = parsed.port or mapped[host]

@@ -1,11 +1,11 @@
 id = "deepseek-harness"
-version = "local"
+version = "0.1.0"
 kind = "agent"
 command = "python"
-args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8012"]
-workdir = "../../../../../agents/harness-agent"
+args = ["-u", "run.py"]
+workdir = "."
 health_url = "http://127.0.0.1:8012/health"
-description = "DeepSeek Harness agent"
+description = "DeepSeek Harness agent (aop-node plugin → agents/harness-agent)"
 
 [env]
 PORT = "8012"
@@ -13,3 +13,4 @@ AGENT_URL = "http://127.0.0.1:8012/"
 HARNESS_PROFILE = "deepseek-harness"
 AGENT_ID = "deepseek-harness"
 HARNESS_HEARTBEAT = "1"
+HARNESS_RUNNER = "deepseek"

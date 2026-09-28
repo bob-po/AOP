@@ -124,7 +124,13 @@ class ProcessSupervisor:
         if sys.platform != "win32":
             # New session so we can kill the process group on cancel.
             kwargs["start_new_session"] = True
-        proc = await asyncio.create_subprocess_exec(*argv, **kwargs)
+        cmd = list(argv)
+        # Windows CreateProcess cannot exec .cmd/.bat directly.
+        if sys.platform == "win32" and cmd:
+            head = cmd[0].lower()
+            if head.endswith((".cmd", ".bat")):
+                cmd = ["cmd.exe", "/c", *cmd]
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
         # Raise StreamReader limits — CLI JSONL tool payloads often exceed 64KiB.
         try:
             from .runners._cli_common import bump_stream_limit

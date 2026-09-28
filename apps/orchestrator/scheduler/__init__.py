@@ -1395,11 +1395,6 @@ class Scheduler:
         ).fetchone()
         return str(row["status"]) if row else "unknown"
 
-    def advance_after_success(self, task_id: str, node_key: str) -> list[str]:
-        """Deprecated compatibility wrapper."""
-        jobs = self.mark_success(task_id, node_key, output={})
-        return [j["node_key"] for j in jobs]
-
     def list_tasks(
         self,
         *,
@@ -1934,7 +1929,3 @@ class Scheduler:
 # Import new components after class definitions to avoid circular imports
 from .job_queue import JobQueue
 from .event_publisher import EventPublisher
-
-# Make them available at module level
-JobQueue = JobQueue
-EventPublisher = EventPublisher

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/shell/AppShell";
 export const metadata: Metadata = {
   title: "A2A OS",
   description: "Agent registration, discovery, orchestration and observability",
+  icons: { icon: "/favicon.svg" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -12,14 +12,12 @@ register_endpoint = "http://127.0.0.1:7920/"
 update_manifest_url = ""
 autostart = true
 
+# Optional: if plugins are copied outside the monorepo, point at the AOP root
+# (also settable as process env AOP_REPO_ROOT).
+# AOP_REPO_ROOT is read by plugins/_harness/launch.py, not by aopd itself.
+
 # Optional inline agents (in addition to plugins/*/plugin.toml)
-# [[agents]]
-# id = "claude-code"
-# version = "local"
-# command = "python"
-# args = ["-m", "uvicorn", "agent:app", "--host", "127.0.0.1", "--port", "8011"]
-# workdir = "../../../agents/harness-agent"
-# enabled = true
+# Prefer plugins/<id>/plugin.toml + run.py for harness agents.
 
 [whitelist]
 allowed_binaries = [

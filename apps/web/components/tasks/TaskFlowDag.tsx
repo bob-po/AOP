@@ -1,51 +1,26 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import ReactFlow, {
+import {
   Background,
-  BezierEdge,
   Controls,
-  Handle,
   MarkerType,
   MiniMap,
-  Position,
-  SimpleBezierEdge,
-  SmoothStepEdge,
-  StepEdge,
-  StraightEdge,
+  ReactFlow,
   useEdgesState,
   useNodesState,
   type Edge,
-  type EdgeTypes,
   type Node,
-  type NodeProps,
-  type NodeTypes,
-} from "reactflow";
-import "reactflow/dist/style.css";
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 import type { TaskNode, TaskPlan } from "@/lib/api";
-
-/** Workflow node status colors (orchestrator task_nodes). */
-const STATUS_COLOR: Record<string, string> = {
-  pending: "#4a665c",
-  ready: "#ffb454",
-  running: "#3dffa8",
-  success: "#7eaea0",
-  waiting_for_user: "#fbbf24",
-  failed: "#ff6b6b",
-  retrying: "#ffb454",
-  cancelled: "#6b7280",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  pending: "等待",
-  ready: "就绪",
-  running: "执行中",
-  success: "完成",
-  waiting_for_user: "待审批",
-  failed: "失败",
-  retrying: "重试",
-  cancelled: "已取消",
-};
+import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
+import { STATUS_COLOR, STATUS_LABEL } from "./taskFlowStatus";
+import {
+  TASK_FLOW_EDGE_TYPES,
+  TASK_FLOW_NODE_TYPES,
+  type DagNodeData,
+} from "./taskFlowTypes";
 
 /** Friendly labels for harness virtual agents (plan.skill == agent_key). */
 const AGENT_LABEL: Record<string, string> = {
@@ -62,63 +37,6 @@ export function agentDisplayName(key?: string | null, fallbackName?: string | nu
   if (!k) return "Agent";
   return AGENT_LABEL[k] || k;
 }
-
-type DagNodeData = {
-  nodeId: string;
-  agentKey: string;
-  agentLabel: string;
-  status: string;
-  statusLabel: string;
-  attempt?: number;
-  selected?: boolean;
-};
-
-function DagNodeCard({ data }: NodeProps<DagNodeData>) {
-  const color = STATUS_COLOR[data.status] || STATUS_COLOR.pending;
-  const running = data.status === "running" || data.status === "waiting_for_user";
-  return (
-    <div
-      className="min-w-[168px] max-w-[200px] rounded-xl border px-3 py-2.5"
-      style={{
-        background: "#152822",
-        borderColor: color,
-        boxShadow: running ? `0 0 18px ${color}55` : undefined,
-      }}
-    >
-      <Handle type="target" position={Position.Top} className="!bg-signal/80 !w-2 !h-2 !border-0" />
-      <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-mist-400">
-        {data.nodeId}
-      </div>
-      <div className="mt-1 truncate text-sm font-medium text-mist-100" title={data.agentKey}>
-        {data.agentLabel}
-      </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span
-          className="rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em]"
-          style={{ background: `${color}22`, color }}
-        >
-          {data.statusLabel}
-        </span>
-        {typeof data.attempt === "number" && data.attempt > 1 ? (
-          <span className="font-mono text-[9px] text-mist-400">#{data.attempt}</span>
-        ) : null}
-      </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-signal/80 !w-2 !h-2 !border-0" />
-    </div>
-  );
-}
-
-/** Stable across renders — inline `{ dagNode: … }` triggers React Flow error #002. */
-const DagNode = memo(DagNodeCard);
-const NODE_TYPES: NodeTypes = Object.freeze({ dagNode: DagNode });
-const EDGE_TYPES: EdgeTypes = Object.freeze({
-  default: BezierEdge,
-  straight: StraightEdge,
-  step: StepEdge,
-  smoothstep: SmoothStepEdge,
-  simplebezier: SimpleBezierEdge,
-});
-const PRO_OPTIONS = Object.freeze({ hideAttribution: true });
 
 function minimapNodeColor(n: Node) {
   const st = (n.data as DagNodeData | undefined)?.status;
@@ -226,8 +144,6 @@ export const TaskFlowDag = memo(function TaskFlowDag({
   selectedNodeId,
   onSelectNode,
 }: Props) {
-  const nodeTypes = useRef(NODE_TYPES).current;
-  const edgeTypes = useRef(EDGE_TYPES).current;
   const layout = useMemo(() => buildLayout(plan, nodes), [plan, nodes]);
   const [rfNodes, setNodes, onNodesChange] = useNodesState(layout.rfNodes);
   const [rfEdges, setEdges, onEdgesChange] = useEdgesState(layout.rfEdges);
@@ -261,6 +177,11 @@ export const TaskFlowDag = memo(function TaskFlowDag({
     onSelectNode?.(null);
   }, [onSelectNode]);
 
+  // Pin identities for this instance (survives parent re-renders / HMR churn).
+  const nodeTypes = useRef(TASK_FLOW_NODE_TYPES).current;
+  const edgeTypes = useRef(TASK_FLOW_EDGE_TYPES).current;
+  const mounted = useClientMounted();
+
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-xl border border-white/10 bg-ink-950/40">
       <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-wrap gap-2">
@@ -277,22 +198,24 @@ export const TaskFlowDag = memo(function TaskFlowDag({
           </span>
         ))}
       </div>
-      <ReactFlow
-        nodes={rfNodes}
-        edges={rfEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        fitView
-        onNodeClick={onNodeClick}
-        onPaneClick={onPaneClick}
-        proOptions={PRO_OPTIONS}
-      >
-        <Background color="#3dffa822" gap={22} />
-        <Controls showInteractive={false} />
-        <MiniMap nodeColor={minimapNodeColor} maskColor="rgba(10,18,16,0.7)" />
-      </ReactFlow>
+      {mounted ? (
+        <ReactFlow
+          nodes={rfNodes}
+          edges={rfEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          fitView
+          onNodeClick={onNodeClick}
+          onPaneClick={onPaneClick}
+          onError={reactFlowOnError}
+        >
+          <Background color="#3dffa822" gap={22} />
+          <Controls showInteractive={false} />
+          <MiniMap nodeColor={minimapNodeColor} maskColor="rgba(10,18,16,0.7)" />
+        </ReactFlow>
+      ) : null}
     </div>
   );
 });

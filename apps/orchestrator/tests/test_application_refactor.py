@@ -19,22 +19,15 @@ def test_service_shim_exports_task_service():
     assert TaskService.__module__ == "application.task_service"
 
 
-def test_execution_worker_alias():
-    from worker import ExecutionWorker
-    from executor.engine import ExecutionEngine
-
-    assert ExecutionWorker is ExecutionEngine
-
-
 def test_planning_engine_delegates_to_planner():
     fake = MagicMock()
     fake.plan.return_value = SimpleNamespace(plan="p", method="heuristic", available_skills=["web-search"])
-    fake.list_available_skills.return_value = ["web-search"]
+    fake.list_available_agents.return_value = ["web-search"]
     engine = PlanningEngine(planner=fake)
     out = engine.plan("goal", title="t")
     fake.plan.assert_called_once_with("goal", title="t")
     assert out.method == "heuristic"
-    assert engine.list_available_skills() == ["web-search"]
+    assert engine.list_available_agents() == ["web-search"]
     assert engine.planner is fake
 
 

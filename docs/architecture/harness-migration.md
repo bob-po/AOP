@@ -9,7 +9,7 @@
 | **Virtual agent** | One profile per harness product (agent-card + system prompt) | `agents/harness-agent/profiles/*` |
 
 **Specialty agents and coder/researcher role splits are gone.** One agent per harness
-product: `claude-code`, `deepseek-harness`, `pi`.
+product: `claude-code`, `deepseek-harness`, `pi`, `openclaw`, `hermes`.
 
 Virtual agent cards have **empty `skills`**. The planner writes `agent_key` into the plan node
 `skill` field; the router resolves by agent_key.
@@ -26,6 +26,7 @@ Runners:
   ClaudeCliRunner       https://github.com/anthropics/claude-code
   DeepSeekHarnessRunner https://github.com/deepseek-ai/deepseek-harness
   PiCliRunner           https://github.com/earendil-works/pi
+  OpenClawRunner / HermesRunner  (CLI exec; see profiles/)
 ```
 
 ## Virtual cards
@@ -80,6 +81,9 @@ Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` /
 ## Edge Node（可选）
 
 本机 / 远端可用 [`apps/client/aop-node`](../../apps/client/aop-node) 以 `aopd` Supervisor 拉起上述 harness 进程，并向 Gateway 注册、向 Orchestrator 心跳。业务能力仍是子 agent/插件；CLI `aop` 只做本地管理。
+
+| 变量 | 含义 |
+|------|------|
 | `CLAUDE_CLI_ALLOWED_TOOLS` | Comma list for `--allowed-tools` (default includes WebSearch/WebFetch); `none` to omit |
 | `A2A_OS_URL` / `GATEWAY_URL` | Heartbeat + optional cost POST |
 

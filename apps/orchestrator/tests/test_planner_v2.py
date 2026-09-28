@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from planner import Planner
+from planner import Planner, RegisteredAgent
 from planner.dag import PlanNode, TaskPlan, validate_plan
 from planner.decompose import decompose_to_nodes, split_goal_fragments
 from planner.json_plan import extract_json_object, nodes_from_payload
@@ -24,6 +24,10 @@ SKILLS = {
 }
 
 HARNESS = {"claude-code", "deepseek-harness", "pi", "openclaw", "hermes"}
+
+
+def _reg(keys: set[str]) -> list[RegisteredAgent]:
+    return [RegisteredAgent(key=k, name=k) for k in sorted(keys)]
 
 
 def test_extract_json_from_fence():
@@ -70,7 +74,7 @@ def test_decompose_linear_steps():
 def test_planner_v2_steps_method():
     """MULTI_STEP + specialty skills still available → linear DAG."""
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_agents", return_value=sorted(SKILLS)):
+    with patch.object(p, "list_registered_agents", return_value=_reg(SKILLS)):
         with patch.dict(
             os.environ,
             {
@@ -87,7 +91,7 @@ def test_planner_v2_steps_method():
 
 def test_planner_llm_invalid_falls_back_to_heuristic():
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_agents", return_value=sorted(HARNESS)):
+    with patch.object(p, "list_registered_agents", return_value=_reg(HARNESS)):
         with patch.dict(
             os.environ,
             {
@@ -112,9 +116,9 @@ def test_planner_llm_invalid_falls_back_to_heuristic():
 
 
 def test_research_goal_still_heuristic_pipeline():
-    """Harness-first: research goals are a single hop to the default agent."""
+    """Registry-first: unspecified research goals are a single hop to the default agent."""
     p = Planner(database_url="postgresql://invalid/invalid")
-    with patch.object(p, "list_available_agents", return_value=sorted(HARNESS)):
+    with patch.object(p, "list_registered_agents", return_value=_reg(HARNESS)):
         with patch.dict(
             os.environ,
             {

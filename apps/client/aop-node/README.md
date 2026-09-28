@@ -21,7 +21,14 @@ aop-node/
   crates/aop-supervisor   OS connect + lifecycle + mgmt HTTP
   crates/aopd             daemon entry
   crates/aop-cli          `aop` CLI
-  plugins/echo            sample plugin
+  plugins/
+    _harness/             shared launcher (find repo + PYTHONPATH + uvicorn)
+    claude-code/          :8011
+    deepseek-harness/     :8012
+    pi/                   :8013
+    openclaw/             :8014
+    hermes/               :8015
+    echo/                 smoke plugin
   config/aop-node.example.toml
 ```
 
@@ -65,11 +72,11 @@ Non-allowlisted exec is rejected (HTTP 403).
 On boot the supervisor:
 
 1. Starts mgmt HTTP (`/.well-known/agent-card.json` + `/health`)
-2. Autostarts / adopts plugins under `plugins/` (harness uvicorn on 8011–8015)
+2. Autostarts / adopts plugins under `plugins/` (`python -u run.py` → shared `_harness/launch.py` → `agents/harness-agent` on 8011–8015)
 3. `POST {gateway}/v1/agents/register` for the node + each healthy harness endpoint
 4. Heartbeats to Orchestrator (falls back to Gateway)
 
-Harness plugins: `plugins/claude-code`, `deepseek-harness`, `pi`, `openclaw`, `hermes` (workdir → `agents/harness-agent`).
+Harness plugins (see [`plugins/README.md`](./plugins/README.md)): each has `plugin.toml` + `run.py`; they do **not** embed model CLIs — they launch monorepo `agents/harness-agent` with the right `HARNESS_PROFILE`. Optional override: `AOP_REPO_ROOT`.
 
 ## Scripts
 

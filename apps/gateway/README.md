@@ -1,37 +1,33 @@
 # AOP Gateway (Go)
 
-Phase 2: Agent Registry API.
+注册中心 · 鉴权 / RBAC · 反向代理到 Orchestrator。默认监听 `:8080`。
 
 ## Run
 
 ```bash
 cd apps/gateway
 go mod tidy
+# PowerShell: $env:ORCHESTRATOR_URL="http://127.0.0.1:8090"
 go run ./cmd
 ```
 
-Default listen: `:8080`
-
-Env:
-
-| Variable | Default |
-|----------|---------|
+| 变量 | 默认 |
+|------|------|
 | `GATEWAY_ADDR` | `:8080` |
 | `DATABASE_URL` | `postgres://aop:aop@127.0.0.1:5432/aop?sslmode=disable` |
 | `REDIS_ADDR` | `127.0.0.1:6379` |
-| `DEFAULT_TENANT_ID` | `00000000-0000-0000-0000-000000000001` |
+| `ORCHESTRATOR_URL` | `http://127.0.0.1:8090` |
+| `AUTH_REQUIRED` | 本地 `false`，部署 `true` |
 
-## APIs
+## 主要 API
 
+```text
+POST /v1/agents/register   {"endpoint":"http://127.0.0.1:8011"}
+GET  /v1/agents
+GET  /v1/agents/{id}/health
+POST /v1/auth/login · GET /v1/auth/me
+# 其余任务 / 计费 / 市场等反代到 Orchestrator
 ```
-POST /v1/agents/register   {"endpoint":"http://127.0.0.1:8001"}
-GET  /v1/agents?skill=web-search&status=online
-GET  /v1/agents/{id}
-GET  /v1/agents/{id}/capacity     (proxied → Orchestrator)
-GET  /v1/agents/{id}/reliability  (proxied → Orchestrator)
-GET  /v1/agents/{id}/health       (proxied → Orchestrator lifecycle; POST remains registry probe)
-POST /v1/agents/{id}/disable
-POST /v1/agents/{id}/enable
-POST /v1/agents/{id}/health
-DELETE /v1/agents/{id}
-```
+
+注册时拉取 Agent Card：`/.well-known/agent-card.json`（兼容 `agent.json`）。  
+完整契约见 [docs/reference/api.md](../../docs/reference/api.md)。启动全栈见 [getting-started](../../docs/guides/getting-started.md)。

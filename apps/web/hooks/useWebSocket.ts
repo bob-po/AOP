@@ -39,6 +39,13 @@ export function buildWsUrl(path: string, apiKey?: string): string {
   return u.toString();
 }
 
+function detachSocket(ws: WebSocket) {
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+}
+
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
     taskId,
@@ -55,6 +62,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const intentionalCloseRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onMessageRef = useRef(onMessage);
@@ -74,13 +83,33 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-    if (wsRef.current) {
-      try {
-        wsRef.current.close(1000, "client disconnect");
-      } catch {
-        // ignore
+    const ws = wsRef.current;
+    wsRef.current = null;
+    urlRef.current = null;
+    if (!ws) {
+      setIsConnected(false);
+      return;
+    }
+    intentionalCloseRef.current = true;
+    detachSocket(ws);
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, "client disconnect");
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        // Avoid "closed before the connection is established" by waiting
+        // for the handshake, then closing immediately.
+        const abort = () => {
+          try {
+            ws.close(1000, "client disconnect");
+          } catch {
+            // ignore
+          }
+        };
+        ws.addEventListener("open", abort);
+        ws.addEventListener("error", abort);
       }
-      wsRef.current = null;
+    } catch {
+      // ignore
     }
     setIsConnected(false);
   }, []);
@@ -88,7 +117,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const connect = useCallback(() => {
     if (!enabled) return;
     if (typeof window === "undefined") return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const apiKey = process.env.NEXT_PUBLIC_API_KEY || "";
     const path = customPath
@@ -98,11 +126,47 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         : `/v1/events/ws`;
     const wsUrl = buildWsUrl(path, apiKey || undefined);
 
+    const existing = wsRef.current;
+    if (
+      existing &&
+      urlRef.current === wsUrl &&
+      (existing.readyState === WebSocket.OPEN ||
+        existing.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    if (existing) {
+      intentionalCloseRef.current = true;
+      detachSocket(existing);
+      try {
+        if (existing.readyState === WebSocket.OPEN) {
+          existing.close(1000, "replace");
+        } else if (existing.readyState === WebSocket.CONNECTING) {
+          const abort = () => {
+            try {
+              existing.close(1000, "replace");
+            } catch {
+              // ignore
+            }
+          };
+          existing.addEventListener("open", abort);
+          existing.addEventListener("error", abort);
+        }
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
+    }
+
+    intentionalCloseRef.current = false;
+
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+      urlRef.current = wsUrl;
 
       ws.onopen = (event) => {
+        if (wsRef.current !== ws) return;
         setIsConnected(true);
         setConnectionError(null);
         reconnectAttemptsRef.current = 0;
@@ -110,6 +174,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       };
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) return;
         try {
           const message = JSON.parse(event.data) as WebSocketMessage;
           onMessageRef.current?.(message);
@@ -119,21 +184,32 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       };
 
       ws.onerror = (event) => {
+        if (wsRef.current !== ws || intentionalCloseRef.current) return;
         setConnectionError("WebSocket connection error");
         onErrorRef.current?.(event);
       };
 
       ws.onclose = (event) => {
-        setIsConnected(false);
-        wsRef.current = null;
-        onCloseRef.current?.(event);
-
-        if (event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
-          reconnectAttemptsRef.current += 1;
-          reconnectTimeoutRef.current = setTimeout(() => {
-            connect();
-          }, reconnectInterval);
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+          urlRef.current = null;
         }
+        setIsConnected(false);
+        if (!intentionalCloseRef.current) {
+          onCloseRef.current?.(event);
+        }
+
+        if (
+          intentionalCloseRef.current ||
+          event.code === 1000 ||
+          reconnectAttemptsRef.current >= maxReconnectAttempts
+        ) {
+          return;
+        }
+        reconnectAttemptsRef.current += 1;
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect();
+        }, reconnectInterval);
       };
     } catch (error) {
       setConnectionError("Failed to create WebSocket connection");
@@ -152,8 +228,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       disconnect();
       return;
     }
-    connect();
-    return () => disconnect();
+    // Defer so React Strict Mode's mount→unmount→remount does not open+abort
+    // a handshake (avoids "closed before the connection is established").
+    const timer = setTimeout(() => connect(), 0);
+    return () => {
+      clearTimeout(timer);
+      disconnect();
+    };
   }, [connect, disconnect, enabled]);
 
   return {
