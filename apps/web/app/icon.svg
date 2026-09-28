@@ -103,11 +103,4 @@
     <rect x="764" y="531" width="10" height="28" rx="5" fill="#25CFCB"/>
   </g>
 
-  <!-- wordmark -->
-  <text x="512" y="870" text-anchor="middle"
-        font-family="Inter,Arial,sans-serif" font-size="112" font-weight="850"
-        letter-spacing="-7" fill="#0B1738">A2A</text>
-  <text x="680" y="870" text-anchor="middle"
-        font-family="Inter,Arial,sans-serif" font-size="112" font-weight="850"
-        letter-spacing="-7" fill="url(#g2)">OS</text>
 </svg>
