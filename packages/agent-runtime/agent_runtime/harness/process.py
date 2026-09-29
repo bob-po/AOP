@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
 import sys
 from typing import Optional
 
@@ -113,17 +114,29 @@ class ProcessSupervisor:
         *argv: str,
         env: Optional[dict[str, str]] = None,
         cwd: Optional[str] = None,
+        new_console: bool = False,
     ) -> ManagedProcess:
         kwargs: dict = {
-            "stdout": asyncio.subprocess.PIPE,
-            "stderr": asyncio.subprocess.PIPE,
             "env": env or os.environ.copy(),
         }
+        if new_console:
+            # Attach stdio to the NEW console so the user can see the agent UI/flow.
+            # Do NOT use PIPE/DEVNULL here — that produces a blank window.
+            # Result capture is via preview_tee writing preview.log (parent tails the file).
+            if sys.platform == "win32":
+                # 0x10 = CREATE_NEW_CONSOLE — visible local terminal window.
+                kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+            else:
+                # Best-effort: new session; still tee via preview_tee to a log.
+                kwargs["start_new_session"] = True
+        else:
+            kwargs["stdout"] = asyncio.subprocess.PIPE
+            kwargs["stderr"] = asyncio.subprocess.PIPE
+            if sys.platform != "win32":
+                # New session so we can kill the process group on cancel.
+                kwargs["start_new_session"] = True
         if cwd:
             kwargs["cwd"] = cwd
-        if sys.platform != "win32":
-            # New session so we can kill the process group on cancel.
-            kwargs["start_new_session"] = True
         cmd = list(argv)
         # Windows CreateProcess cannot exec .cmd/.bat directly.
         if sys.platform == "win32" and cmd:
@@ -132,13 +145,14 @@ class ProcessSupervisor:
                 cmd = ["cmd.exe", "/c", *cmd]
         proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
         # Raise StreamReader limits — CLI JSONL tool payloads often exceed 64KiB.
-        try:
-            from .runners._cli_common import bump_stream_limit
+        if not new_console:
+            try:
+                from .runners._cli_common import bump_stream_limit
 
-            bump_stream_limit(proc.stdout)
-            bump_stream_limit(proc.stderr)
-        except Exception:  # noqa: BLE001
-            pass
+                bump_stream_limit(proc.stdout)
+                bump_stream_limit(proc.stderr)
+            except Exception:  # noqa: BLE001
+                pass
         return await self.register(task_id, proc)
 
 

@@ -25,6 +25,7 @@ __all__ = [
     "DEFAULT_TENANT_ID",
     "Scheduler",
     "ScheduleResult",
+    "is_cancel_error",
     "is_permanent_agent_error",
 ]
 
@@ -63,6 +64,12 @@ def is_permanent_agent_error(error: str | None) -> bool:
     """True when the agent/runtime error will not succeed on retry."""
     low = (error or "").lower()
     return any(m in low for m in _PERMANENT_ERROR_MARKERS)
+
+
+def is_cancel_error(error: str | None) -> bool:
+    """True when the failure is a user/OS cancel — must not be retried."""
+    low = (error or "").lower()
+    return "canceled" in low or "cancelled" in low
 
 @dataclass
 class ScheduleResult:
@@ -340,12 +347,14 @@ class Scheduler:
                 now = _utc_now()
                 rows = conn.execute(
                     """
-                    SELECT id::text AS node_id, task_id::text AS task_id, node_key, skill,
-                           attempt, max_retry, assigned_agent_id::text AS agent_id
-                    FROM task_nodes
-                    WHERE status = 'running'
-                      AND COALESCE(started_at, updated_at) < (%s - (%s || ' seconds')::interval)
-                    ORDER BY updated_at ASC
+                    SELECT tn.id::text AS node_id, tn.task_id::text AS task_id, tn.node_key, tn.skill,
+                           tn.attempt, tn.max_retry, tn.assigned_agent_id::text AS agent_id
+                    FROM task_nodes tn
+                    JOIN tasks t ON t.id = tn.task_id
+                    WHERE tn.status = 'running'
+                      AND t.status NOT IN ('cancelled', 'completed', 'failed')
+                      AND COALESCE(tn.started_at, tn.updated_at) < (%s - (%s || ' seconds')::interval)
+                    ORDER BY tn.updated_at ASC
                     LIMIT 20
                     """,
                     (now, str(int(stale_seconds))),
@@ -450,6 +459,11 @@ class Scheduler:
                     WHERE task_id = %s::uuid
                       AND node_key = %s
                       AND status IN ('ready', 'retrying')
+                      AND EXISTS (
+                        SELECT 1 FROM tasks t
+                        WHERE t.id = task_nodes.task_id
+                          AND t.status NOT IN ('cancelled', 'completed', 'failed')
+                      )
                     RETURNING id::text
                     """,
                     (agent_id, attempt, now, now, task_id, node_key),
@@ -612,15 +626,18 @@ class Scheduler:
         attempt: int,
         agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Return decision: retry | failed, plus next_attempt / max_retry."""
+        """Return decision: retry | failed | cancelled, plus next_attempt / max_retry."""
         with self._connect() as conn:
             with conn.transaction():
                 now = _utc_now()
                 row = conn.execute(
                     """
-                    SELECT id::text AS node_id, max_retry, skill, attempt, input_json, output_json
-                    FROM task_nodes
-                    WHERE task_id = %s::uuid AND node_key = %s
+                    SELECT tn.id::text AS node_id, tn.max_retry, tn.skill, tn.attempt,
+                           tn.input_json, tn.output_json, tn.status AS node_status,
+                           t.status AS task_status
+                    FROM task_nodes tn
+                    JOIN tasks t ON t.id = tn.task_id
+                    WHERE tn.task_id = %s::uuid AND tn.node_key = %s
                     """,
                     (task_id, node_key),
                 ).fetchone()
@@ -628,7 +645,57 @@ class Scheduler:
                     return {"decision": "failed", "attempt": attempt, "max_retry": 0}
 
                 max_retry = int(row["max_retry"] or 3)
-                
+                node_status = str(row.get("node_status") or "")
+                task_status = str(row.get("task_status") or "")
+                cancel_end = (
+                    task_status == "cancelled"
+                    or node_status == "cancelled"
+                    or is_cancel_error(error)
+                )
+                if cancel_end:
+                    # User/OS cancel (or late A2A canceled callback): never retry.
+                    conn.execute(
+                        """
+                        UPDATE task_nodes
+                        SET status = 'cancelled',
+                            attempt = %s,
+                            error_message = COALESCE(%s, error_message, 'cancelled'),
+                            finished_at = COALESCE(finished_at, %s),
+                            updated_at = %s
+                        WHERE id = %s::uuid
+                          AND status NOT IN ('success', 'cancelled')
+                        """,
+                        (attempt, error or "cancelled", now, now, row["node_id"]),
+                    )
+                    if task_status != "cancelled":
+                        conn.execute(
+                            """
+                            UPDATE tasks
+                            SET status = 'cancelled',
+                                updated_at = %s,
+                                finished_at = COALESCE(finished_at, %s),
+                                error_message = COALESCE(error_message, %s)
+                            WHERE id = %s::uuid
+                              AND status NOT IN ('completed', 'cancelled')
+                            """,
+                            (now, now, error or "cancelled by user", task_id),
+                        )
+                    self._append_event(
+                        conn,
+                        task_id,
+                        row["node_id"],
+                        "task.node.cancelled",
+                        f"Node {node_key} cancelled (no retry): {error}",
+                        {"attempt": attempt, "agent_id": agent_id, "error": error},
+                    )
+                    return {
+                        "decision": "cancelled",
+                        "attempt": attempt,
+                        "max_retry": max_retry,
+                        "node_id": row["node_id"],
+                        "task_status": "cancelled",
+                    }
+
                 # P36.2: Write task event to outbox
                 self.write_outbox_event(
                     "task_event",

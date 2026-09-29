@@ -37,6 +37,16 @@ from ._cli_common import (
     system_prompt_from_message,
     workdir_from_message,
 )
+from ..preview import (
+    build_preview_user_prompt,
+    deepseek_preview_argv,
+    deepseek_preview_mode,
+    extract_codewhale_final_text,
+    prepare_preview_workspace,
+    preview_binary,
+    run_preview_and_collect,
+    should_use_live_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +187,10 @@ class DeepSeekHarnessRunner:
     ) -> HarnessResult:
         self._cancel_flags[task_id] = asyncio.Event()
         try:
+            if should_use_live_preview():
+                return await self._run_codewhale_preview(
+                    task_id=task_id, message=message, skill_id=skill_id, on_event=on_event
+                )
             mode = self.prefer
             if mode == "auto":
                 if self.sdk_available() and _deepseek_api_key():
@@ -195,6 +209,187 @@ class DeepSeekHarnessRunner:
             return await self._run_tool_loop(task_id=task_id, message=message, skill_id=skill_id, on_event=on_event)
         finally:
             self._cancel_flags.pop(task_id, None)
+
+    async def _run_codewhale_preview(
+        self,
+        *,
+        task_id: str,
+        message: dict[str, Any],
+        skill_id: str,
+        on_event: EventCallback,
+    ) -> HarnessResult:
+        """Live preview via CodeWhale (formerly deepseek-tui) in a new console."""
+        started = time.monotonic()
+        user_goal = message_text(message)
+        system = system_prompt_from_message(message)
+        # User goal first — avoid system.md titles being treated as the task.
+        prompt = build_preview_user_prompt(user_goal, system=system, skill_id=skill_id)
+
+        cw = preview_binary("deepseek-harness")
+        if not cw:
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.ERROR,
+                payload={
+                    "error": (
+                        "HARNESS_LIVE_PREVIEW requires CodeWhale "
+                        "(install codewhale or set CODEWHALE_CLI_PATH)"
+                    )
+                },
+            )
+            return HarnessResult(
+                text="",
+                status=HarnessStatus.FAILED,
+                error="codewhale not found",
+                skill_id=skill_id,
+                data={"runner": "DeepSeekHarnessRunner", "mode": "codewhale_preview"},
+            )
+
+        run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
+        prepare_preview_workspace(run_cwd, user_goal=user_goal, prompt=prompt)
+        argv = deepseek_preview_argv(prompt, binary=cw, workspace=run_cwd)
+        env = dict(self.env or os.environ.copy())
+        if _deepseek_api_key():
+            env.setdefault("DEEPSEEK_API_KEY", _deepseek_api_key())
+
+        mode_label = deepseek_preview_mode()
+        await emit_event(
+            on_event,
+            task_id=task_id,
+            etype=HarnessEventType.STATUS,
+            payload={
+                "state": "working",
+                "message": f"live preview: codewhale ({mode_label} console)",
+            },
+        )
+
+        async def _on_line(line: str) -> None:
+            # Live deltas for Console/trace only — do not accumulate raw stream into result text.
+            text = line.rstrip("\r\n")
+            if not text:
+                return
+            if text.lstrip().startswith("{"):
+                try:
+                    import json
+
+                    obj = json.loads(text)
+                    if isinstance(obj, dict):
+                        piece = str(
+                            obj.get("text")
+                            or obj.get("content")
+                            or obj.get("result")
+                            or ""
+                        )
+                        if piece:
+                            await emit_event(
+                                on_event,
+                                task_id=task_id,
+                                etype=HarnessEventType.DELTA,
+                                payload={"text": piece},
+                            )
+                            return
+                        # Surface final excerpt as soon as metadata arrives.
+                        meta = obj.get("meta") if isinstance(obj.get("meta"), dict) else None
+                        if meta:
+                            excerpt = meta.get("visible_final_answer_excerpt")
+                            if isinstance(excerpt, str) and excerpt.strip():
+                                await emit_event(
+                                    on_event,
+                                    task_id=task_id,
+                                    etype=HarnessEventType.DELTA,
+                                    payload={"text": excerpt.strip()},
+                                )
+                                return
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.DELTA,
+                payload={"text": text + "\n"},
+            )
+
+        rc, raw, killed = await run_preview_and_collect(
+            self.supervisor,
+            task_id,
+            cwd=run_cwd,
+            argv=argv,
+            env=env,
+            timeout_s=self.timeout_s,
+            on_line=_on_line if mode_label == "exec" else None,
+            interactive=(mode_label == "tui"),
+        )
+        usage = TokenUsage(wall_time_ms=int((time.monotonic() - started) * 1000))
+        # Prefer output.md (TUI) / extracted final answer (exec stream).
+        text = extract_codewhale_final_text(raw) if mode_label == "exec" else (raw or "")
+        if mode_label == "exec" and not text:
+            text = (raw or "").strip()
+        if mode_label == "tui" and not text.strip():
+            text = extract_codewhale_final_text(raw) or (raw or "").strip()
+        if killed:
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.ERROR,
+                payload={"error": "codewhale preview timeout/canceled"},
+            )
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.TIMEOUT if rc is None else HarnessStatus.CANCELED,
+                error="preview canceled or timed out",
+                skill_id=skill_id,
+                usage=usage,
+                data={
+                    "runner": "DeepSeekHarnessRunner",
+                    "mode": "codewhale_preview",
+                    "exitCode": rc,
+                    "previewLog": "preview.log",
+                },
+            )
+        if rc not in (0, None) and not text:
+            err = f"codewhale exited with code {rc}"
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
+            )
+            return HarnessResult(
+                text="",
+                status=HarnessStatus.FAILED,
+                error=err,
+                skill_id=skill_id,
+                usage=usage,
+                data={
+                    "runner": "DeepSeekHarnessRunner",
+                    "mode": "codewhale_preview",
+                    "exitCode": rc,
+                    "previewLog": "preview.log",
+                },
+            )
+        if not text:
+            # Should be rare; avoid dumping the whole stream into artifacts.
+            text = (
+                "(CodeWhale finished without a visible final answer. "
+                "See workspace preview.log for the full stream.)"
+            )
+        await emit_event(
+            on_event, task_id=task_id, etype=HarnessEventType.USAGE, payload=usage.to_dict()
+        )
+        await emit_event(
+            on_event, task_id=task_id, etype=HarnessEventType.FINAL, payload={"state": "completed"}
+        )
+        return HarnessResult(
+            text=text,
+            status=HarnessStatus.OK,
+            skill_id=skill_id,
+            usage=usage,
+            data={
+                "runner": "DeepSeekHarnessRunner",
+                "mode": "codewhale_preview",
+                "exitCode": rc,
+                "previewLog": "preview.log",
+            },
+        )
 
     async def _run_sdk(
         self,

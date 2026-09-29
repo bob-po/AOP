@@ -37,7 +37,7 @@ Runners:
 | `deepseek-harness` | 8012 | DeepSeek Harness Agent |
 | `pi` | 8013 | Pi Agent |
 | `openclaw` | 8014 | OpenClaw (`agent exec --json`) |
-| `hermes` | 8015 | Hermes Agent (`hermes chat`) |
+| `hermes` | 8015 | Hermes Agent (`hermes -z`) |
 
 Default planner: single node → `claude-code` (`DEFAULT_AGENT`). Override to route to another product.
 
@@ -82,10 +82,39 @@ Legacy: `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` /
 | `HARNESS_ENABLED` | Default on in start script; `0` to skip |
 | `HARNESS_PROFILES` | Comma filter, e.g. `claude-code,pi,openclaw,hermes` |
 | `HARNESS_WORKDIR` | Parent workdir root; per-run cwd is `<root>/<task>/<agent>/` (default `~/.aop/workspaces`) |
+| `HARNESS_LIVE_PREVIEW` | `1`/`true`/`yes`/`on` → 弹本机新控制台实时预览（需桌面会话）；默认关闭 |
+| `CODEWHALE_CLI_PATH` | deepseek 预览用的 CodeWhale 二进制（默认 PATH 上的 `codewhale`） |
 | `DEFAULT_AGENT` | Planner target agent_key (default `claude-code`) |
 | `CLAUDE_CLI_PATH` / `PI_CLI_PATH` / `DSH_CLI_PATH` / `OPENCLAW_CLI_PATH` / `HERMES_CLI_PATH` | Binaries |
 | `CLAUDE_WORKDIR` / `DSH_WORKSPACE` / `PI_WORKDIR` / `OPENCLAW_WORKDIR` / `HERMES_WORKDIR` | Legacy per-runner parent root (ignored when `HARNESS_WORKDIR` is set) |
 | `CLAUDE_CLI_PERMISSION_MODE` | Claude `-p` permission mode (default `bypassPermissions`) |
+
+## Live preview（本机终端）
+
+设 `HARNESS_LIVE_PREVIEW=1` 并**重启 harness agents** 后，每次任务会在
+`~/.aop/workspaces/<task>/<agent>/` 下用 Windows `CREATE_NEW_CONSOLE` 弹出各 Agent 的**正式 TUI**
+（不 tee stdout，避免把界面打成工具文本流）。结果优先读 `output.md`；
+`preview_prompt.md` / `USER_GOAL.md` 会落盘；exec 模式仍写 `preview.log`。
+
+| Profile | 预览命令（可见终端） |
+|---------|----------------------|
+| `deepseek-harness` | **TUI**：`codewhale --fresh --approval-policy auto -p "<prompt>"` |
+| `claude-code` | **TUI**：`claude --permission-mode … "<prompt>"`（不用 `-p/--print`） |
+| `pi` | **TUI**：`pi -- "<prompt>"`（不用 `--print` / `--mode json`） |
+| `openclaw` | 默认：`openclaw agent exec --cwd … --message-file …`（弹窗 tee；`OPENCLAW_PREVIEW_UI=tui` 才走 chat TUI） |
+| `hermes` | 默认：`hermes -z … --yolo`（弹窗 tee；避开 Windows 上 `hermes chat` → `cli` ImportError。`HERMES_PREVIEW_UI=tui` 才走现代 TUI） |
+
+无桌面会话（如纯 SSH / Windows Service）时会打警告并**回退无头**，避免挂死。
+CodeWhale 安装见 [Hmbown/CodeWhale](https://github.com/Hmbown/CodeWhale)。
+
+若仍要旧的无头文字预览：`$env:HARNESS_PREVIEW_MODE="exec"`（或 `CODEWHALE_PREVIEW_MODE=exec`）。
+
+deepseek 预览路径会把**用户目标放在 prompt 最前**（避免把 system 标题当成任务）。
+
+```powershell
+$env:HARNESS_LIVE_PREVIEW="1"
+# 重启 agents 后，Console 建任务即弹窗
+```
 
 ## Edge Node（可选）
 

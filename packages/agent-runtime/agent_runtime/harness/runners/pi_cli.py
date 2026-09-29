@@ -35,6 +35,15 @@ from ._cli_common import (
     system_prompt_from_message,
     workdir_from_message,
 )
+from ..preview import (
+    build_preview_user_prompt,
+    collect_preview_artifacts,
+    harness_preview_mode,
+    pi_tui_argv,
+    prepare_preview_workspace,
+    run_preview_and_collect,
+    should_use_live_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +359,102 @@ class PiCliRunner:
         stderr_bits: list[str] = []
         model: Optional[str] = None
         run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
+
+        if should_use_live_preview():
+            use_tui = harness_preview_mode() == "tui"
+            preview_argv = argv
+            if use_tui:
+                preview_prompt = build_preview_user_prompt(
+                    prompt, system=system, skill_id=skill_id
+                )
+                prepare_preview_workspace(
+                    run_cwd, user_goal=prompt, prompt=preview_prompt
+                )
+                sys_args: list[str] = []
+                if system and sys_file is not None:
+                    sys_args = [
+                        "--system-prompt",
+                        f"You are Pi Agent (skill={skill_id}). Follow the user goal carefully.",
+                        "--append-system-prompt",
+                        str(sys_file),
+                    ]
+                preview_argv = pi_tui_argv(
+                    preview_prompt,
+                    binary=binary,
+                    provider_args=_pi_cli_provider_args(),
+                    system_args=sys_args or None,
+                    extra_args=list(self.extra_args),
+                )
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.STATUS,
+                payload={
+                    "state": "working",
+                    "message": f"live preview: pi ({'tui' if use_tui else 'exec'} console)",
+                },
+            )
+
+            async def _on_line(line: str) -> None:
+                text = line.rstrip("\r\n")
+                if text:
+                    chunks.append(text + "\n")
+                    await emit_event(
+                        on_event,
+                        task_id=task_id,
+                        etype=HarnessEventType.DELTA,
+                        payload={"text": text + "\n"},
+                    )
+
+            rc, raw, killed = await run_preview_and_collect(
+                self.supervisor,
+                task_id,
+                cwd=run_cwd,
+                argv=preview_argv,
+                env=env,
+                timeout_s=self.timeout_s,
+                on_line=None if use_tui else _on_line,
+                interactive=use_tui,
+            )
+            if sys_file is not None:
+                try:
+                    sys_file.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except OSError:
+                    pass
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            text = (
+                collect_preview_artifacts(run_cwd, fallback=raw)
+                if use_tui
+                else ("".join(chunks).strip() or raw.strip())
+            )
+            if killed:
+                return HarnessResult(
+                    text=text,
+                    status=HarnessStatus.TIMEOUT,
+                    error=f"timeout after {self.timeout_s}s",
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "PiCliRunner", "livePreview": True},
+                )
+            if rc not in (0, None) and not text:
+                return HarnessResult(
+                    text="",
+                    status=HarnessStatus.FAILED,
+                    error=f"pi exited with code {rc}",
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "PiCliRunner", "livePreview": True, "exitCode": rc},
+                )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.FINAL, payload={"state": "completed"}
+            )
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.OK,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "PiCliRunner", "livePreview": True, "exitCode": rc},
+            )
 
         try:
             mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)

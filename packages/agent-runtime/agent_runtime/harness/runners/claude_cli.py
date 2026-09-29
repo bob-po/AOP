@@ -27,6 +27,16 @@ from ._cli_common import (
     resolve_harness_workdir,
     workdir_from_message,
 )
+from ..preview import (
+    build_preview_user_prompt,
+    claude_tui_argv,
+    collect_preview_artifacts,
+    ensure_claude_workspace_trusted,
+    harness_preview_mode,
+    prepare_preview_workspace,
+    run_preview_and_collect,
+    should_use_live_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +188,109 @@ class ClaudeCliRunner:
         stderr_bits: list[str] = []
         canceled = False
         run_cwd = workdir_from_message(self.base_workdir, task_id=task_id, message=message)
+
+        if should_use_live_preview():
+            use_tui = harness_preview_mode() == "tui"
+            user_goal = _message_text(message)
+            preview_prompt = (
+                build_preview_user_prompt(user_goal, system=system, skill_id=skill_id)
+                if use_tui
+                else prompt
+            )
+            if use_tui:
+                prepare_preview_workspace(run_cwd, user_goal=user_goal, prompt=preview_prompt)
+                ensure_claude_workspace_trusted(run_cwd)
+                argv = claude_tui_argv(
+                    preview_prompt,
+                    binary=binary,
+                    permission_mode=permission_mode,
+                    allowed_tools=allowed_tools,
+                    extra_args=list(self.extra_args),
+                )
+                # Unknown custom model ids (e.g. deepseek-v4-pro) trip a catalog
+                # warning; don't block the TUI on assumed 200k windows.
+                env.setdefault("CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT", "1")
+            await _emit(
+                HarnessEventType.STATUS,
+                {
+                    "state": "working",
+                    "message": f"live preview: claude ({'tui' if use_tui else 'exec'} console)",
+                },
+            )
+
+            async def _on_line(line: str) -> None:
+                obj = parse_stream_json_line(line)
+                if obj:
+                    await self._handle_obj(obj, chunks, usage, _emit)
+                elif line.strip():
+                    chunks.append(line)
+                    await _emit(HarnessEventType.DELTA, {"text": line})
+
+            try:
+                rc, raw, killed = await asyncio.wait_for(
+                    run_preview_and_collect(
+                        self.supervisor,
+                        task_id,
+                        cwd=run_cwd,
+                        argv=argv,
+                        env=env,
+                        timeout_s=self.timeout_s,
+                        on_line=None if use_tui else _on_line,
+                        interactive=use_tui,
+                    ),
+                    timeout=self.timeout_s + 5,
+                )
+            except asyncio.TimeoutError:
+                await self.supervisor.cancel(task_id)
+                usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+                await _emit(HarnessEventType.ERROR, {"error": "claude cli timeout"})
+                return HarnessResult(
+                    text="".join(chunks) or collect_preview_artifacts(run_cwd),
+                    status=HarnessStatus.TIMEOUT,
+                    error=f"timeout after {self.timeout_s}s",
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "ClaudeCliRunner", "livePreview": True, "tui": use_tui},
+                )
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            if usage.estimated_cost <= 0 and (usage.input_tokens or usage.output_tokens):
+                usage.estimated_cost = estimate_cost(
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                )
+            await _emit(HarnessEventType.USAGE, usage.to_dict())
+            text = (
+                collect_preview_artifacts(run_cwd, fallback=raw)
+                if use_tui
+                else "".join(chunks).strip()
+            )
+            if killed or (rc not in (0, None) and not text):
+                err = f"claude exited with code {rc}"
+                status = HarnessStatus.CANCELED if killed else HarnessStatus.FAILED
+                await _emit(
+                    HarnessEventType.ERROR
+                    if status == HarnessStatus.FAILED
+                    else HarnessEventType.STATUS,
+                    {"error": err}
+                    if status == HarnessStatus.FAILED
+                    else {"state": "canceled"},
+                )
+                return HarnessResult(
+                    text=text,
+                    status=status,
+                    error=err,
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "ClaudeCliRunner", "exitCode": rc, "livePreview": True},
+                )
+            await _emit(HarnessEventType.FINAL, {"state": "completed"})
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.OK,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "ClaudeCliRunner", "exitCode": rc, "livePreview": True},
+            )
 
         try:
             mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)

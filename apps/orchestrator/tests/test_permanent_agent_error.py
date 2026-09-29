@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from scheduler import is_permanent_agent_error
+from scheduler import is_cancel_error, is_permanent_agent_error
 
 
 def test_permanent_deepseek_unavailable():
@@ -22,3 +22,11 @@ def test_permanent_pi_missing():
 def test_transient_a2a_not_permanent():
     assert not is_permanent_agent_error("A2A error: A2A execution failed with status failed")
     assert not is_permanent_agent_error("timeout waiting for agent")
+
+
+def test_cancel_error_detected():
+    assert is_cancel_error("a2a status=canceled")
+    assert is_cancel_error("A2A execution failed with status cancelled: canceled by user")
+    assert is_cancel_error("preview canceled or timed out")
+    assert not is_cancel_error("A2A execution failed with status failed")
+    assert not is_cancel_error("timeout waiting for agent")

@@ -34,6 +34,17 @@ from ._cli_common import (
     system_prompt_from_message,
     workdir_from_message,
 )
+from ..preview import (
+    build_preview_user_prompt,
+    collect_preview_artifacts,
+    ensure_openclaw_config_ready,
+    harness_preview_mode,
+    looks_like_cli_crash,
+    openclaw_tui_argv,
+    prepare_preview_workspace,
+    run_preview_and_collect,
+    should_use_live_preview,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +223,119 @@ class OpenClawCliRunner:
         usage = TokenUsage()
         stdout_bits: list[str] = []
         stderr_bits: list[str] = []
+
+        if should_use_live_preview():
+            use_tui = harness_preview_mode() == "tui"
+            preview_argv = argv
+            use_interactive = False
+            if use_tui:
+                user_goal = message_text(message)
+                system = system_prompt_from_message(message)
+                preview_prompt = build_preview_user_prompt(
+                    user_goal, system=system, skill_id=skill_id
+                )
+                prepare_preview_workspace(
+                    run_cwd, user_goal=user_goal, prompt=preview_prompt
+                )
+                ensure_openclaw_config_ready()
+                preview_argv = openclaw_tui_argv(
+                    preview_prompt,
+                    binary=binary,
+                    workspace=run_cwd,
+                    session_key=f"aop-{task_id[:8]}",
+                    timeout_s=self.timeout_s,
+                    extra_args=list(self.extra_args),
+                )
+                # Discourage interactive doctor / migration prompts in the popup.
+                env.setdefault("CI", "1")
+                env.setdefault("OPENCLAW_NONINTERACTIVE", "1")
+                # agent exec → tee (visible + capture); chat tui → raw console
+                use_interactive = len(preview_argv) >= 2 and preview_argv[1] == "tui"
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.STATUS,
+                payload={
+                    "state": "working",
+                    "message": (
+                        f"live preview: openclaw "
+                        f"({'tui' if use_interactive else 'agent-exec'} console)"
+                    ),
+                },
+            )
+
+            async def _on_line(line: str) -> None:
+                stdout_bits.append(line)
+                stripped = line.rstrip("\r\n")
+                if stripped and not stripped.lstrip().startswith("{"):
+                    await emit_event(
+                        on_event,
+                        task_id=task_id,
+                        etype=HarnessEventType.DELTA,
+                        payload={"text": stripped + "\n"},
+                    )
+
+            try:
+                rc, raw, killed = await run_preview_and_collect(
+                    self.supervisor,
+                    task_id,
+                    cwd=run_cwd,
+                    argv=preview_argv,
+                    env=env,
+                    timeout_s=self.timeout_s,
+                    on_line=None if use_interactive else _on_line,
+                    interactive=use_interactive,
+                )
+            finally:
+                if msg_file is not None:
+                    try:
+                        msg_file.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    except OSError:
+                        pass
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            text = (
+                collect_preview_artifacts(run_cwd, fallback=raw)
+                if use_interactive
+                else _extract_final_text("".join(stdout_bits) or raw)
+            )
+            if not text:
+                text = collect_preview_artifacts(run_cwd, fallback="")
+            if text.lstrip().startswith("[aop-preview]"):
+                text = ""
+            crash = looks_like_cli_crash(text) or looks_like_cli_crash(raw)
+            if killed:
+                return HarnessResult(
+                    text=text,
+                    status=HarnessStatus.TIMEOUT,
+                    error=f"timeout after {self.timeout_s}s",
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "OpenClawCliRunner", "livePreview": True},
+                )
+            if crash or rc not in (0, None) or not text:
+                err = (
+                    crash
+                    or (f"openclaw exited with code {rc}" if rc not in (0, None) else None)
+                    or "openclaw produced no usable output"
+                )
+                return HarnessResult(
+                    text="",
+                    status=HarnessStatus.FAILED,
+                    error=err,
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "OpenClawCliRunner", "livePreview": True, "exitCode": rc},
+                )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.FINAL, payload={"state": "completed"}
+            )
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.OK,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "OpenClawCliRunner", "livePreview": True, "exitCode": rc},
+            )
 
         try:
             mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)

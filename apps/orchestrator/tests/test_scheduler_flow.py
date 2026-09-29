@@ -134,6 +134,45 @@ def test_mark_failure_retries_then_fails(database_url: str, agent_id: str):
 
 
 @requires_pg
+def test_mark_failure_cancel_does_not_retry(database_url: str, agent_id: str):
+    sched = Scheduler(database_url=database_url)
+    plan = TaskPlan(
+        title="cancel-no-retry",
+        goal="cancel-no-retry",
+        nodes=[PlanNode(id="search", skill="web-search")],
+    )
+    result = sched.create_task(goal="cancel-no-retry", plan=plan)
+    task_id = result.task_id
+    assert sched.claim_running(task_id, "search", agent_id, attempt=1)
+
+    decision = sched.mark_failure(
+        task_id,
+        "search",
+        error="a2a status=canceled",
+        attempt=1,
+        agent_id=agent_id,
+    )
+    assert decision["decision"] == "cancelled"
+    node = sched.get_node(task_id, "search")
+    assert node is not None
+    assert node["status"] == "cancelled"
+    task = sched.get_task(task_id)
+    assert task is not None
+    assert task["status"] == "cancelled"
+    # Late failure callback after OS cancel must also stay cancelled (no retry).
+    again = sched.mark_failure(
+        task_id,
+        "search",
+        error="boom after cancel",
+        attempt=1,
+        agent_id=agent_id,
+    )
+    assert again["decision"] == "cancelled"
+    assert sched.get_node(task_id, "search")["status"] == "cancelled"
+    assert not sched.claim_running(task_id, "search", agent_id, attempt=2)
+
+
+@requires_pg
 def test_hitl_approve_unlocks_downstream(database_url: str, agent_id: str):
     sched = Scheduler(database_url=database_url)
     plan = TaskPlan(

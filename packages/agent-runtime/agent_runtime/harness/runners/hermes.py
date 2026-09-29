@@ -1,6 +1,9 @@
-"""Hermes Agent CLI harness runner (``hermes chat -q`` / ``--query-file``).
+"""Hermes Agent CLI harness runner (``hermes -z`` oneshot).
 
 See https://hermes-agent.nousresearch.com/docs/user-guide/cli
+
+Prefer top-level ``-z`` over ``hermes chat``: on many Windows installs ``chat``
+imports a shadowed site-packages ``cli`` and crashes with ImportError.
 """
 
 from __future__ import annotations
@@ -31,6 +34,16 @@ from ._cli_common import (
     resolve_harness_workdir,
     system_prompt_from_message,
     workdir_from_message,
+)
+from ..preview import (
+    build_preview_user_prompt,
+    collect_preview_artifacts,
+    harness_preview_mode,
+    hermes_tui_argv,
+    looks_like_cli_crash,
+    prepare_preview_workspace,
+    run_preview_and_collect,
+    should_use_live_preview,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,16 +151,17 @@ class HermesCliRunner:
         msg_file = Path(path)
         msg_file.write_text(prompt, encoding="utf-8")
 
-        argv = [binary, "chat", "--query-file", str(msg_file)]
+        # Top-level oneshot: avoid ``hermes chat`` (ImportError on shadowed ``cli``).
+        argv = [binary, "--yolo", "--accept-hooks", "-z", prompt]
         model = (os.getenv("HERMES_MODEL") or "").strip()
         if model:
-            argv.extend(["--model", model])
+            argv.extend(["-m", model])
         provider = (os.getenv("HERMES_PROVIDER") or "").strip()
         if provider:
             argv.extend(["--provider", provider])
         toolsets = (os.getenv("HERMES_TOOLSETS") or "").strip()
         if toolsets:
-            argv.extend(["--toolsets", toolsets])
+            argv.extend(["-t", toolsets])
         argv.extend(self.extra_args)
 
         env = dict(self.env or os.environ.copy())
@@ -157,6 +171,118 @@ class HermesCliRunner:
         usage = TokenUsage()
         chunks: list[str] = []
         stderr_bits: list[str] = []
+
+        if should_use_live_preview():
+            use_tui = harness_preview_mode() == "tui"
+            preview_argv = argv
+            if use_tui:
+                user_goal = message_text(message)
+                system = system_prompt_from_message(message)
+                preview_prompt = build_preview_user_prompt(
+                    user_goal, system=system, skill_id=skill_id
+                )
+                prepare_preview_workspace(
+                    run_cwd, user_goal=user_goal, prompt=preview_prompt
+                )
+                # Also overwrite query file so a Hermes TUI that picks it up sees the goal.
+                try:
+                    msg_file.write_text(preview_prompt, encoding="utf-8")
+                except OSError:
+                    pass
+                preview_argv = hermes_tui_argv(
+                    preview_prompt,
+                    binary=binary,
+                    model=model or None,
+                    provider=provider or None,
+                    toolsets=toolsets or None,
+                    extra_args=list(self.extra_args),
+                )
+                # oneshot/-z → tee; --tui → raw console
+                use_tui = "--tui" in preview_argv
+            await emit_event(
+                on_event,
+                task_id=task_id,
+                etype=HarnessEventType.STATUS,
+                payload={
+                    "state": "working",
+                    "message": f"live preview: hermes ({'tui' if use_tui else 'oneshot'} console)",
+                },
+            )
+
+            async def _on_line(line: str) -> None:
+                chunks.append(line)
+                stripped = line.rstrip("\r\n")
+                if stripped:
+                    await emit_event(
+                        on_event,
+                        task_id=task_id,
+                        etype=HarnessEventType.DELTA,
+                        payload={"text": stripped + "\n"},
+                    )
+
+            try:
+                rc, raw, killed = await run_preview_and_collect(
+                    self.supervisor,
+                    task_id,
+                    cwd=run_cwd,
+                    argv=preview_argv,
+                    env=env,
+                    timeout_s=self.timeout_s,
+                    on_line=None if use_tui else _on_line,
+                    interactive=use_tui,
+                )
+            finally:
+                if msg_file is not None:
+                    try:
+                        msg_file.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    except OSError:
+                        pass
+            usage.wall_time_ms = int((time.monotonic() - started) * 1000)
+            text = collect_preview_artifacts(
+                run_cwd, fallback=("" if use_tui else ("".join(chunks).strip() or raw.strip()))
+            )
+            # Don't treat preview.log banner / echoed -z prompt as a real answer.
+            out_md = Path(run_cwd) / "output.md"
+            if text.lstrip().startswith("[aop-preview]") and not out_md.is_file():
+                text = ""
+            crash = looks_like_cli_crash(text) or looks_like_cli_crash(raw)
+            if killed:
+                return HarnessResult(
+                    text=text,
+                    status=HarnessStatus.TIMEOUT,
+                    error=f"timeout after {self.timeout_s}s",
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "HermesCliRunner", "livePreview": True},
+                )
+            if crash or rc not in (0, None) or (use_tui and not text) or not text:
+                err = (
+                    crash
+                    or (f"hermes exited with code {rc}" if rc not in (0, None) else None)
+                    or (
+                        "hermes TUI exited without writing output.md"
+                        if use_tui
+                        else "hermes produced no usable output"
+                    )
+                )
+                return HarnessResult(
+                    text="",
+                    status=HarnessStatus.FAILED,
+                    error=err,
+                    skill_id=skill_id,
+                    usage=usage,
+                    data={"runner": "HermesCliRunner", "livePreview": True, "exitCode": rc},
+                )
+            await emit_event(
+                on_event, task_id=task_id, etype=HarnessEventType.FINAL, payload={"state": "completed"}
+            )
+            return HarnessResult(
+                text=text,
+                status=HarnessStatus.OK,
+                skill_id=skill_id,
+                usage=usage,
+                data={"runner": "HermesCliRunner", "livePreview": True, "exitCode": rc},
+            )
 
         try:
             mp = await self.supervisor.spawn(task_id, *argv, env=env, cwd=run_cwd)
@@ -251,8 +377,15 @@ class HermesCliRunner:
 
         text = "".join(chunks).strip()
         rc = mp.returncode
-        if rc not in (0, None) and not text:
-            err = "".join(stderr_bits).strip() or f"hermes exited with code {rc}"
+        stderr = "".join(stderr_bits).strip()
+        crash = looks_like_cli_crash(text) or looks_like_cli_crash(stderr)
+        if crash or rc not in (0, None) or not text:
+            if crash:
+                err = crash
+            elif rc not in (0, None):
+                err = stderr or f"hermes exited with code {rc}"
+            else:
+                err = stderr or "hermes produced no usable output"
             status = HarnessStatus.CANCELED if getattr(mp, "_killed", False) else HarnessStatus.FAILED
             await emit_event(
                 on_event,
@@ -261,7 +394,7 @@ class HermesCliRunner:
                 payload={"error": err} if status == HarnessStatus.FAILED else {"state": "canceled"},
             )
             return HarnessResult(
-                text=text,
+                text="",
                 status=status,
                 error=err,
                 skill_id=skill_id,
@@ -280,6 +413,6 @@ class HermesCliRunner:
             data={
                 "runner": "HermesCliRunner",
                 "exitCode": rc,
-                "stderr": "".join(stderr_bits)[:500] if stderr_bits else "",
+                "stderr": stderr[:500] if stderr else "",
             },
         )

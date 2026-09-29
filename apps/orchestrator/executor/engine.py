@@ -26,7 +26,7 @@ from observability import record_agent_call, record_task_finished
 from router import RouterError, normalize_endpoint
 from router.engine import RoutingEngine
 from sandbox import SandboxViolation, check_endpoint, check_skill
-from scheduler import Scheduler
+from scheduler import Scheduler, is_cancel_error
 from streams import StreamClient
 
 # OpenTelemetry tracing
@@ -768,6 +768,10 @@ class ExecutionEngine:
             )
         except Exception:  # noqa: BLE001
             pass
+        # Cancelled tasks must not enter the retry queue (late A2A canceled callback).
+        if is_cancel_error(error):
+            print(f"[worker] cancel end node={node_key} — skip retry: {error}")
+
         decision = self.scheduler.mark_failure(
             task_id,
             node_key,
@@ -775,6 +779,20 @@ class ExecutionEngine:
             attempt=attempt,
             agent_id=agent_id,
         )
+        if decision.get("decision") == "cancelled":
+            self.streams.publish_execution_event(
+                "agent.task.cancelled",
+                {
+                    "task_id": task_id,
+                    "node_key": node_key,
+                    "error": error,
+                    "attempt": attempt,
+                    "decision": "cancelled",
+                },
+            )
+            print(f"[worker] node={node_key} cancelled — not retrying")
+            return
+
         self.streams.publish_execution_event(
             "agent.task.failed",
             {
