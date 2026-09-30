@@ -35,13 +35,18 @@ _VENDOR_SKIP_DIR_NAMES = frozenset(
 )
 _VENDOR_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 
-DEFAULT_PORTS: dict[str, int] = {
-    "claude-code": 8011,
-    "deepseek-harness": 8012,
-    "pi": 8013,
-    "openclaw": 8014,
-    "hermes": 8015,
-}
+try:
+    from agent_runtime.harness.profiles import default_ports as _default_ports
+
+    DEFAULT_PORTS: dict[str, int] = _default_ports()
+except ImportError:  # pragma: no cover
+    DEFAULT_PORTS = {
+        "claude-code": 8011,
+        "deepseek-harness": 8012,
+        "pi": 8013,
+        "openclaw": 8014,
+        "hermes": 8015,
+    }
 
 HARNESS_BY_PREFIX: tuple[tuple[str, str], ...] = (
     ("pi", "pi_cli"),

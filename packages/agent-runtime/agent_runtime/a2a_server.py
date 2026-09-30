@@ -7,7 +7,9 @@ make it trivial for any Agent's JSON-RPC endpoint to:
   ``parentTaskId`` / ``depth`` / visited-agent chain) from a ``message/send``
   request and build a :class:`CallContext` the Agent can use to delegate onward;
 * emit consistent JSON-RPC results/errors;
-* handle ``tasks/cancel``, ``tasks/subscribe``, and optional completion callbacks.
+* handle ``tasks/cancel`` and optional completion callbacks.
+  (``tasks/subscribe`` / ``tasks/delegate`` were removed — use ``message/stream``
+  or OS discover/route.)
 
 Keeping this in the runtime package (not copy-pasted per agent) is what makes
 every Agent a first-class Server *and* Client of the A2A network.
@@ -256,9 +258,9 @@ def handle_control_method(
 ) -> Optional[dict[str, Any]]:
     """Handle shared control-plane RPC methods. Returns a JSON-RPC body or None.
 
-    Supported: ``tasks/get``, ``tasks/cancel``, ``tasks/subscribe`` (snapshot /
-    single-task final event as a JSON-RPC result — agents that want true SSE
-    should stream :func:`subscribe_events` themselves).
+    Supported: ``tasks/get``, ``tasks/cancel``.
+    Removed: ``tasks/subscribe``, ``tasks/delegate`` (return -32601).
+    Agents that need streaming should use ``message/stream`` / :func:`subscribe_events`.
     """
     if method == "tasks/get":
         task_id = _first_key(params, "id", "taskId", "task_id")
@@ -273,12 +275,12 @@ def handle_control_method(
             return jsonrpc_error(req_id, -32001, "Task not found")
         return jsonrpc_result(req_id, task)
 
-    if method == "tasks/subscribe":
-        # Synchronous snapshot / wait-for-terminal for JSON-RPC clients that
-        # cannot stream. Returns the last event as the RPC result; full event
-        # streams use subscribe_events() with an SSE response.
-        events = list(subscribe_events(tasks, params, timeout_s=subscribe_timeout_s))
-        return jsonrpc_result(req_id, {"events": events, "count": len(events)})
+    if method in {"tasks/subscribe", "tasks/delegate"}:
+        return jsonrpc_error(
+            req_id,
+            -32601,
+            f"Method not found: {method} (removed; use message/stream or OS discover/route)",
+        )
 
     return None
 

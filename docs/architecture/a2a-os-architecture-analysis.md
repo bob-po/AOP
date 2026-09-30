@@ -21,7 +21,7 @@ User → Gateway → Orchestrator → Planner → Router → Scheduler → Execu
 
 #### 1.2.1 Orchestrator Call Flow
 - **入口**: `POST /v1/tasks` → `TaskService.create()` → `TaskManager.create()` → `PlanningEngine.plan()` → `SchedulingEngine.create_and_enqueue()`
-- **执行**: Worker 从 Redis Stream 读取任务 → `ExecutionEngine.handle()` → `RoutingEngine.select()` → `A2AExecutor.execute()` → 直接调用 Agent
+- **执行**: Worker 从 Redis Stream 读取任务 → `ExecutionEngine.handle()` → `AgentRouter.select()` → `A2AExecutor.execute()` → 直接调用 Agent
 - **Planner**: 动态 DAG，支持关键词分解和 LLM 规划
 - **Router**: 仅在 Orchestrator 内部调用，无 HTTP 路由端点
 - **Scheduler**: 管理节点状态和依赖，不决定调用哪个 Agent
@@ -230,7 +230,7 @@ search-agent → analysis-agent  [skill=business-analysis depth=1 completed]
 | P0 | 跨进程 `visited_agents` | ✅ | 链上累积、分支隔离；允许 A→B→A，用 `max_agent_visits` 阻断无限环（非“出现过即禁”） |
 | P0 | OS quota/budget/call limit | ✅ | `delegate()` 调用 `POST /v1/governance/check|release`；DB/Redis 原子计数；拒绝写入 `a2a_governance_denials` |
 | P1 | Duplicate / 幂等 | ✅ | 委托稳定键 `a2a-del-*`；Agent 侧缓存 + Orchestrator `request_tracking` |
-| P1 | subscribe + callback | ✅ | `tasks/subscribe`；SDK `callbackUrl`；`notify_callback` |
+| P1 | subscribe + callback | ✅→partial | `message/stream` + SDK `callbackUrl`；`tasks/subscribe` 已移除 |
 | P1 | Task ↔ Runtime Graph | ✅ | Executor 播种 `root_task_id`；`GET /v1/tasks/{id}/collaboration-graph` |
 | P2 | 10/10 Client 化 | ✅ | start-agent A2A FastAPI 门面（DeployPilot 仍为引擎） |
 | P2 | Collaboration Graph API | ✅ | `nodes`/`links`/`tree`；Gateway `/v1/collaboration/*` |

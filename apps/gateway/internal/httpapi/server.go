@@ -109,7 +109,8 @@ func (s *Server) Handler() http.Handler {
 
 	r.Route("/v1/agents", func(r chi.Router) {
 		// Phase 5/6 OS endpoints: register before registry handlers so these
-		// paths forward to Orchestrator (registry keeps POST /{id}/health probe).
+		// paths forward to Orchestrator. Registry keeps POST /{id}/health probe.
+		// Heartbeat/drain live only under /v1/agent-runtime/* (proxied below).
 		if s.OrchestratorProxy != nil {
 			r.Get("/{agentID}/capacity", s.OrchestratorProxy.ServeHTTP)
 			r.Get("/{agentID}/reliability", s.OrchestratorProxy.ServeHTTP)

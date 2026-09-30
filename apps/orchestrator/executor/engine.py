@@ -23,8 +23,7 @@ from handoff import (
 )
 from memory import MemoryService
 from observability import record_agent_call, record_task_finished
-from router import RouterError, normalize_endpoint
-from router.engine import RoutingEngine
+from router import AgentRouter, RouterError, normalize_endpoint
 from sandbox import SandboxViolation, check_endpoint, check_skill
 from scheduler import Scheduler, is_cancel_error
 from streams import StreamClient
@@ -141,8 +140,7 @@ class ExecutionEngine:
         self.worker_id = consumer_name or f"executor-{socket.gethostname()}-{os.getpid()}"
         self.streams = StreamClient()
         self.scheduler = Scheduler()
-        self.routing = RoutingEngine()
-        self.router = self.routing.router
+        self.router = AgentRouter()
         self.executor = A2AExecutor(timeout=float(os.getenv("A2A_TIMEOUT", "60")))
         self.aggregator = Aggregator()
         self.artifacts = ArtifactStore()
@@ -316,7 +314,7 @@ class ExecutionEngine:
                 set_span_attribute("worker.goal_length", len(goal))
 
             try:
-                routed = self.routing.select(skill, exclude_agent_ids=exclude)
+                routed = self.router.select(skill, exclude_agent_ids=exclude)
             except RouterError as exc:
                 self._on_failure(
                     fields,

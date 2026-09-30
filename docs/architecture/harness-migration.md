@@ -31,6 +31,10 @@ Runners:
 
 ## Virtual cards
 
+Ports / marketplace catalog keys live in
+`packages/agent-runtime/agent_runtime/harness/profiles.py` (single source of truth).
+Keep `plugins/*/plugin.toml` ports in sync with that table.
+
 | Profile | Port | Notes |
 |---------|------|--------|
 | `claude-code` | 8011 | Claude Code Agent |
@@ -43,8 +47,9 @@ Default planner: single node → `claude-code` (`DEFAULT_AGENT`). Override to ro
 
 When the goal asks for **all / every / 所有 / 全部 agents**, the planner fans out to
 **one parallel node per ready online harness agent** (`method=heuristic_multi`).
-Agents whose `/health` reports `runner_ready=false` (missing CLI / API key) are
-**skipped** so the task can still complete on agents that work (usually Claude).
+Agents whose `/health` reports `runner_ready=false` (missing CLI / API key, or
+only an LLM chat stub without product CLI/SDK) are **skipped** so the task can
+still complete on agents that work (usually Claude).
 
 Fan-out **dispatches** a per-node `instruction` (routing preamble stripped), e.g.
 「使用目前所有的agent，调研ui2v…」→ each agent receives a role brief +
@@ -116,14 +121,16 @@ $env:HARNESS_LIVE_PREVIEW="1"
 # 重启 agents 后，Console 建任务即弹窗
 ```
 
-## Edge Node（可选）
+## Edge Node（推荐本机路径）
 
-本机 / 远端可用 [`apps/client/aop-node`](../../apps/client/aop-node) 以 `aopd` Supervisor 拉起上述 harness 进程，并向 Gateway 注册、向 Orchestrator 心跳。业务能力仍是子 agent/插件；CLI `aop` 只做本地管理。
+本机用 [`apps/client/aop-node`](../../apps/client/aop-node) 的 `aopd` Supervisor 拉起 harness、向 Gateway 注册、并向 Orchestrator 发生命周期心跳。子进程只跑 A2A；`AOP_NODE_MANAGED=1` 时关闭子进程自心跳。
 
 | 变量 | 含义 |
 |------|------|
 | `CLAUDE_CLI_ALLOWED_TOOLS` | Comma list for `--allowed-tools` (default includes WebSearch/WebFetch); `none` to omit |
 | `A2A_OS_URL` / `GATEWAY_URL` | Heartbeat + optional cost POST |
+| `AOP_NODE_MANAGED` | `1` → harness 不自心跳（aopd 代发） |
+| `HARNESS_HEARTBEAT` | 无 aop-node 时默认 `1`；aopd 子进程强制 `0` |
 
 ## Remote install (Claude Code–style)
 
@@ -137,10 +144,20 @@ curl -fsSL http://<a2a-os>:8000/install/claude-code.sh | bash
 
 ## Local run
 
+**推荐（Edge SoT）：**
+
+```powershell
+cd apps\client\aop-node
+cargo run -p aopd -- --config aop-node.toml
+```
+
+**无 Supervisor 的开发快捷脚本**（若检测到 `:7920` aop-node 已在跑会直接退出）：
+
 ```powershell
 pip install -e "packages/agent-runtime[harness]"
 pip install -e packages/a2a-sdk
 python scripts/start_and_register_agents.py
+# 强制并行：FORCE_START_SCRIPT=1
 ```
 
 ```powershell

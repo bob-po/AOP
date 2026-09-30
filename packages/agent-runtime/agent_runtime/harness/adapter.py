@@ -62,6 +62,11 @@ def _extract_text(message: dict[str, Any]) -> str:
 
 
 def _skill_id(params: dict[str, Any], card: dict[str, Any]) -> str:
+    """Resolve skill id for runners.
+
+    Skill-less virtual agents (empty ``card.skills``) return ``\"\"`` unless the
+    caller explicitly sets ``metadata.skillId`` — avoid inventing fake skills.
+    """
     metadata = params.get("metadata") or {}
     sid = metadata.get("skillId") or metadata.get("skill_id")
     if sid:
@@ -69,8 +74,7 @@ def _skill_id(params: dict[str, Any], card: dict[str, Any]) -> str:
     skills = card.get("skills") or []
     if skills:
         return str(skills[0].get("id") or "default")
-    # No skills on card — pass-through agent identity / default.
-    return str(card.get("agentKey") or card.get("name") or "default")
+    return ""
 
 
 def _skill_allowed(skill_id: str, card: dict[str, Any]) -> bool:
@@ -494,7 +498,7 @@ def create_harness_app(
         params = body.get("params") or {}
 
         try:
-            if method in {"tasks/get", "tasks/cancel", "tasks/subscribe"}:
+            if method in {"tasks/get", "tasks/cancel", "tasks/subscribe", "tasks/delegate"}:
                 if method == "tasks/cancel":
                     tid = params.get("id") or params.get("taskId") or params.get("task_id")
                     cancel_key = str(tid) if tid else ""

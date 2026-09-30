@@ -9,10 +9,10 @@ spec pin in `a2a_sdk.protocol.SPEC_COMMIT`).
 - Fetch Agent Card from `/.well-known/agent-card.json` (fallback: `agent.json`)
 - JSON-RPC `message/send`, `tasks/get`, `tasks/cancel`
 - `message/stream` (SSE) when the card advertises `capabilities.streaming`
-- Part wire discriminator **`kind`** (reads `kind` or legacy `type`)
-- Platform governance/lineage under `metadata` (deprecated top-level mirrors still accepted)
-- Push: `metadata.pushNotificationConfig.url` (+ legacy `callbackUrl`)
-
+- Part wire discriminator **`kind`** (reads `kind` or legacy `type`; writes `kind` only)
+- Platform governance/lineage under `metadata` only (inbound still accepts legacy top-level fields)
+- Push: `metadata.pushNotificationConfig.url` (+ legacy inbound `callbackUrl`)
+- Removed: `tasks/subscribe`, `tasks/delegate` (use `message/stream` / OS discover+route)
 OS control plane (`/v1/*` register, DAG, HITL) is **not** part of this package.
 
 ## Install

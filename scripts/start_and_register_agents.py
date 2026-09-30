@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Start harness virtual agents (Windows-friendly) and register to Gateway.
+"""Dev helper: start harness virtual agents and register them to Gateway.
 
-One profile per harness product: ``claude-code``, ``deepseek-harness``, ``pi``,
-``openclaw``, ``hermes``.
+Prefer **aop-node** (`apps/client/aop-node`) for local/edge ownership — it
+autostarts plugins, registers endpoints, and owns lifecycle heartbeats.
+
+This script is the lightweight **no-supervisor** path for quick local bring-up
+(Docker compose agents, CI, or when aopd is not installed).
+
+Profiles: ``claude-code``, ``deepseek-harness``, ``pi``, ``openclaw``, ``hermes``.
 """
 
 from __future__ import annotations
@@ -17,14 +22,18 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# (profile dir name / agent_key, port)
-HARNESS_PROFILES = [
-    ("claude-code", 8011),
-    ("deepseek-harness", 8012),
-    ("pi", 8013),
-    ("openclaw", 8014),
-    ("hermes", 8015),
-]
+try:
+    from agent_runtime.harness.profiles import as_port_tuples
+
+    HARNESS_PROFILES = as_port_tuples()
+except ImportError:  # pragma: no cover
+    HARNESS_PROFILES = [
+        ("claude-code", 8011),
+        ("deepseek-harness", 8012),
+        ("pi", 8013),
+        ("openclaw", 8014),
+        ("hermes", 8015),
+    ]
 
 GATEWAY = os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")
 API_KEY = (
@@ -34,6 +43,7 @@ API_KEY = (
     or ""
 )
 PYTHON = sys.executable
+AOP_NODE_MGMT = os.getenv("AOP_NODE_URL", "http://127.0.0.1:7920")
 
 
 def _headers() -> dict[str, str]:
@@ -53,6 +63,14 @@ def wait_health(port: int, timeout: float = 20.0) -> bool:
             pass
         time.sleep(0.4)
     return False
+
+
+def _aop_node_running() -> bool:
+    try:
+        r = httpx.get(f"{AOP_NODE_MGMT.rstrip('/')}/health", timeout=1.5)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def _harness_enabled() -> bool:
@@ -77,12 +95,25 @@ def main() -> int:
         print("HARNESS_ENABLED=0 — nothing to start")
         return 0
 
+    if _aop_node_running() and os.getenv("FORCE_START_SCRIPT", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        print(
+            f"aop-node is already healthy at {AOP_NODE_MGMT}.\n"
+            "Edge ownership belongs there (register + heartbeat).\n"
+            "Skip this script, or set FORCE_START_SCRIPT=1 to start anyway."
+        )
+        return 0
+
     selected = _selected_harness_profiles()
     if not selected:
         print("No harness profiles selected")
         return 1
 
     print(f"Harness profiles: {', '.join(n for n, _ in selected)}")
+    print("Note: without aop-node, each agent heartbeats itself (HARNESS_HEARTBEAT=1).")
     cwd = ROOT / "agents" / "harness-agent"
     if not (cwd / "agent.py").exists():
         print("agents/harness-agent missing")
@@ -100,6 +131,7 @@ def main() -> int:
         env["AGENT_URL"] = f"http://127.0.0.1:{port}/"
         env["HARNESS_PROFILE"] = profile
         env["AGENT_ID"] = profile
+        env.pop("AOP_NODE_MANAGED", None)
         env["HARNESS_HEARTBEAT"] = env.get("HARNESS_HEARTBEAT") or "1"
 
         print(f"[start] {label} :{port}")

@@ -191,6 +191,42 @@ def openai_compatible_api_key(*extra_env: str) -> str:
     return ""
 
 
+def skill_label(skill_id: str | None) -> str:
+    """Return a real skill id for prompt framing, or empty when skill-less."""
+    s = (skill_id or "").strip()
+    if not s or s.lower() in {"default", "none", "-"}:
+        return ""
+    return s
+
+
+def compose_cli_prompt(
+    prompt: str,
+    *,
+    system: str = "",
+    skill_id: str | None = None,
+) -> str:
+    """Build CLI user prompt; omit ``(skill=…)`` when the card has no skills."""
+    label = skill_label(skill_id)
+    task = f"User task (skill={label}):\n{prompt}" if label else f"User task:\n{prompt}"
+    sys = (system or "").strip()
+    if sys:
+        return f"{sys}\n\n---\n\n{task}"
+    if label:
+        return task
+    return prompt
+
+
+def system_with_skill(system: str, skill_id: str | None = None) -> str:
+    """Append Active skill only when a real skill id is present."""
+    sys = (system or "").strip()
+    label = skill_label(skill_id)
+    if not label:
+        return sys
+    if sys:
+        return f"{sys}\n\nActive skill: {label}"
+    return f"Active skill: {label}"
+
+
 def run_openai_compatible_sync(
     *,
     prompt: str,
@@ -208,9 +244,10 @@ def run_openai_compatible_sync(
 
     cfg = LLMProviderConfig(api_key=api_key, base_url=base_url, model=model)
     provider = OpenAIProvider(cfg)
+    sys_content = system_with_skill(system, skill_id) or "You are a helpful assistant."
     request = LLMRequest(
         messages=[
-            LLMMessage(role="system", content=f"{system}\n\nActive skill: {skill_id}"),
+            LLMMessage(role="system", content=sys_content),
             LLMMessage(role="user", content=prompt),
         ],
         model=model,

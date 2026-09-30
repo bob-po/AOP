@@ -2,24 +2,31 @@
 
 Supervisor discovers `plugins/<id>/plugin.toml` and may autostart them.
 
+## Ownership
+
+| Concern | Owner when using aopd |
+|---------|------------------------|
+| Start / stop children | aop-node |
+| `POST /v1/agents/register` | aop-node (node + each healthy child) |
+| Lifecycle heartbeat | aop-node (`/v1/agent-runtime/{id}/heartbeat` for node + each harness) |
+| A2A `message/send` | Child harness process |
+
+Children set `AOP_NODE_MANAGED=1` / `HARNESS_HEARTBEAT=0` so they do **not** self-heartbeat.
+
+Without aop-node, use `scripts/start_and_register_agents.py` (dev-only; each agent heartbeats itself).
+
 ## Layout
 
 | Path | Role |
 |------|------|
 | `_harness/launch.py` | Shared launcher: find AOP repo → inject `PYTHONPATH` → uvicorn |
-| `claude-code/` | Port **8011** · Claude Code CLI |
-| `deepseek-harness/` | Port **8012** · DeepSeek Harness |
-| `pi/` | Port **8013** · Pi CLI |
-| `openclaw/` | Port **8014** · OpenClaw |
-| `hermes/` | Port **8015** · Hermes |
+| `_harness/run_profile.py` | Shared plugin entry (marks node-managed) |
+| `claude-code/` … `hermes/` | `plugin.toml` only (ports 8011–8015) |
 | `echo/` | Smoke-test plugin (not an A2A agent) |
-
-Each harness plugin is:
 
 ```text
 plugins/<id>/
-  plugin.toml   # Supervisor manifest
-  run.py        # Sets profile env, calls _harness.launch
+  plugin.toml   # id, port, HARNESS_PROFILE, args → ../_harness/run_profile.py
 ```
 
 **Agent code is not vendored here.** Runtime lives in monorepo `agents/harness-agent` + `packages/agent-runtime`.
@@ -32,8 +39,6 @@ pip install -e packages/a2a-sdk
 pip install -r agents/harness-agent/requirements.txt
 ```
 
-Per-runner CLIs / keys (see [harness-migration.md](../../../../docs/architecture/harness-migration.md)):
-
 | Profile | Needs |
 |---------|--------|
 | claude-code | `claude` on PATH |
@@ -44,11 +49,14 @@ Per-runner CLIs / keys (see [harness-migration.md](../../../../docs/architecture
 
 Optional: set `AOP_REPO_ROOT` if plugins are relocated outside the monorepo.
 
-## Manual smoke (one agent)
+## Manual smoke (one agent, no aopd)
 
 ```powershell
 cd apps\client\aop-node\plugins\claude-code
-python -u run.py
+$env:HARNESS_PROFILE="claude-code"; $env:PORT="8011"; $env:AGENT_ID="claude-code"
+$env:AOP_PLUGIN_DIR=(Resolve-Path .)
+# launch.py (not run_profile.py) keeps self-heartbeat unless AOP_NODE_MANAGED=1
+python -u ..\_harness\launch.py
 # → http://127.0.0.1:8011/health
 ```
 

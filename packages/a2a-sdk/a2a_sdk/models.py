@@ -37,26 +37,6 @@ class TaskStatus(str, Enum):
 
 
 # AOP platform extensions nested under message/params metadata (not top-level RPC).
-_GOVERNANCE_META_KEYS = (
-    ("idempotencyKey", "idempotency_key"),
-    ("correlationId", "correlation_id"),
-    ("parentTaskId", "parent_task_id"),
-    ("rootTaskId", "root_task_id"),
-    ("depth", "depth"),
-    ("callerAgentId", "caller_agent_id"),
-    ("targetAgentId", "target_agent_id"),
-    ("visitedAgents", "visited_agents"),
-    ("governancePolicyId", "governance_policy_id"),
-    ("deadline", "deadline"),
-    ("callbackUrl", "callback_url"),
-)
-
-
-def _meta_get(meta: dict[str, Any], *keys: str) -> Any:
-    for k in keys:
-        if k in meta and meta[k] is not None:
-            return meta[k]
-    return None
 
 
 @dataclass
@@ -74,8 +54,8 @@ class Part:
         return self.type
 
     def to_dict(self) -> dict[str, Any]:
-        # Official wire: kind. Keep type as deprecated alias for AOP readers.
-        payload: dict[str, Any] = {"kind": self.type, "type": self.type}
+        # Official wire discriminator is ``kind`` only (``type`` accepted on read).
+        payload: dict[str, Any] = {"kind": self.type}
         if self.text is not None:
             payload["text"] = self.text
         if self.data is not None:
@@ -150,8 +130,8 @@ class Message:
     def to_dict(self) -> dict[str, Any]:
         """Serialize for official-shaped wire.
 
-        Governance/lineage live under ``metadata``. Deprecated top-level
-        mirrors are still emitted for older AOP agents (Phase 5 cleanup).
+        Governance/lineage live only under ``metadata``. Top-level mirrors are
+        no longer written (inbound ``from_dict`` still accepts them).
         """
         meta = self._governance_into_metadata()
         payload: dict[str, Any] = {
@@ -162,10 +142,6 @@ class Message:
             payload["messageId"] = self.message_id
         if meta:
             payload["metadata"] = meta
-        # Deprecated top-level mirrors (dual-write for AOP ≤ current).
-        for camel, _snake in _GOVERNANCE_META_KEYS:
-            if camel in meta and meta[camel] is not None:
-                payload[camel] = meta[camel]
         return payload
 
     @classmethod

@@ -1187,16 +1187,19 @@ export function recordRuntimeEdge(body: RuntimeEdgeInput) {
   });
 }
 
+/** Raw runtime edges — prefer getCollaborationGraph for Console. */
 export function getRuntimeGraph(rootTaskId: string) {
   return request<RuntimeGraph>(`/v1/runtime/graph/${encodeURIComponent(rootTaskId)}`);
 }
 
+/** Canonical enriched collaboration graph (nodes + links + lifecycle). */
 export function getCollaborationGraph(rootTaskId: string) {
   return request<CollaborationGraph>(
     `/v1/collaboration/graph/${encodeURIComponent(rootTaskId)}`,
   );
 }
 
+/** Same as getCollaborationGraph plus attached Task row. */
 export function getTaskCollaborationGraph(taskId: string) {
   return request<CollaborationGraph>(
     `/v1/tasks/${encodeURIComponent(taskId)}/collaboration-graph`,

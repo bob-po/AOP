@@ -26,11 +26,13 @@ from ..protocol import (
 )
 from ._cli_common import (
     bump_stream_limit,
+    compose_cli_prompt,
     emit_event,
     message_text,
     readline_unlimited,
     resolve_binary,
     resolve_harness_workdir,
+    skill_label,
     system_prompt_from_message,
     workdir_from_message,
 )
@@ -152,10 +154,8 @@ class OpenClawCliRunner:
         started = time.monotonic()
         prompt = message_text(message)
         system = system_prompt_from_message(message)
-        if system:
-            prompt = f"{system}\n\n---\n\nUser task (skill={skill_id}):\n{prompt}"
-        elif prompt:
-            prompt = f"User task (skill={skill_id}):\n{prompt}"
+        if system or skill_label(skill_id):
+            prompt = compose_cli_prompt(prompt, system=system, skill_id=skill_id)
 
         binary = self.resolve_binary()
         if not binary:
@@ -175,7 +175,7 @@ class OpenClawCliRunner:
             )
 
         if not prompt.strip():
-            err = f"OpenClaw received an empty user message (skill={skill_id})."
+            err = "OpenClaw received an empty user message."
             await emit_event(
                 on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
             )

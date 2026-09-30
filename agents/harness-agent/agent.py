@@ -84,12 +84,24 @@ try:
 except ValueError as exc:
     raise SystemExit(str(exc)) from exc
 
+_node_managed = (os.getenv("AOP_NODE_MANAGED") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_hb_default = "0" if _node_managed else "1"
+_enable_heartbeat = (
+    not _node_managed
+    and os.getenv("HARNESS_HEARTBEAT", _hb_default) not in {"0", "false", "off"}
+)
+
 app = create_harness_app(
     agent_id=AGENT_ID,
     runner=_runner,
     card=_card,
     system_prompt=SYSTEM_PROMPT,
-    enable_heartbeat=os.getenv("HARNESS_HEARTBEAT", "1") not in {"0", "false", "off"},
+    enable_heartbeat=_enable_heartbeat,
     title=f"AOP {_card.get('name') or AGENT_ID}",
     version=str(_card.get("version") or "0.1.0"),
 )

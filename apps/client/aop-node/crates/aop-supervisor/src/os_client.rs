@@ -106,9 +106,16 @@ impl OsClient {
     }
 
     pub async fn heartbeat(&self, extra: Option<Value>) -> Result<Value> {
+        self.heartbeat_agent(&self.agent_id, extra).await
+    }
+
+    /// Lifecycle heartbeat for an arbitrary agent id (node or child harness).
+    pub async fn heartbeat_agent(&self, agent_id: &str, extra: Option<Value>) -> Result<Value> {
+        // Lifecycle heartbeats go through Gateway → Orchestrator agent-runtime.
+        // (Gateway owns /v1/agents/* registry; do not POST heartbeat there.)
         let url = format!(
-            "{}/v1/agents/{}/heartbeat",
-            self.orchestrator_url, self.agent_id
+            "{}/v1/agent-runtime/{}/heartbeat",
+            self.gateway_url, agent_id
         );
         let mut body = json!({
             "status": "online",
@@ -128,19 +135,18 @@ impl OsClient {
                 let status = r.status();
                 let text = r.text().await.unwrap_or_default();
                 if !status.is_success() {
-                    // Fallback: try gateway path
-                    return self.heartbeat_gateway(body).await;
+                    return self.heartbeat_orchestrator(agent_id, body).await;
                 }
                 Ok(serde_json::from_str(&text).unwrap_or(json!({"ok": true})))
             }
-            Err(_) => self.heartbeat_gateway(body).await,
+            Err(_) => self.heartbeat_orchestrator(agent_id, body).await,
         }
     }
 
-    async fn heartbeat_gateway(&self, body: Value) -> Result<Value> {
+    async fn heartbeat_orchestrator(&self, agent_id: &str, body: Value) -> Result<Value> {
         let url = format!(
-            "{}/v1/agents/{}/heartbeat",
-            self.gateway_url, self.agent_id
+            "{}/v1/agent-runtime/{}/heartbeat",
+            self.orchestrator_url, agent_id
         );
         let resp = self
             .http
@@ -152,7 +158,7 @@ impl OsClient {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            warn!(%status, %text, "heartbeat failed");
+            warn!(%status, %text, agent_id, "heartbeat failed");
             anyhow::bail!("heartbeat failed: {status} {text}");
         }
         Ok(serde_json::from_str(&text).unwrap_or(json!({"ok": true})))

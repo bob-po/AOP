@@ -14,7 +14,7 @@ from memory import MemoryService
 from observability import MetricsService
 from planner.engine import PlanningEngine
 from quota import QuotaService
-from router.engine import RoutingEngine
+from router import AgentRouter
 from runtime_graph import RuntimeGraphService
 from scheduler.engine import SchedulingEngine
 from streams import StreamClient
@@ -30,8 +30,7 @@ class TaskService:
     def __init__(self) -> None:
         self.planner_engine = PlanningEngine()
         self.planner = self.planner_engine.planner
-        self.router_engine = RoutingEngine()
-        self.router = self.router_engine.router
+        self.router = AgentRouter()
         self.runtime_graph = RuntimeGraphService()
         self.streams = StreamClient()
         self.artifact_store = ArtifactStore()
@@ -164,15 +163,15 @@ class TaskService:
     # ── router ───────────────────────────────────────────────────────────
 
     def router_preview(self, skill: str) -> dict[str, Any]:
-        return self.router_engine.preview(skill)
+        return self.router.preview(skill)
 
     def discover(self, **kwargs: Any) -> dict[str, Any]:
         """A2A OS: capability-aware Agent discovery (callable by any Agent)."""
-        return self.router_engine.discover(**kwargs)
+        return self.router.discover(**kwargs)
 
     def route(self, **kwargs: Any) -> dict[str, Any]:
         """A2A OS: select the best Agent for a request (callable by any Agent)."""
-        return self.router_engine.route(**kwargs)
+        return self.router.route(**kwargs)
 
     # ── runtime execution graph ──────────────────────────────────────────
 
@@ -348,7 +347,7 @@ class TaskService:
         return out
 
     def agent_performance(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        return self.router_engine.agent_performance(limit=limit)
+        return self.router.agent_performance(limit=limit)
 
     # ── evaluation ───────────────────────────────────────────────────────
 

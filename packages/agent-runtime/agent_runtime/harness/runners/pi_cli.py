@@ -32,6 +32,7 @@ from ._cli_common import (
     resolve_binary,
     resolve_harness_workdir,
     run_openai_compatible_sync,
+    skill_label,
     system_prompt_from_message,
     workdir_from_message,
 )
@@ -169,8 +170,6 @@ class PiCliRunner:
         has_key = bool(_pi_api_key() or (os.getenv("ANTHROPIC_API_KEY") or "").strip())
         if self.resolve_binary() and has_key:
             return {"ready": True, "mode": "cli"}
-        if has_key:
-            return {"ready": True, "mode": "tool_loop"}
         if self.resolve_binary():
             return {
                 "ready": False,
@@ -178,6 +177,17 @@ class PiCliRunner:
                 "reason": (
                     "Pi CLI found but no provider API key. Set DEEPSEEK_API_KEY "
                     "(or OPENAI_API_KEY / ANTHROPIC_API_KEY) in agents/harness-agent/.env."
+                ),
+            }
+        if has_key:
+            # Chat completion fallback exists but is not a product-ready Pi harness.
+            return {
+                "ready": False,
+                "mode": "llm_chat_stub",
+                "reason": (
+                    "Pi CLI not found. An OpenAI-compatible chat fallback can still "
+                    "run when routed explicitly, but this agent is not advertised "
+                    "as ready. Install @earendil-works/pi-coding-agent or set PI_CLI_PATH."
                 ),
             }
         return {
@@ -306,10 +316,7 @@ class PiCliRunner:
         prompt = message_text(message)
         system = system_prompt_from_message(message)
         if not prompt:
-            err = (
-                "Pi CLI received an empty user message "
-                f"(skill={skill_id}). Check A2A message.parts text."
-            )
+            err = "Pi CLI received an empty user message. Check A2A message.parts text."
             await emit_event(
                 on_event, task_id=task_id, etype=HarnessEventType.ERROR, payload={"error": err}
             )
@@ -336,6 +343,12 @@ class PiCliRunner:
         if os.getenv("PI_OFFLINE", "").lower() in {"1", "true", "yes"}:
             argv.append("--offline")
         sys_file: Optional[Path] = None
+        label = skill_label(skill_id)
+        pi_role = (
+            f"You are Pi Agent (skill={label}). Follow the user goal carefully."
+            if label
+            else "You are Pi Agent. Follow the user goal carefully."
+        )
         if system:
             import tempfile
 
@@ -346,7 +359,7 @@ class PiCliRunner:
             argv.extend(
                 [
                     "--system-prompt",
-                    f"You are Pi Agent (skill={skill_id}). Follow the user goal carefully.",
+                    pi_role,
                 ]
             )
             argv.extend(["--append-system-prompt", str(sys_file)])
@@ -374,7 +387,7 @@ class PiCliRunner:
                 if system and sys_file is not None:
                     sys_args = [
                         "--system-prompt",
-                        f"You are Pi Agent (skill={skill_id}). Follow the user goal carefully.",
+                        pi_role,
                         "--append-system-prompt",
                         str(sys_file),
                     ]

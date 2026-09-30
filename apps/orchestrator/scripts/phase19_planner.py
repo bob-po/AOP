@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 19 smoke: planner v2 unit tests."""
+"""Deprecated alias — prefer ``pytest -q tests/test_planner*.py``.
+
+Kept for docs that still reference phase19.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +14,7 @@ ORCH = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
-    print("[1/1] Planner v2 + legacy heuristic tests")
+    print("NOTE: phase19 is a thin pytest wrapper. Prefer: pytest -q tests/test_planner*")
     rc = subprocess.call(
         [
             sys.executable,
@@ -19,15 +22,11 @@ def main() -> int:
             "pytest",
             "-q",
             "tests/test_planner_v2.py",
-            "tests/test_planner_heuristic.py",
-            "tests/test_dag.py",
+            "tests/test_planner.py",
         ],
         cwd=str(ORCH),
     )
-    if rc != 0:
-        return rc
-    print("PHASE19 OK")
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

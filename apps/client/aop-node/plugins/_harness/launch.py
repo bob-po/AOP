@@ -14,8 +14,6 @@ PACKAGE_DIRS = (
     "packages/agent-runtime",
     "packages/a2a-sdk",
     "packages/llm-provider",
-    "packages/schemas",
-    "packages/common",
 )
 
 
@@ -73,8 +71,19 @@ def main() -> None:
     os.environ.setdefault("AGENT_ID", profile)
     os.environ["PORT"] = str(port)
     os.environ["AGENT_URL"] = f"http://127.0.0.1:{port}/"
-    os.environ.setdefault("HARNESS_HEARTBEAT", "1")
     os.environ["HARNESS_PROFILE"] = profile
+
+    # Under aop-node, heartbeat is owned by the supervisor.
+    managed = (os.environ.get("AOP_NODE_MANAGED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if managed:
+        os.environ["HARNESS_HEARTBEAT"] = "0"
+    else:
+        os.environ.setdefault("HARNESS_HEARTBEAT", "1")
 
     repo = resolve_repo(plugin_dir)
     harness = repo / "agents" / "harness-agent"

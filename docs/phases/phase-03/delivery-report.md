@@ -60,13 +60,11 @@ infrastructure/postgres/init/020_a2a_phase3_execution.sql
 | POST | `/v1/tasks/{id}/recover` | 恢复分类 + 独占 ownership |
 | GET | `/v1/collaboration/graph/{root}` | + lifecycle |
 | GET | `/v1/collaboration/events/{root}` | 协作事件流 |
-| GET | `/v1/agents/{id}/health` | 生命周期健康 |
-| POST | `/v1/agents/{id}/heartbeat` | 心跳 |
-| POST | `/v1/agents/{id}/drain` | Drain |
-| GET/POST | `/v1/agent-runtime/{id}/…` | Gateway 安全别名 |
+| GET | `/v1/agent-runtime/{id}/health` | 生命周期健康（Gateway 亦代理 `GET /v1/agents/{id}/health`） |
+| POST | `/v1/agent-runtime/{id}/heartbeat` | 心跳 |
+| POST | `/v1/agent-runtime/{id}/drain` | Drain |
 
 Gateway：`/v1/agent-runtime/*`、`/v1/collaboration/*`、`/v1/governance/*` 代理。
-
 CLI（`scripts/aop.py`）：
 `task events|execution|cancel|recover|graph`，`agent health|drain`。
 
@@ -159,7 +157,7 @@ heartbeat 自动 READY/BUSY；drain 后拒绝新任务；`active_tasks==0` → O
 ## 14. 已知限制
 
 1. Execution Record / Lifecycle **默认内存**；生产需跑 `020_*.sql` 并用 `PostgresExecutionRecordStore`（类已提供，服务默认内存便于 hermetic）。
-2. Gateway 上 `/v1/agents/{id}/health` 与 registry 的 `POST .../health` 并存；经 Gateway 请用 `/v1/agent-runtime/{id}/*`。
+2. Gateway 上 `GET /v1/agents/{id}/health` 代理到 Orchestrator 生命周期；`POST /v1/agents/{id}/health` 仍是 Registry 主动探测。心跳/Drain 一律走 `/v1/agent-runtime/{id}/*`。
 3. Cancel 级联覆盖 **execution records**；向下游 Agent 推送 A2A `tasks/cancel` 仍依赖既有 agent 能力，未做全图 HTTP fan-out。
 4. Trace 跨进程 agent↔agent span 属性约定已具备字段，未强制改动所有 Agent 埋点。
 5. Capacity `wait` 策略仅 policy 字段预留，当前门禁为 reject。

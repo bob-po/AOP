@@ -203,19 +203,13 @@ def cmd_task_cost(args) -> int:
 
 
 def cmd_agent_health(args) -> int:
-    try:
-        data = _os_get(f"/v1/agents/{args.agent_id}/health")
-    except httpx.HTTPError:
-        data = _os_get(f"/v1/agent-runtime/{args.agent_id}/health")
+    data = _os_get(f"/v1/agent-runtime/{args.agent_id}/health")
     print(json.dumps(data, indent=2, default=str))
     return 0
 
 
 def cmd_agent_drain(args) -> int:
-    try:
-        data = _os_post(f"/v1/agents/{args.agent_id}/drain")
-    except httpx.HTTPError:
-        data = _os_post(f"/v1/agent-runtime/{args.agent_id}/drain")
+    data = _os_post(f"/v1/agent-runtime/{args.agent_id}/drain")
     print(json.dumps(data, indent=2, default=str))
     return 0
 

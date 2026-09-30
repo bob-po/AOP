@@ -282,38 +282,18 @@ class StartupReconciler:
         return fixed
 
 
-class DisasterRecoveryManager:
-    """Disaster recovery management."""
-    
+class SystemHealthProbe:
+    """Read-only health snapshot from Postgres (no fake backup/restore)."""
+
     def __init__(self, database_url: str | None = None):
         self.database_url = database_url or os.getenv(
             "DATABASE_URL",
             "postgresql://aop:aop@127.0.0.1:5432/aop",
         )
-    
-    def create_backup_snapshot(self) -> str:
-        """Create a backup snapshot (placeholder for actual backup implementation)."""
-        # This would integrate with your backup system
-        # For now, return a timestamp
-        return _utc_now().isoformat()
-    
-    def verify_backup_integrity(self, backup_id: str) -> bool:
-        """Verify backup integrity (placeholder)."""
-        # This would check backup checksums and restore capability
-        return True
-    
-    def restore_from_backup(self, backup_id: str) -> bool:
-        """Restore from backup (placeholder)."""
-        # This would implement actual restore logic
-        return True
-    
+
     def get_system_health(self) -> dict[str, Any]:
-        """Get overall system health status."""
         with connect(self.database_url) as conn:
-            # Database connection check
             db_health = conn.execute("SELECT 1 as healthy").fetchone()
-            
-            # Task statistics
             task_stats = conn.execute(
                 """
                 SELECT status, COUNT(*) as count
@@ -321,8 +301,6 @@ class DisasterRecoveryManager:
                 GROUP BY status
                 """,
             ).fetchall()
-            
-            # Node statistics
             node_stats = conn.execute(
                 """
                 SELECT status, COUNT(*) as count
@@ -330,7 +308,6 @@ class DisasterRecoveryManager:
                 GROUP BY status
                 """,
             ).fetchall()
-            
             return {
                 "database_healthy": db_health["healthy"] == 1 if db_health else False,
                 "task_stats": {row["status"]: row["count"] for row in task_stats},
@@ -341,7 +318,7 @@ class DisasterRecoveryManager:
 
 # Singleton instances
 _startup_reconciler: StartupReconciler | None = None
-_disaster_recovery_manager: DisasterRecoveryManager | None = None
+_system_health_probe: SystemHealthProbe | None = None
 
 
 def get_startup_reconciler() -> StartupReconciler:
@@ -352,9 +329,9 @@ def get_startup_reconciler() -> StartupReconciler:
     return _startup_reconciler
 
 
-def get_disaster_recovery_manager() -> DisasterRecoveryManager:
-    """Get or create the singleton disaster recovery manager."""
-    global _disaster_recovery_manager
-    if _disaster_recovery_manager is None:
-        _disaster_recovery_manager = DisasterRecoveryManager()
-    return _disaster_recovery_manager
+def get_system_health_probe() -> SystemHealthProbe:
+    """Get or create the singleton system health probe."""
+    global _system_health_probe
+    if _system_health_probe is None:
+        _system_health_probe = SystemHealthProbe()
+    return _system_health_probe

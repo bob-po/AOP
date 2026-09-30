@@ -188,11 +188,16 @@ impl Supervisor {
         };
         self.whitelist.check(&req).map_err(|e| anyhow!(e))?;
 
+        let mut env = planned.env;
+        // Edge SoT: supervisor owns OS heartbeats for children.
+        env.insert("AOP_NODE_MANAGED".into(), "1".into());
+        env.insert("HARNESS_HEARTBEAT".into(), "0".into());
+
         let spec = SpawnSpec {
             id: planned.id,
             command: planned.command,
             args: planned.args,
-            env: planned.env,
+            env,
             workdir: planned.workdir,
         };
         self.processes.spawn(spec).await
@@ -271,14 +276,29 @@ impl Supervisor {
         loop {
             tokio::time::sleep(interval).await;
             let children = self.processes.list().await;
+            let planned_ids: Vec<String> = self.planned.read().await.keys().cloned().collect();
             let extra = serde_json::json!({
                 "children": children.iter().map(|c| {
                     serde_json::json!({"id": c.id, "pid": c.pid, "running": c.running})
                 }).collect::<Vec<_>>(),
             });
             let os = self.os.read().await;
-            if let Err(e) = os.heartbeat(Some(extra)).await {
-                warn!(error = %e, "heartbeat error");
+            // Node supervisor heartbeat.
+            if let Err(e) = os.heartbeat(Some(extra.clone())).await {
+                warn!(error = %e, "node heartbeat error");
+            }
+            // Child harness lifecycle (AOP_NODE_MANAGED children do not self-heartbeat).
+            for id in planned_ids {
+                if id == "echo" {
+                    continue;
+                }
+                let child_extra = serde_json::json!({
+                    "managed_by": self.cfg.node_id,
+                    "plugin_id": id,
+                });
+                if let Err(e) = os.heartbeat_agent(&id, Some(child_extra)).await {
+                    warn!(agent_id = %id, error = %e, "child heartbeat error");
+                }
             }
         }
     }

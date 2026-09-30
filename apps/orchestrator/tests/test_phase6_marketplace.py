@@ -19,7 +19,7 @@ from marketplace import (
     validate_manifest,
 )
 from marketplace.deps import Dependency
-from marketplace.sandbox_provider import DockerSandbox, get_sandbox_provider
+from marketplace.sandbox_provider import get_sandbox_provider
 from scheduling import Requirement, SchedulingService, filter_by_capability
 from scheduling.capability import Capability, capability_match
 
@@ -211,11 +211,8 @@ def test_sandbox():
         )
     )
     assert not deny.ok
-    docker = get_sandbox_provider("docker")
-    assert isinstance(docker, DockerSandbox)
-    assert not docker.provision(
-        SandboxSpec(agent_key="c", version="1", endpoint="http://x")
-    ).ok
+    with pytest.raises(ValueError, match="not implemented"):
+        get_sandbox_provider("docker")
 
 
 def test_dynamic_discovery():

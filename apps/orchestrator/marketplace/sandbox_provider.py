@@ -117,55 +117,11 @@ class LocalProcessSandbox(SandboxProvider):
         self._active.pop(sandbox_id, None)
 
 
-class DockerSandbox(SandboxProvider):
-    """Reserved — not implemented; returns not-supported."""
-
-    kind = "docker"
-
-    def provision(self, spec: SandboxSpec) -> SandboxResult:
-        return SandboxResult(
-            ok=False,
-            sandbox_id="",
-            kind=self.kind,
-            endpoint=spec.endpoint,
-            error="DockerSandbox not enabled in this environment",
-        )
-
-    def health_check(self, sandbox_id: str) -> bool:
-        return False
-
-    def destroy(self, sandbox_id: str) -> None:
-        return None
-
-
-class KubernetesSandbox(SandboxProvider):
-    """Reserved — not implemented; returns not-supported."""
-
-    kind = "kubernetes"
-
-    def provision(self, spec: SandboxSpec) -> SandboxResult:
-        return SandboxResult(
-            ok=False,
-            sandbox_id="",
-            kind=self.kind,
-            endpoint=spec.endpoint,
-            error="KubernetesSandbox not enabled in this environment",
-        )
-
-    def health_check(self, sandbox_id: str) -> bool:
-        return False
-
-    def destroy(self, sandbox_id: str) -> None:
-        return None
-
-
 def get_sandbox_provider(kind: str = "local_process") -> SandboxProvider:
-    mapping = {
-        "local_process": LocalProcessSandbox,
-        "local": LocalProcessSandbox,
-        "docker": DockerSandbox,
-        "kubernetes": KubernetesSandbox,
-        "k8s": KubernetesSandbox,
-    }
-    cls = mapping.get(kind, LocalProcessSandbox)
-    return cls()
+    """Return a real sandbox implementation. Docker/K8s are not shipped yet."""
+    key = (kind or "local_process").strip().lower()
+    if key in ("local_process", "local", ""):
+        return LocalProcessSandbox()
+    raise ValueError(
+        f"sandbox kind {kind!r} is not implemented; only 'local_process' is available"
+    )

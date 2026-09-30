@@ -2,7 +2,7 @@ id = "openclaw"
 version = "0.1.0"
 kind = "agent"
 command = "python"
-args = ["-u", "run.py"]
+args = ["-u", "../_harness/run_profile.py"]
 workdir = "."
 health_url = "http://127.0.0.1:8014/health"
 description = "OpenClaw harness agent (aop-node plugin → agents/harness-agent)"
@@ -12,7 +12,7 @@ PORT = "8014"
 AGENT_URL = "http://127.0.0.1:8014/"
 HARNESS_PROFILE = "openclaw"
 AGENT_ID = "openclaw"
-HARNESS_HEARTBEAT = "1"
+AOP_NODE_MANAGED = "1"
+HARNESS_HEARTBEAT = "0"
 HARNESS_RUNNER = "openclaw"
-# Absolute path so aopd children find the CLI even if PATH is incomplete.
-OPENCLAW_CLI_PATH = "C:\\Users\\guojiayang\\AppData\\Roaming\\npm\\openclaw.cmd"
+# Resolve openclaw via PATH, or set OPENCLAW_CLI_PATH in aop-node.toml / user env.

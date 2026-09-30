@@ -11,8 +11,8 @@
 | Card `protocolVersion` | **`0.3.0`**（与钉扎 spec 的 JSON 绑定一致） |
 | Agent Card 发现 | 优先 `GET /.well-known/agent-card.json`；兼容 `/.well-known/agent.json` |
 | 调用传输 | JSON-RPC 2.0，`POST {agent.url}`（preferredTransport=`JSONRPC`） |
-| Part 判别 | 写出 **`kind`**；读入同时接受 `kind` \| `type` |
-| 平台扩展 | 放在 `params.metadata` / `message.metadata`（及 Card `extensions`）；OS 控制面仍为 `/v1/*` |
+| Part 判别 | 写出 **`kind`**；读入同时接受 `kind` \| `type`（不再 dual-write `type`） |
+| 平台扩展 | 仅写在 `params.metadata` / `message.metadata`；读入仍接受顶层兼容字段 |
 | SDK 包 | `packages/a2a-sdk`（`aop-a2a-sdk`） |
 | 超时 | `A2A_TIMEOUT`（Worker 默认 60s） |
 
@@ -28,8 +28,8 @@
 | Push (`pushNotificationConfig` / callback) | Later→partial | `metadata.pushNotificationConfig.url` + 兼容旧 `callbackUrl` |
 | `tasks/resubscribe` | Later | 未实现 |
 | `agent/getAuthenticatedExtendedCard` | Later | 未实现 |
-| `tasks/subscribe` | Deprecated | 仍可调用（快照）；勿写入新文档 |
-| `tasks/delegate` | Deprecated | AOP 扩展；请用 OS discover/route + `message/send` |
+| `tasks/subscribe` | Removed | SDK/服务端均返回 `-32601`；改用 `message/stream` |
+| `tasks/delegate` | Removed | SDK/服务端均返回 `-32601`；改用 OS discover/route + `message/send` |
 
 ## 要点
 

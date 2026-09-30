@@ -142,10 +142,22 @@ POST   /v1/tasks/{task_id}/memory/promote  # 将任务 goal/node 摘要提升到
 | `GET` | `/v1/agents/{id}` | 详情 |
 | `POST` | `/v1/agents/register` | `{ "endpoint" }` → 拉 Card → 入库 |
 | `POST` | `/v1/agents/{id}/enable` / `disable` | 启用 / 禁用 |
-| `POST` | `/v1/agents/{id}/health` | 主动探测 |
+| `POST` | `/v1/agents/{id}/health` | 主动探测（Registry probe） |
 | `DELETE` | `/v1/agents/{id}` | 删除 |
 
 注册流程：拉取 Agent Card → 解析 Skills → 写 PG + Redis Skill Set → Health → Online。
+
+> Manifest 安装请用 `POST /v1/marketplace/register` 或 `POST /v1/agent-runtime/register`（不要与 Gateway 的 endpoint 注册混淆）。
+
+### Agent lifecycle（Orchestrator · 经 Gateway `/v1/agent-runtime/*`）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/v1/agent-runtime/{id}/health` | 生命周期健康（Gateway 亦代理 `GET /v1/agents/{id}/health`） |
+| `POST` | `/v1/agent-runtime/{id}/heartbeat` | 心跳 |
+| `POST` | `/v1/agent-runtime/{id}/drain` | Drain |
+| `POST` | `/v1/agent-runtime/{id}/unregister` | 下线 |
+| `POST` | `/v1/agent-runtime/register` | Manifest 注册 |
 
 ---
 

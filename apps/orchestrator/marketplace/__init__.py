@@ -31,8 +31,6 @@ from marketplace.permissions import PermissionService, PermissionDecision
 from marketplace.sandbox_provider import (
     SandboxProvider,
     LocalProcessSandbox,
-    DockerSandbox,
-    KubernetesSandbox,
     get_sandbox_provider,
     SandboxSpec,
     SandboxResult,
@@ -65,8 +63,6 @@ __all__ = [
     "PermissionDecision",
     "SandboxProvider",
     "LocalProcessSandbox",
-    "DockerSandbox",
-    "KubernetesSandbox",
     "get_sandbox_provider",
     "SandboxSpec",
     "SandboxResult",

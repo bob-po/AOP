@@ -608,6 +608,9 @@ def discover_agents(body: DiscoverRequest) -> dict[str, Any]:
 
     Returns ranked candidate Agents; the caller decides whom to invoke. This is
     infrastructure, not central orchestration.
+
+    Distinct from ``/v1/scheduling/*`` which applies tenant policy / cost /
+    capacity for platform task placement.
     """
     try:
         return tasks.discover(
@@ -690,7 +693,10 @@ def record_runtime_edge(body: RuntimeEdgeRequest) -> dict[str, Any]:
 
 @app.get("/v1/runtime/graph/{root_task_id}")
 def runtime_graph(root_task_id: str) -> dict[str, Any]:
-    """A2A OS: reconstruct the runtime execution graph for a root task."""
+    """Raw runtime edge list for a root task (debug / lineage).
+
+    Prefer ``GET /v1/collaboration/graph/{id}`` for Console UI (enriched nodes/links).
+    """
     try:
         return tasks.runtime_graph_view(root_task_id)
     except Exception as exc:  # noqa: BLE001
@@ -727,7 +733,11 @@ def _collaboration_graph_payload(root_task_id: str) -> dict[str, Any]:
 
 @app.get("/v1/collaboration/graph/{root_task_id}")
 def collaboration_graph(root_task_id: str, request: Request) -> dict[str, Any]:
-    """A2A OS: frontend-ready collaboration graph (nodes + links + tree)."""
+    """Canonical collaboration graph for Console (nodes + links + tree + lifecycle).
+
+    ``GET /v1/tasks/{id}/collaboration-graph`` is the same payload plus a ``task``
+    row when the id is a known orchestrator task.
+    """
     _forbid_cross_tenant(request, _resource_tenant_from_graph(root_task_id))
     try:
         return _collaboration_graph_payload(root_task_id)
@@ -1388,10 +1398,10 @@ def replay_task_node(
 
 @app.get("/v1/tasks/{task_id}/collaboration-graph")
 def task_collaboration_graph(task_id: str) -> dict[str, Any]:
-    """A2A OS: collaboration graph rooted at a central Task id.
+    """Alias of ``/v1/collaboration/graph/{id}`` with an attached Task row.
 
-    Associates the orchestrator's Task with the runtime Agent-to-Agent edges
-    recorded under the same ``root_task_id`` (seeded by the executor).
+    Prefer the collaboration path for generic graph fetches; use this when the
+    UI already has a Task id and wants ``graph.task`` metadata in one round-trip.
     """
     row = tasks.get(task_id)
     if not row:
@@ -1485,11 +1495,10 @@ class AgentHeartbeatRequest(BaseModel):
 @app.get("/v1/agents/{agent_id}/health")
 @app.get("/v1/agent-runtime/{agent_id}/health")
 def agent_health(agent_id: str) -> dict[str, Any]:
-    """Phase 3: OS-side agent health + lifecycle."""
+    """Lifecycle health. Prefer ``/v1/agent-runtime/...``; ``/v1/agents/...`` kept for Gateway GET proxy."""
     return agent_lifecycle.health(agent_id)
 
 
-@app.post("/v1/agents/{agent_id}/heartbeat")
 @app.post("/v1/agent-runtime/{agent_id}/heartbeat")
 def agent_heartbeat(agent_id: str, body: AgentHeartbeatRequest | None = None) -> dict[str, Any]:
     body = body or AgentHeartbeatRequest()
@@ -1503,10 +1512,9 @@ def agent_heartbeat(agent_id: str, body: AgentHeartbeatRequest | None = None) ->
     return rec.to_dict()
 
 
-@app.post("/v1/agents/{agent_id}/drain")
 @app.post("/v1/agent-runtime/{agent_id}/drain")
 def agent_drain(agent_id: str) -> dict[str, Any]:
-    """Phase 3: stop accepting new work; finish in-flight then OFFLINE."""
+    """Stop accepting new work; finish in-flight then OFFLINE."""
     try:
         if agent_lifecycle.get(agent_id) is None:
             agent_lifecycle.register(agent_id)
@@ -2050,8 +2058,8 @@ def marketplace_install(body: InstallRequest) -> dict[str, Any]:
         ) from exc
 
 
-@app.post("/v1/agents/register", status_code=201)
-def agents_register_manifest(body: ManifestRegisterRequest) -> dict[str, Any]:
+def _register_manifest(body: ManifestRegisterRequest) -> dict[str, Any]:
+    """Shared manifest install path (not Gateway endpoint+card registry)."""
     try:
         return marketplace.register_manifest(
             body.as_manifest_dict(),
@@ -2068,30 +2076,19 @@ def agents_register_manifest(body: ManifestRegisterRequest) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail={"code": "register_failed", "message": str(exc)}) from exc
 
 
-# Gateway owns /v1/agents/* registry — expose manifest register via marketplace + agent-runtime proxies.
+# Gateway owns POST /v1/agents/register (endpoint + AgentCard).
+# Manifest registration lives under marketplace / agent-runtime only.
 @app.post("/v1/marketplace/register", status_code=201)
 def marketplace_register_manifest(body: ManifestRegisterRequest) -> dict[str, Any]:
-    return agents_register_manifest(body)
+    return _register_manifest(body)
 
 
 @app.post("/v1/agent-runtime/register", status_code=201)
 def agent_runtime_register_manifest(body: ManifestRegisterRequest) -> dict[str, Any]:
-    return agents_register_manifest(body)
+    return _register_manifest(body)
 
 
-@app.post("/v1/agents/{agent_id}/heartbeat")
-def agents_heartbeat(agent_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    body = body or {}
-    return marketplace.heartbeat(
-        agent_id,
-        active_tasks=body.get("active_tasks"),
-        load=body.get("load"),
-        version=body.get("version"),
-        capabilities=body.get("capabilities"),
-    )
-
-
-@app.post("/v1/agents/{agent_id}/unregister")
+@app.post("/v1/agent-runtime/{agent_id}/unregister")
 def agents_unregister(agent_id: str, agent_key: str | None = None) -> dict[str, Any]:
     return marketplace.unregister(agent_id, agent_key=agent_key)
 

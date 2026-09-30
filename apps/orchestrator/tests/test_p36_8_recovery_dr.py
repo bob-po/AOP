@@ -149,36 +149,24 @@ def test_recovery_simulation():
         traceback.print_exc()
         return False
 
-def test_disaster_recovery_manager():
-    """Test disaster recovery manager"""
-    print_section("Disaster Recovery Manager Test (P36.8)")
-    
+def test_system_health_probe():
+    """Test read-only system health probe (fake DR backup APIs removed)."""
+    print_section("System Health Probe Test (P36.8)")
+
     try:
-        from recovery_and_dr import DisasterRecoveryManager
-        
-        dr_manager = DisasterRecoveryManager(database_url=DATABASE_URL)
-        
-        print("[INFO] Testing backup snapshot creation...")
-        backup_id = dr_manager.create_backup_snapshot()
-        
-        if backup_id:
-            print(f"[OK] Backup snapshot created: {backup_id}")
-        else:
-            print(f"[FAIL] Backup snapshot creation failed")
-            return False
-        
-        print("[INFO] Testing backup integrity verification...")
-        verified = dr_manager.verify_backup_integrity(backup_id)
-        
-        if verified:
-            print(f"[OK] Backup integrity verified")
-        else:
-            print(f"[FAIL] Backup integrity verification failed")
-            return False
-        
-        return True
+        from recovery_and_dr import SystemHealthProbe
+
+        probe = SystemHealthProbe(database_url=DATABASE_URL)
+        print("[INFO] Testing system health snapshot...")
+        health = probe.get_system_health()
+
+        if health.get("database_healthy") is True:
+            print(f"[OK] System health: {health}")
+            return True
+        print(f"[FAIL] Unexpected health payload: {health}")
+        return False
     except Exception as e:
-        print(f"[FAIL] Disaster recovery manager test failed: {e}")
+        print(f"[FAIL] System health probe test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -186,33 +174,33 @@ def test_disaster_recovery_manager():
 def main():
     """Run P36.8 tests"""
     print_section("Phase 36.8 Recovery and DR Test")
-    print("Testing: Startup Reconciliation, Recovery Simulation, Disaster Recovery")
-    print("Focus: Recovery mechanisms and disaster preparedness\n")
-    
+    print("Testing: Startup Reconciliation, Recovery Simulation, System Health")
+    print("Focus: Recovery mechanisms and operational health\n")
+
     results = []
-    
+
     # Test 1: Startup reconciliation
     results.append(("Startup Reconciliation", test_startup_reconciliation()))
-    
+
     # Test 2: Recovery simulation
     results.append(("Recovery Simulation", test_recovery_simulation()))
-    
-    # Test 3: Disaster recovery manager
-    results.append(("Disaster Recovery Manager", test_disaster_recovery_manager()))
-    
+
+    # Test 3: System health probe
+    results.append(("System Health Probe", test_system_health_probe()))
+
     # Summary
     print_section("Test Summary")
     passed = sum(1 for _, result in results if result)
     total = len(results)
-    
+
     for test_name, result in results:
         status = "[PASS]" if result else "[FAIL]"
         print(f"{status}: {test_name}")
-    
+
     print(f"\nTotal: {passed}/{total} tests passed")
-    
+
     if passed == total:
-        print("\n[SUCCESS] All tests passed! Phase 36.8 recovery and DR is operational.")
+        print("\n[SUCCESS] All tests passed! Phase 36.8 recovery is operational.")
     else:
         print(f"\n[WARNING] {total - passed} test(s) failed. Review the output above for details.")
 

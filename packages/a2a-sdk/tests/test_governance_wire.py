@@ -28,10 +28,10 @@ def test_message_wire_roundtrip_carries_governance_context():
     assert wire["metadata"]["visitedAgents"] == ["agent-a", "agent-b"]
     assert wire["metadata"]["governancePolicyId"] == "policy-default"
     assert wire["metadata"]["deadline"] == "2026-01-01T00:00:00+00:00"
-    # Deprecated top-level mirrors still present for older agents:
-    assert wire["visitedAgents"] == ["agent-a", "agent-b"]
-    assert wire["callerAgentId"] == "agent-a"
-    assert wire["targetAgentId"] == "agent-b"
+    # Top-level mirrors are no longer written:
+    assert "visitedAgents" not in wire
+    assert "callerAgentId" not in wire
+    assert "targetAgentId" not in wire
 
     back = Message.from_dict(wire)
     assert back.visited_agents == ["agent-a", "agent-b"]
@@ -41,17 +41,21 @@ def test_message_wire_roundtrip_carries_governance_context():
     assert back.caller_agent_id == "agent-a"
 
 
-def test_message_from_dict_accepts_snake_case_and_csv_visits():
+def test_message_from_dict_still_accepts_legacy_top_level():
+    """Inbound compat: old agents may still send top-level governance fields."""
     back = Message.from_dict(
         {
             "role": "user",
-            "parts": [],
-            "visited_agents": "agent-a,agent-b",
-            "governance_policy_id": "p2",
+            "parts": [{"kind": "text", "text": "hi"}],
+            "visitedAgents": ["agent-a"],
+            "callerAgentId": "agent-a",
+            "correlationId": "corr-legacy",
         }
     )
-    assert back.visited_agents == ["agent-a", "agent-b"]
-    assert back.governance_policy_id == "p2"
+    assert back.visited_agents == ["agent-a"]
+    assert back.caller_agent_id == "agent-a"
+    assert back.correlation_id == "corr-legacy"
+
 
 
 def test_send_text_emits_governance_context_on_params():
@@ -92,9 +96,9 @@ def test_send_text_emits_governance_context_on_params():
     assert meta["depth"] == 1
     assert meta["callbackUrl"] == "http://cb/done"
     assert meta["pushNotificationConfig"]["url"] == "http://cb/done"
-    # Deprecated top-level mirrors (compat):
-    assert params["visitedAgents"] == ["agent-a"]
-    assert params["callbackUrl"] == "http://cb/done"
+    # Top-level mirrors are no longer dual-written:
+    assert "visitedAgents" not in params
+    assert "callbackUrl" not in params
     # Nested message metadata carries the same context:
     assert params["message"]["metadata"]["visitedAgents"] == ["agent-a"]
     assert params["message"]["metadata"]["governancePolicyId"] == "policy-x"

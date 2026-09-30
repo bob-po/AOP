@@ -319,10 +319,6 @@ class AgentCollaborator:
 
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(url, json=body, headers=headers)
-                if resp.status_code >= 400:
-                    # Fallback path used by some gateways
-                    alt = f"{self.os_url}/v1/agents/{self.agent_id}/heartbeat"
-                    resp = client.post(alt, json=body, headers=headers)
                 return resp.status_code < 400
         except Exception as exc:  # noqa: BLE001
             logger.debug("[%s] heartbeat failed: %s", self.agent_id, exc)

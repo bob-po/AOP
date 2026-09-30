@@ -63,13 +63,14 @@ def test_message_send_response_fixture_parses_task():
     assert "hello a2a" in (task.artifacts[0].text() or "")
 
 
-def test_part_reads_kind_or_type_writes_kind():
+def test_part_reads_kind_or_type_writes_kind_only():
     p = Part.from_dict({"kind": "text", "text": "a"})
     assert p.type == "text"
     q = Part.from_dict({"type": "data", "data": {"x": 1}})
     assert q.type == "data"
-    assert p.to_dict()["kind"] == "text"
-    assert "type" in p.to_dict()  # deprecated alias
+    wire = p.to_dict()
+    assert wire["kind"] == "text"
+    assert "type" not in wire
 
 
 def test_task_status_rejected_and_auth_required():

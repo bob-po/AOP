@@ -59,7 +59,7 @@ Wire 约定：
 - 产物可返回内联 Text/JSON；平台会落盘 MinIO
 - Code / Browser / RPA 类 Agent 必须容器隔离（见 [agent-sandbox.md](./agent-sandbox.md)）
 - 本地开发时 Docker 主机名在 `AOP_RUNTIME=host` 时会被 Router 映射为 `127.0.0.1:端口`
-- 废弃（仍可读，勿新写）：`tasks/delegate`、Part 仅写 `type`、governance 顶层字段（请用 `metadata`）
+- 已移除：`tasks/delegate`、`tasks/subscribe`（服务端 `-32601`）。Part 写出 `kind`；governance 只写 `metadata`（读入仍接受旧顶层字段）
 
 ## 已落地 Agents（harness profiles）
 

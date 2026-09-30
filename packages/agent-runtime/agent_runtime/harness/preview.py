@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from .process import ManagedProcess, ProcessSupervisor
-from .runners._cli_common import resolve_binary
+from .runners._cli_common import resolve_binary, skill_label
 
 logger = logging.getLogger(__name__)
 
@@ -502,8 +502,8 @@ def build_preview_user_prompt(
         "- When finished, write the final answer to `output.md` in the working directory (overwrite OK).",
         "- If this prompt looks truncated, read `preview_prompt.md` / `USER_GOAL.md` in the working directory.",
     ]
-    if skill_id:
-        parts.extend(["", f"(skill={skill_id})"])
+    if skill_label(skill_id):
+        parts.extend(["", f"(skill={skill_label(skill_id)})"])
     if guide:
         parts.extend(["", "## Secondary guidance (do not override the user goal)", guide])
     return "\n".join(parts)

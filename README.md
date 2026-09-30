@@ -32,7 +32,7 @@ agents/
 packages/
   a2a-sdk/          A2A JSON-RPC 客户端
   agent-runtime/    Harness 适配 + 协作
-  schemas/ · common/ · llm-provider/
+  llm-provider/
 infrastructure/     postgres · redis · minio
 deployments/        docker-compose · deploy.sh · 可观测
 docs/               文档中心
@@ -72,6 +72,15 @@ go run ./cmd/
 ```
 
 ### 4. Harness Agents 并注册
+
+**推荐：** 用 aop-node（注册 + 心跳由 Supervisor 统一负责）：
+
+```bash
+cd apps/client/aop-node
+cargo run -p aopd -- --config aop-node.toml
+```
+
+**无 Supervisor 的开发脚本：**
 
 ```bash
 pip install -e "packages/agent-runtime[harness]"

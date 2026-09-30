@@ -119,67 +119,28 @@ def test_cancel_task_accepts_task_dict():
     assert client.cancel_task("task-os-root") is True
 
 
-def test_delegate_task():
-    mock_agent = MockAgent()
-    mock_agent.add_response({
-        "id": "task3",
-        "status": "submitted",
-        "artifacts": [],
-        "history": [],
-        "metadata": {},
-        "error": None,
-        "parent_task_id": "parent2",
-        "root_task_id": "root2",
-        "correlation_id": "corr3",
-        "caller_agent_id": "caller2",
-        "target_agent_id": "target2",
-        "depth": 2
-    }, response_id="task3")
+def test_delegate_task_removed():
+    from a2a_sdk.client import A2AError
 
     client = A2AClient("http://test-agent", card=None)
-    # Mock _rpc to extract result from JSON-RPC response
-    client._rpc = lambda method, params: mock_agent(method, params).get("result")
-
-    task = client.delegate_task(
-        "task1",
-        "target-agent",
-        skill_id="test-skill",
-        correlation_id="corr3",
-        parent_task_id="parent2",
-        root_task_id="root2",
-        depth=2
-    )
-
-    assert task.id == "task3"
-    assert task.status == TaskStatus.SUBMITTED
-    assert task.parent_task_id == "parent2"
-    assert task.root_task_id == "root2"
-    assert task.correlation_id == "corr3"
-    assert task.caller_agent_id == "caller2"
-    assert task.target_agent_id == "target2"
-    assert task.depth == 2
-
-
-def test_stream_tasks():
-    mock_agent = MockAgent()
-    mock_agent.add_response("dummy_response")
-
-    client = A2AClient("http://test-agent", card=None)
-    # Mock _rpc to extract result from JSON-RPC response
-    client._rpc = lambda method, params: mock_agent(method, params).get("result")
-
-    # This is a generator, we just test it doesn't raise
-    # In test environment, this will fail due to network error, which is expected
     try:
-        stream = client.stream_tasks(skill_id="test-skill")
-        for _ in stream:
-            break  # Just consume one item to test the stream works
-    except Exception as e:
-        if "11001" in str(e):
-            # Network error expected in test environment
-            pass
-        else:
-            raise
+        client.delegate_task("task1", "target-agent")
+        assert False, "expected A2AError"
+    except A2AError as exc:
+        assert exc.code == -32601
+        assert "delegate" in str(exc).lower()
+
+
+def test_stream_tasks_removed():
+    from a2a_sdk.client import A2AError
+
+    client = A2AClient("http://test-agent", card=None)
+    try:
+        client.stream_tasks(skill_id="test-skill")
+        assert False, "expected A2AError"
+    except A2AError as exc:
+        assert exc.code == -32601
+        assert "subscribe" in str(exc).lower() or "stream" in str(exc).lower()
 
 
 if __name__ == "__main__":

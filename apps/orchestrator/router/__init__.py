@@ -560,14 +560,19 @@ def normalize_endpoint(url: str) -> str:
 
     parsed = urlparse(url)
     host = parsed.hostname or ""
-    mapped = {
-        "claude-code": 8011,
-        "deepseek-harness": 8012,
-        "pi": 8013,
-        "openclaw": 8014,
-        "hermes": 8015,
-        "harness-agent": 8011,
-    }
+    try:
+        from agent_runtime.harness.profiles import host_port_map
+
+        mapped = host_port_map()
+    except ImportError:  # pragma: no cover
+        mapped = {
+            "claude-code": 8011,
+            "deepseek-harness": 8012,
+            "pi": 8013,
+            "openclaw": 8014,
+            "hermes": 8015,
+            "harness-agent": 8011,
+        }
     if host in mapped:
         port = parsed.port or mapped[host]
         return f"http://127.0.0.1:{port}/"

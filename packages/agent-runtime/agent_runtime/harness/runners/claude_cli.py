@@ -23,6 +23,7 @@ from ..protocol import (
 )
 from ._cli_common import (
     bump_stream_limit,
+    compose_cli_prompt,
     readline_unlimited,
     resolve_harness_workdir,
     workdir_from_message,
@@ -136,7 +137,7 @@ class ClaudeCliRunner:
         meta = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
         system = str((meta or {}).get("systemPrompt") or "").strip()
         if system:
-            prompt = f"{system}\n\n---\n\nUser task (skill={skill_id}):\n{prompt}"
+            prompt = compose_cli_prompt(prompt, system=system, skill_id=skill_id)
 
         async def _emit(etype: HarnessEventType, payload: dict[str, Any]) -> None:
             ev = HarnessEvent(type=etype, task_id=task_id, timestamp=utc_now(), payload=payload)

@@ -38,7 +38,7 @@ def test_subscribe_events_emits_final_for_completed_task():
     assert events[-1]["status"] == "completed"
 
 
-def test_handle_control_subscribe_returns_events():
+def test_handle_control_subscribe_removed():
     tasks = {"t1": {"id": "t1", "status": {"state": "completed"}}}
     body = handle_control_method(
         "tasks/subscribe",
@@ -47,7 +47,18 @@ def test_handle_control_subscribe_returns_events():
         tasks=tasks,
         subscribe_timeout_s=1.0,
     )
-    assert body["result"]["count"] >= 1
+    assert body["error"]["code"] == -32601
+    assert "subscribe" in body["error"]["message"]
+
+
+def test_handle_control_delegate_removed():
+    body = handle_control_method(
+        "tasks/delegate",
+        {"taskId": "t1", "targetAgentId": "x"},
+        req_id="2",
+        tasks={},
+    )
+    assert body["error"]["code"] == -32601
 
 
 def test_notify_callback_best_effort_false_on_bad_url():

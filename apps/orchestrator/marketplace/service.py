@@ -38,67 +38,29 @@ def _agent_endpoint(env_key: str, fallback: str) -> str:
     return (os.getenv(env_key) or fallback).rstrip("/")
 
 
-# Curated catalog for local/dev marketplace. Install uses endpoint registration.
-# One package per harness product (coder/researcher roles removed).
-CATALOG: list[dict[str, Any]] = [
-    {
-        "package_id": "pkg-claude-code",
-        "name": "Claude Code Agent",
-        "description": "Unified Claude Code harness agent",
-        "publisher": "AOP Official",
-        "version": "0.1.0",
-        "skills": [],
-        "default_endpoint": _agent_endpoint("AOP_AGENT_CLAUDE_CODE_URL", "http://127.0.0.1:8011"),
-        "agent_key": "claude-code",
-        "tags": ["harness", "claude"],
-    },
-    {
-        "package_id": "pkg-deepseek-harness",
-        "name": "DeepSeek Harness Agent",
-        "description": "Unified DeepSeek Harness agent",
-        "publisher": "AOP Official",
-        "version": "0.1.0",
-        "skills": [],
-        "default_endpoint": _agent_endpoint(
-            "AOP_AGENT_DEEPSEEK_HARNESS_URL", "http://127.0.0.1:8012"
-        ),
-        "agent_key": "deepseek-harness",
-        "tags": ["harness", "deepseek"],
-    },
-    {
-        "package_id": "pkg-pi",
-        "name": "Pi Agent",
-        "description": "Unified Pi harness agent",
-        "publisher": "AOP Official",
-        "version": "0.1.0",
-        "skills": [],
-        "default_endpoint": _agent_endpoint("AOP_AGENT_PI_URL", "http://127.0.0.1:8013"),
-        "agent_key": "pi",
-        "tags": ["harness", "pi"],
-    },
-    {
-        "package_id": "pkg-openclaw",
-        "name": "OpenClaw Agent",
-        "description": "Unified OpenClaw harness agent (agent exec)",
-        "publisher": "AOP Official",
-        "version": "0.1.0",
-        "skills": [],
-        "default_endpoint": _agent_endpoint("AOP_AGENT_OPENCLAW_URL", "http://127.0.0.1:8014"),
-        "agent_key": "openclaw",
-        "tags": ["harness", "openclaw"],
-    },
-    {
-        "package_id": "pkg-hermes",
-        "name": "Hermes Agent",
-        "description": "Unified Hermes Agent harness (hermes chat)",
-        "publisher": "AOP Official",
-        "version": "0.1.0",
-        "skills": [],
-        "default_endpoint": _agent_endpoint("AOP_AGENT_HERMES_URL", "http://127.0.0.1:8015"),
-        "agent_key": "hermes",
-        "tags": ["harness", "hermes"],
-    },
-]
+# Curated catalog for local/dev marketplace — built from harness profile SoT.
+try:
+    from agent_runtime.harness.profiles import marketplace_catalog_rows
+
+    CATALOG: list[dict[str, Any]] = marketplace_catalog_rows(
+        endpoint_resolver=_agent_endpoint
+    )
+except ImportError:  # pragma: no cover — orchestrator without editable agent-runtime
+    CATALOG = [
+        {
+            "package_id": "pkg-claude-code",
+            "name": "Claude Code Agent",
+            "description": "Unified Claude Code harness agent",
+            "publisher": "AOP Official",
+            "version": "0.1.0",
+            "skills": [],
+            "default_endpoint": _agent_endpoint(
+                "AOP_AGENT_CLAUDE_CODE_URL", "http://127.0.0.1:8011"
+            ),
+            "agent_key": "claude-code",
+            "tags": ["harness", "claude"],
+        },
+    ]
 
 
 class MarketplaceService:

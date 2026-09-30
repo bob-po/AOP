@@ -30,8 +30,12 @@ def test_deepseek_readiness_without_cli_or_key(monkeypatch, tmp_path):
 def test_deepseek_readiness_with_key(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     runner = DeepSeekHarnessRunner(binary=str(tmp_path / "no-dsh.exe"), prefer="tool_loop")
+    monkeypatch.setattr(runner, "sdk_available", lambda: False)
+    monkeypatch.setattr(runner, "resolve_binary", lambda: None)
     ready = runner.readiness()
-    assert ready["ready"] is True
+    # API key alone enables chat fallback, but does not advertise product readiness.
+    assert ready["ready"] is False
+    assert ready.get("mode") == "llm_chat_stub"
 
 
 @pytest.mark.asyncio
@@ -55,7 +59,9 @@ async def test_pi_tool_loop_with_mock_provider(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_provider, "OpenAIProvider", FakeProvider)
 
     runner = PiCliRunner(binary=str(tmp_path / "missing-pi"))
-    assert runner.readiness()["ready"] is True
+    ready = runner.readiness()
+    assert ready["ready"] is False
+    assert ready.get("mode") == "llm_chat_stub"
     events: list[HarnessEvent] = []
 
     async def on_event(ev: HarnessEvent):

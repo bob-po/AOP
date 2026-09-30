@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import uuid
-import warnings
 from typing import Any, Iterator
 
 import httpx
@@ -30,7 +29,7 @@ def _merge_params_metadata(
     root_task_id: str | None = None,
     depth: int = 0,
 ) -> dict[str, Any]:
-    """Build message/send params: official core + metadata extensions + deprecated mirrors."""
+    """Build message/send params: official core + metadata extensions only."""
     msg = message.to_dict()
     params["message"] = msg
 
@@ -71,24 +70,6 @@ def _merge_params_metadata(
     if meta:
         params["metadata"] = meta
         msg["metadata"] = meta
-
-    # Deprecated top-level mirrors for older AOP harness readers.
-    if message.idempotency_key:
-        params["idempotencyKey"] = message.idempotency_key
-    for key in (
-        "correlationId",
-        "parentTaskId",
-        "rootTaskId",
-        "depth",
-        "callerAgentId",
-        "targetAgentId",
-        "visitedAgents",
-        "governancePolicyId",
-        "deadline",
-        "callbackUrl",
-    ):
-        if key in meta:
-            params[key] = meta[key]
 
     return params
 
@@ -269,48 +250,12 @@ class A2AClient:
             time.sleep(max(0.2, float(poll_interval_s)))
         raise TimeoutError(f"A2A poll timed out after {timeout_s}s for task {task_id}")
 
-    def stream_tasks(
-        self,
-        skill_id: str | None = None,
-        correlation_id: str | None = None,
-        parent_task_id: str | None = None,
-        root_task_id: str | None = None,
-        depth: int = 0,
-    ):
-        """Deprecated: use ``stream_message`` / ``message/stream``. Legacy ``tasks/subscribe``."""
-        warnings.warn(
-            "stream_tasks/tasks/subscribe is deprecated; prefer message/stream",
-            DeprecationWarning,
-            stacklevel=2,
+    def stream_tasks(self, *args: Any, **kwargs: Any) -> Iterator[dict[str, Any]]:
+        """Removed. Use :meth:`stream_message` / ``message/stream``."""
+        raise A2AError(
+            "tasks/subscribe was removed; use message/stream via stream_message()",
+            code=-32601,
         )
-        params: dict[str, Any] = {}
-        if skill_id:
-            params["metadata"] = {"skillId": skill_id}
-        if correlation_id:
-            params["correlationId"] = correlation_id
-        if parent_task_id:
-            params["parentTaskId"] = parent_task_id
-        if root_task_id:
-            params["rootTaskId"] = root_task_id
-        if depth > 0:
-            params["depth"] = depth
-
-        endpoint = self._rpc_endpoint()
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            with client.stream(
-                "POST",
-                endpoint,
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tasks/subscribe",
-                    "params": params,
-                    "id": str(uuid.uuid4()),
-                },
-            ) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if line:
-                        yield line
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancel a task. Accepts bool or Task-shaped dict from the agent."""
@@ -328,39 +273,12 @@ class A2AClient:
             return False
         raise A2AError(f"Unexpected tasks/cancel result type: {type(result)}")
 
-    def delegate_task(
-        self,
-        task_id: str,
-        target_agent_id: str,
-        skill_id: str | None = None,
-        correlation_id: str | None = None,
-        parent_task_id: str | None = None,
-        root_task_id: str | None = None,
-        depth: int = 0,
-    ) -> Task:
-        """Deprecated AOP-only RPC. Prefer OS discover/route + message/send."""
-        warnings.warn(
-            "tasks/delegate is an AOP extension and is deprecated; "
-            "use OS discover/route + message/send",
-            DeprecationWarning,
-            stacklevel=2,
+    def delegate_task(self, *args: Any, **kwargs: Any) -> Task:
+        """Removed AOP-only RPC. Use OS discover/route + :meth:`send_message`."""
+        raise A2AError(
+            "tasks/delegate was removed; use OS /v1/discover|/v1/route + message/send",
+            code=-32601,
         )
-        params: dict[str, Any] = {"taskId": task_id, "targetAgentId": target_agent_id}
-        if skill_id:
-            params["metadata"] = {"skillId": skill_id}
-        if correlation_id:
-            params["correlationId"] = correlation_id
-        if parent_task_id:
-            params["parentTaskId"] = parent_task_id
-        if root_task_id:
-            params["rootTaskId"] = root_task_id
-        if depth > 0:
-            params["depth"] = depth
-
-        result = self._rpc("tasks/delegate", params)
-        if not isinstance(result, dict):
-            raise A2AError(f"Unexpected tasks/delegate result type: {type(result)}")
-        return Task.from_dict(result)
 
     def _rpc(self, method: str, params: dict[str, Any]) -> Any:
         endpoint = self._rpc_endpoint()

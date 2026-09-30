@@ -41,13 +41,17 @@ METHODS_LATER = frozenset(
     }
 )
 
-# Deprecated AOP-only methods (still accepted by some clients; not advertised).
-METHODS_DEPRECATED = frozenset(
+# Removed AOP-only methods (SDK/client raise; servers return -32601).
+METHODS_REMOVED = frozenset(
     {
         "tasks/subscribe",
         "tasks/delegate",
     }
 )
+
+# Back-compat alias for importers that still reference the old name.
+METHODS_DEPRECATED = METHODS_REMOVED
+
 
 # Official TaskState string values (JSON binding of proto enum).
 TASK_STATES = frozenset(

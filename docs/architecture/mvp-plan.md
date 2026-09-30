@@ -116,7 +116,7 @@ Score 选 Agent · `waiting_for_user` · approve/reject — `phase11_smart_hitl.
 
 | ID | 任务 | 验收 |
 |----|------|------|
-| P13-1 | pytest：DAG / Planner / Scheduler claim·HITL·retry / stale reclaim / Router score | `python scripts/phase13_reliability.py` |
+| P13-1 | pytest：DAG / Planner / Scheduler claim·HITL·retry / stale reclaim / Router score | `pytest -q apps/orchestrator/tests`（`phase13_reliability.py` 为兼容转发） |
 | P13-2 | Worker：去掉重复 route；A2A 路径接入 Circuit Breaker | 单次 select + `get_circuit_breaker` |
 | P13-3 | Prometheus 目标对齐 | `prometheus.yml`（compose 网）· `prometheus.host.yml`（宿主机）· single `observability` profile |
 
@@ -167,7 +167,7 @@ Score 选 Agent · `waiting_for_user` · approve/reject — `phase11_smart_hitl.
 |----|------|------|
 | P19-1 | 多步目标分解（编号 / 先…再…）→ 线性 DAG | `heuristic_steps` · `test_planner_v2.py` |
 | P19-2 | LLM JSON 提取/修复；非法 plan 回退 heuristic | `json_plan.py` · 不硬失败 |
-| P19-3 | `PLANNER_V2` 默认开启；可关 | `phase19_planner.py` |
+| P19-3 | `PLANNER_V2` 默认开启；可关 | `pytest -q tests/test_planner*`（`phase19_planner.py` 为兼容转发） |
 
 ### Phase 20 — 跨任务 Memory ✅
 

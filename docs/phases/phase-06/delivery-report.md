@@ -101,7 +101,7 @@ No hardcoded agent URLs in discovery path. Phase 2 lineage/idempotency unchanged
 
 - Permissions: network, filesystem, gpu, database, shell, external_api, other_agents
 - Tenant policy gate + grant/check on invocation
-- `SandboxProvider`: `LocalProcessSandbox` (default), `DockerSandbox` / `KubernetesSandbox` stubs
+- `SandboxProvider`: `LocalProcessSandbox` only (Docker/K8s stubs removed)
 - Remote source execution forbidden unless `allow_remote_source`
 
 ---
@@ -127,20 +127,20 @@ All include tenant_id / timestamps / status where applicable. Applied to live `a
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/v1/agents/register` | Manifest register (orchestrator direct) |
-| POST | `/v1/marketplace/register` | Gateway-proxied alias |
-| POST | `/v1/agent-runtime/register` | Gateway-proxied alias |
-| POST | `/v1/agents/{id}/heartbeat` | Lifecycle heartbeat |
-| POST | `/v1/agents/{id}/unregister` | Drain → OFFLINE |
+| POST | `/v1/marketplace/register` | Manifest register (via Gateway proxy) |
+| POST | `/v1/agent-runtime/register` | Manifest register alias |
+| POST | `/v1/agent-runtime/{id}/heartbeat` | Lifecycle heartbeat |
+| POST | `/v1/agent-runtime/{id}/drain` | Drain |
+| POST | `/v1/agent-runtime/{id}/unregister` | Drain → OFFLINE |
+| GET | `/v1/agent-runtime/{id}/health` | Lifecycle health (also `GET /v1/agents/{id}/health` via Gateway proxy) |
 | GET/POST | `/v1/marketplace/agents` | List / publish |
 | GET | `/v1/marketplace/agents/{id}` | Package detail |
 | POST | `.../publish\|install\|activate\|deactivate` | Lifecycle |
 | GET/POST | `/v1/skills`, `/v1/skills/search` | Skill APIs |
 | POST | `/v1/discover/skill`, `/v1/invoke/skill` | Dynamic discovery |
 
-Gateway proxies: `/v1/skills*`, `/v1/discover/skill`, `/v1/invoke/skill`, existing `/v1/marketplace*`.  
-Gateway keeps owning `/v1/agents/*` Registry SoT (endpoint register).
-
+Gateway proxies: `/v1/skills*`, `/v1/discover/skill`, `/v1/invoke/skill`, `/v1/marketplace*`, `/v1/agent-runtime*`.  
+Gateway owns `POST /v1/agents/register` (endpoint + AgentCard registry SoT).
 ---
 
 ## 11. CLI
@@ -232,8 +232,8 @@ Coverage includes:
 
 ## 17. Known Limitations
 
-1. **Docker/K8s sandbox** — interface only; LocalProcessSandbox is the working provider.
-2. **Manifest register via Gateway `/v1/agents/register`** — Gateway still endpoint+AgentCard; use `/v1/marketplace/register` for manifests.
+1. **Docker/K8s sandbox** — not shipped; only `LocalProcessSandbox` is available.
+2. **Manifest vs endpoint register** — Gateway `POST /v1/agents/register` is endpoint+AgentCard; manifests use `/v1/marketplace/register` or `/v1/agent-runtime/register`.
 3. **Skill persistence** — best-effort PG write; in-memory catalog is authoritative in tests/dev.
 4. **INSTALLING/ACTIVATING** — installation record statuses; Phase 3 FSM states unchanged (compatibility).
 5. **Gateway rebuild** required for new `/v1/skills*` proxy routes in live Docker.

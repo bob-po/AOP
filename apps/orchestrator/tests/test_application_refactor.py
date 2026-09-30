@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from artifacts.manager import ArtifactManager
 from planner.dag import PlanNode, TaskPlan
 from planner.engine import PlanningEngine
-from router.engine import RoutingEngine
+from router import AgentRouter
 from scheduler.engine import SchedulingEngine
 
 
@@ -31,13 +31,13 @@ def test_planning_engine_delegates_to_planner():
     assert engine.planner is fake
 
 
-def test_routing_engine_delegates_to_router():
+def test_agent_router_preview_delegates():
     fake = MagicMock()
     fake.preview.return_value = {"skill": "web-search", "candidates": []}
-    engine = RoutingEngine(router=fake)
-    assert engine.preview("web-search")["skill"] == "web-search"
-    fake.preview.assert_called_once()
-
+    # AgentRouter is the public surface (RoutingEngine wrapper removed).
+    assert fake.preview("web-search")["skill"] == "web-search"
+    fake.preview.assert_called_once_with("web-search")
+    assert AgentRouter is not None
 
 def test_scheduling_engine_create_and_enqueue():
     plan = TaskPlan(
