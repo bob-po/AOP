@@ -6,6 +6,8 @@ resource-aware scheduling, and backpressure mechanisms.
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import os
 import time
 from collections import defaultdict
@@ -17,10 +19,8 @@ import psycopg
 from psycopg.rows import dict_row
 from db import connect
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 @dataclass
 class ConcurrencyLimit:
@@ -29,7 +29,6 @@ class ConcurrencyLimit:
     per_skill: int = 10
     per_task: int = 5
     global_limit: int = 100
-
 
 @dataclass
 class ConcurrencyState:
@@ -45,7 +44,6 @@ class ConcurrencyState:
         if self.active_by_task is None:
             self.active_by_task = {}
 
-
 class ConcurrencyController:
     """Enhanced concurrency controller with resource awareness."""
     
@@ -54,10 +52,7 @@ class ConcurrencyController:
         database_url: str | None = None,
         limits: ConcurrencyLimit | None = None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.limits = limits or ConcurrencyLimit()
         self.state = ConcurrencyState()
         self.last_refresh = 0.0
@@ -212,10 +207,8 @@ class ConcurrencyController:
             "backpressure": self.get_backpressure(),
         }
 
-
 # Singleton instance
 _concurrency_controller: ConcurrencyController | None = None
-
 
 def get_concurrency_controller() -> ConcurrencyController:
     """Get or create the singleton concurrency controller."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 import re
 from datetime import datetime, timezone
@@ -12,13 +14,10 @@ import psycopg
 from psycopg.rows import dict_row
 from db import connect
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
 # Skills whose user input may contain outbound URLs to gate
 EGRESS_SKILLS: frozenset[str] = frozenset({"browser-automation"})
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
-
 
 class EgressDenied(PermissionError):
     def __init__(self, message: str, *, url: str | None = None, policy: dict[str, Any] | None = None):
@@ -26,10 +25,8 @@ class EgressDenied(PermissionError):
         self.url = url
         self.policy = policy or {}
 
-
 def egress_enforcement() -> bool:
     return os.getenv("TENANT_EGRESS", "1").lower() not in {"0", "false", "no", "off"}
-
 
 def host_matches(host: str, pattern: str) -> bool:
     host = (host or "").lower().strip("[]")
@@ -41,14 +38,11 @@ def host_matches(host: str, pattern: str) -> bool:
         return host == pattern[2:] or host.endswith(suffix)
     return host == pattern
 
-
 def parse_patterns(raw: str) -> list[str]:
     return [p.strip().lower() for p in (raw or "").split(",") if p.strip()]
 
-
 def extract_urls(text: str) -> list[str]:
     return _URL_RE.findall(text or "")
-
 
 def evaluate_host(host: str, *, mode: str, patterns: list[str]) -> bool:
     """Return True if host is allowed under policy."""
@@ -68,7 +62,6 @@ def evaluate_host(host: str, *, mode: str, patterns: list[str]) -> bool:
         return not any(host_matches(host, p) for p in patterns)
     return False
 
-
 def evaluate_url(url: str, *, mode: str, patterns: list[str]) -> bool:
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
@@ -76,17 +69,13 @@ def evaluate_url(url: str, *, mode: str, patterns: list[str]) -> bool:
         return False
     return evaluate_host(parsed.hostname or "", mode=mode, patterns=patterns)
 
-
 class EgressService:
     def __init__(
         self,
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def get(self, *, tenant_id: str | None = None) -> dict[str, Any]:

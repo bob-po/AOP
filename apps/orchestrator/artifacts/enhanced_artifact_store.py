@@ -6,6 +6,8 @@ on persistence failure, along with garbage collection and reference counting.
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import os
 import uuid
 from dataclasses import dataclass
@@ -17,10 +19,8 @@ from psycopg.rows import dict_row
 from db import connect
 from psycopg.types.json import Jsonb
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 @dataclass
 class ArtifactReference:
@@ -34,15 +34,11 @@ class ArtifactReference:
     created_at: datetime
     reference_count: int = 1
 
-
 class EnhancedArtifactStore:
     """Enhanced artifact store with two-phase upload and garbage collection."""
     
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
     
     def create_pending_artifact(
         self,
@@ -274,10 +270,8 @@ class EnhancedArtifactStore:
             
             return stats
 
-
 # Singleton instance
 _enhanced_artifact_store: EnhancedArtifactStore | None = None
-
 
 def get_enhanced_artifact_store() -> EnhancedArtifactStore:
     """Get or create the singleton enhanced artifact store."""

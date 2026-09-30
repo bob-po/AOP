@@ -83,10 +83,30 @@ class A2AClient:
         *,
         timeout: float = 60.0,
         card: AgentCard | None = None,
+        http_client: httpx.Client | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._card = card
+        self._http = http_client
+        self._owns_http = http_client is None
+
+    def _client(self) -> httpx.Client:
+        if self._http is None:
+            self._http = httpx.Client(timeout=self.timeout, follow_redirects=True)
+            self._owns_http = True
+        return self._http
+
+    def close(self) -> None:
+        if self._owns_http and self._http is not None:
+            self._http.close()
+            self._http = None
+
+    def __enter__(self) -> "A2AClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
 
     @property
     def card(self) -> AgentCard:
@@ -202,25 +222,24 @@ class A2AClient:
             "method": "message/stream",
             "params": params,
         }
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            with client.stream("POST", endpoint, json=payload) as resp:
-                resp.raise_for_status()
-                event_name = "message"
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    if line.startswith("event:"):
-                        event_name = line[6:].strip() or "message"
-                        continue
-                    if line.startswith("data:"):
-                        raw = line[5:].strip()
-                        try:
-                            data = json.loads(raw)
-                        except json.JSONDecodeError:
-                            data = {"raw": raw}
-                        if isinstance(data, dict):
-                            data.setdefault("event", event_name)
-                        yield data if isinstance(data, dict) else {"event": event_name, "data": data}
+        with self._client().stream("POST", endpoint, json=payload) as resp:
+            resp.raise_for_status()
+            event_name = "message"
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                if line.startswith("event:"):
+                    event_name = line[6:].strip() or "message"
+                    continue
+                if line.startswith("data:"):
+                    raw = line[5:].strip()
+                    try:
+                        data = json.loads(raw)
+                    except json.JSONDecodeError:
+                        data = {"raw": raw}
+                    if isinstance(data, dict):
+                        data.setdefault("event", event_name)
+                    yield data if isinstance(data, dict) else {"event": event_name, "data": data}
 
     def get_task(self, task_id: str) -> Task:
         result = self._rpc("tasks/get", {"id": task_id})
@@ -288,10 +307,9 @@ class A2AClient:
             "method": method,
             "params": params,
         }
-        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            resp = client.post(endpoint, json=payload)
-            resp.raise_for_status()
-            body = resp.json()
+        resp = self._client().post(endpoint, json=payload)
+        resp.raise_for_status()
+        body = resp.json()
 
         if "error" in body and body["error"]:
             err = body["error"]

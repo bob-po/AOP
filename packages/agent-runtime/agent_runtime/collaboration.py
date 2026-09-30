@@ -190,6 +190,20 @@ class A2ACollaborationRuntime:
         self._transport = http_transport
         self._client_factory = a2a_client_factory
         self.record_graph = record_graph
+        self._http: httpx.Client | None = None
+
+    def _os_http(self) -> httpx.Client:
+        if self._http is None:
+            self._http = httpx.Client(
+                timeout=self.governance.request_timeout,
+                transport=self._transport,
+            )
+        return self._http
+
+    def close(self) -> None:
+        if self._http is not None:
+            self._http.close()
+            self._http = None
 
     # ── OS infrastructure calls ──────────────────────────────────────────
 
@@ -201,12 +215,9 @@ class A2ACollaborationRuntime:
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.os_base_url}{path}"
-        with httpx.Client(
-            timeout=self.governance.request_timeout, transport=self._transport
-        ) as client:
-            resp = client.post(url, json=payload, headers=self._headers())
-            resp.raise_for_status()
-            return resp.json()
+        resp = self._os_http().post(url, json=payload, headers=self._headers())
+        resp.raise_for_status()
+        return resp.json()
 
     @staticmethod
     def _extract_task_id(task: Any) -> Optional[str]:
@@ -229,12 +240,9 @@ class A2ACollaborationRuntime:
 
     def _get(self, path: str) -> dict[str, Any]:
         url = f"{self.os_base_url}{path}"
-        with httpx.Client(
-            timeout=self.governance.request_timeout, transport=self._transport
-        ) as client:
-            resp = client.get(url, headers=self._headers())
-            resp.raise_for_status()
-            return resp.json()
+        resp = self._os_http().get(url, headers=self._headers())
+        resp.raise_for_status()
+        return resp.json()
 
     def _lookup_agent(self, agent_key: str) -> dict[str, Any] | None:
         """Resolve an agent by key/id via OS list (best-effort)."""
@@ -338,6 +346,8 @@ class A2ACollaborationRuntime:
             return self._client_factory(endpoint, self.governance.request_timeout)
         from a2a_sdk import A2AClient  # local import: optional at runtime
 
+        # Reuse OS httpx client connection pool settings via shared timeout;
+        # per-endpoint A2A clients keep their own pooled Client.
         return A2AClient(endpoint, timeout=self.governance.request_timeout)
 
     @staticmethod
@@ -412,91 +422,17 @@ class A2ACollaborationRuntime:
         selection: dict[str, Any] | None = None,
     ) -> DelegationResult:
         """Route to a peer and start work without waiting for completion."""
-        route_skill = skill or agent_key
-        skills = required_skills or ([route_skill] if route_skill else [])
-        if selection is None and agent_key:
-            found = self._lookup_agent(agent_key)
-            if found and (found.get("endpoint") or found.get("url")):
-                selection = {
-                    "selected_agent": {
-                        "agent_id": found.get("agent_id") or found.get("id"),
-                        "agent_key": found.get("agent_key") or agent_key,
-                        "endpoint": found.get("endpoint") or found.get("url"),
-                        "status": found.get("status"),
-                    }
-                }
-        selection = selection or self.route(
-            skill=route_skill,
-            required_skills=skills,
-            exclude_agent_ids=[self.agent_id] if self.agent_id else None,
+        return self._select_and_invoke(
+            text,
+            context=context,
+            skill=skill,
+            agent_key=agent_key,
+            required_skills=required_skills,
+            callback_url=callback_url,
+            self_task_id=self_task_id,
+            selection=selection,
+            async_mode=True,
         )
-        chosen = selection.get("selected_agent") or (
-            (selection.get("candidates") or [None])[0]
-        )
-        if not chosen:
-            raise GovernanceError(
-                f"no agent available for skills={skills!r} agent_key={agent_key!r}",
-                code=NO_AGENT_AVAILABLE,
-            )
-
-        target_id = str(
-            chosen.get("agent_key")
-            or chosen.get("agent_id")
-            or chosen.get("agentId")
-            or agent_key
-            or ""
-        )
-        endpoint = chosen.get("endpoint") or chosen.get("url") or ""
-        if not endpoint:
-            raise GovernanceError(
-                f"selected agent {target_id!r} has no endpoint", code=NO_AGENT_AVAILABLE
-            )
-
-        self._check_governance(context, target_id)
-        decision_ctx = self._os_governance_check(context, target_id)
-
-        child_ctx = context.child(
-            target_id,
-            parent_task_id=self_task_id or context.self_task_id or context.parent_task_id,
-        )
-        skill_id = skill or route_skill or (skills[0] if skills else None)
-        try:
-            task = self.call_agent(
-                endpoint,
-                text,
-                context=child_ctx,
-                skill_id=skill_id,
-                target_agent_id=target_id,
-                callback_url=callback_url,
-                async_mode=True,
-            )
-            task_id = self._extract_task_id(task)
-            status = self._extract_status(task) or "submitted"
-            self._record_edge(
-                child_ctx=child_ctx,
-                target_agent_id=target_id,
-                task_id=task_id,
-                skill=skill_id,
-                status=status,
-            )
-            return DelegationResult(
-                task=task,
-                target_agent_id=target_id,
-                target_endpoint=endpoint,
-                skill=skill_id,
-                depth=child_ctx.depth,
-                correlation_id=child_ctx.correlation_id,
-                root_task_id=child_ctx.root_task_id,
-                parent_task_id=child_ctx.parent_task_id,
-                selection_reason={
-                    "score": chosen.get("score"),
-                    "score_breakdown": chosen.get("score_breakdown"),
-                    "status": chosen.get("status"),
-                    "async": True,
-                },
-            )
-        finally:
-            self._os_governance_release(decision_ctx)
 
     def join(
         self,
@@ -507,26 +443,18 @@ class A2ACollaborationRuntime:
         poll_interval_s: float = 0.5,
     ) -> Any | None:
         """Poll ``tasks/get`` until the peer task reaches a terminal state."""
-        import time
-
         client = self._make_client(endpoint)
-        deadline = time.monotonic() + max(0.1, float(timeout_s))
-        terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
-        last: Any = None
-        while time.monotonic() < deadline:
-            try:
-                last = client.get_task(task_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("join poll failed task=%s: %s", task_id, exc)
-                time.sleep(poll_interval_s)
-                continue
-            state = self._extract_status(last).lower()
-            if state in terminal:
-                return last
-            time.sleep(poll_interval_s)
-        if last is not None and self._extract_status(last).lower() in terminal:
-            return last
-        return None
+        try:
+            return client.poll_task(
+                task_id,
+                timeout_s=timeout_s,
+                poll_interval_s=poll_interval_s,
+            )
+        except TimeoutError:
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("join failed task=%s: %s", task_id, exc)
+            return None
 
     def _check_governance(self, context: CallContext, target_agent_id: str) -> None:
         gov = self.governance
@@ -623,9 +551,51 @@ class A2ACollaborationRuntime:
         Flow: governance check -> OS route -> outbound A2A call. The OS is used
         only as discovery/routing infrastructure; this Agent decides to delegate.
         """
-        skills = required_skills or ([skill] if skill else [])
-        selection = selection or self.route(
+        return self._select_and_invoke(
+            text,
+            context=context,
             skill=skill,
+            required_skills=required_skills,
+            capabilities=capabilities,
+            input=input,
+            output=output,
+            self_task_id=self_task_id,
+            selection=selection,
+            async_mode=False,
+        )
+
+    def _select_and_invoke(
+        self,
+        text: str,
+        *,
+        context: CallContext,
+        skill: str | None = None,
+        agent_key: str | None = None,
+        required_skills: list[str] | None = None,
+        capabilities: dict[str, Any] | None = None,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        callback_url: str | None = None,
+        self_task_id: str | None = None,
+        selection: dict[str, Any] | None = None,
+        async_mode: bool = False,
+    ) -> DelegationResult:
+        """Shared route → governance → call_agent → edge recording path."""
+        route_skill = skill or agent_key
+        skills = required_skills or ([route_skill] if route_skill else [])
+        if selection is None and agent_key:
+            found = self._lookup_agent(agent_key)
+            if found and (found.get("endpoint") or found.get("url")):
+                selection = {
+                    "selected_agent": {
+                        "agent_id": found.get("agent_id") or found.get("id"),
+                        "agent_key": found.get("agent_key") or agent_key,
+                        "endpoint": found.get("endpoint") or found.get("url"),
+                        "status": found.get("status"),
+                    }
+                }
+        selection = selection or self.route(
+            skill=route_skill,
             required_skills=skills,
             capabilities=capabilities,
             input=input,
@@ -637,18 +607,23 @@ class A2ACollaborationRuntime:
         )
         if not chosen:
             raise GovernanceError(
-                f"no agent available for skills={skills!r}", code=NO_AGENT_AVAILABLE
+                f"no agent available for skills={skills!r} agent_key={agent_key!r}",
+                code=NO_AGENT_AVAILABLE,
             )
 
-        target_id = str(chosen.get("agent_id") or chosen.get("agent_key") or "")
-        endpoint = chosen.get("endpoint") or ""
+        target_id = str(
+            chosen.get("agent_key")
+            or chosen.get("agent_id")
+            or chosen.get("agentId")
+            or agent_key
+            or ""
+        )
+        endpoint = chosen.get("endpoint") or chosen.get("url") or ""
         if not endpoint:
             raise GovernanceError(
                 f"selected agent {target_id!r} has no endpoint", code=NO_AGENT_AVAILABLE
             )
 
-        # Local fast pre-filter (depth / visit bound allowing A->B->A), then the
-        # authoritative OS check (budget / call quota / concurrency / lineage).
         self._check_governance(context, target_id)
         decision_ctx = self._os_governance_check(context, target_id)
 
@@ -656,7 +631,7 @@ class A2ACollaborationRuntime:
             target_id,
             parent_task_id=self_task_id or context.self_task_id or context.parent_task_id,
         )
-        skill_id = skill or (skills[0] if skills else None)
+        skill_id = skill or route_skill or (skills[0] if skills else None)
         try:
             task = self.call_agent(
                 endpoint,
@@ -664,9 +639,11 @@ class A2ACollaborationRuntime:
                 context=child_ctx,
                 skill_id=skill_id,
                 target_agent_id=target_id,
+                callback_url=callback_url,
+                async_mode=async_mode,
             )
             task_id = self._extract_task_id(task)
-            status = self._extract_status(task)
+            status = self._extract_status(task) or ("submitted" if async_mode else "")
             self._record_edge(
                 child_ctx=child_ctx,
                 target_agent_id=target_id,
@@ -674,6 +651,13 @@ class A2ACollaborationRuntime:
                 skill=skill_id,
                 status=status,
             )
+            reason = {
+                "score": chosen.get("score"),
+                "score_breakdown": chosen.get("score_breakdown"),
+                "status": chosen.get("status"),
+            }
+            if async_mode:
+                reason["async"] = True
             return DelegationResult(
                 task=task,
                 target_agent_id=target_id,
@@ -683,11 +667,7 @@ class A2ACollaborationRuntime:
                 correlation_id=child_ctx.correlation_id,
                 root_task_id=child_ctx.root_task_id,
                 parent_task_id=child_ctx.parent_task_id,
-                selection_reason={
-                    "score": chosen.get("score"),
-                    "score_breakdown": chosen.get("score_breakdown"),
-                    "status": chosen.get("status"),
-                },
+                selection_reason=reason,
             )
         finally:
             self._os_governance_release(decision_ctx)

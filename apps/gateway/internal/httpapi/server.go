@@ -19,7 +19,6 @@ type Server struct {
 	AuthStore         *auth.Store
 	AuthRequired      bool
 	DefaultTenantID   string
-	OrchestratorURL   string
 	OrchestratorProxy http.Handler
 }
 

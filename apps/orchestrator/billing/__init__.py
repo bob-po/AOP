@@ -6,6 +6,8 @@ Does not charge cards — metering / invoice preview only.
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -14,8 +16,6 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 from db import connect
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Default list prices (USD). Override via BILLING_PRICES_JSON.
 _DEFAULT_PRICES: dict[str, Any] = {
@@ -36,7 +36,6 @@ _DEFAULT_PRICES: dict[str, Any] = {
     },
 }
 
-
 def load_prices() -> dict[str, Any]:
     raw = os.getenv("BILLING_PRICES_JSON", "").strip()
     if not raw:
@@ -53,17 +52,12 @@ def load_prices() -> dict[str, Any]:
     except json.JSONDecodeError:
         return dict(_DEFAULT_PRICES)
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
-
 class BillingService:
     def __init__(self, database_url: str | None = None, tenant_id: str = DEFAULT_TENANT_ID):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
         self.prices = load_prices()
 

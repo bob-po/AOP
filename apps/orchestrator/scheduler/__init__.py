@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import os
 import uuid
@@ -15,8 +17,6 @@ from psycopg.types.json import Jsonb
 
 from db import connect
 from planner.dag import PlanNode, TaskPlan, ready_node_ids, validate_plan
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Request tracking will be imported lazily in methods to avoid circular dependency
 # Outbox pattern for P36.2 distributed transactions (lazy import)
@@ -55,16 +55,13 @@ _PERMANENT_ERROR_MARKERS = (
     "dsh_home",
 )
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def is_permanent_agent_error(error: str | None) -> bool:
     """True when the agent/runtime error will not succeed on retry."""
     low = (error or "").lower()
     return any(m in low for m in _PERMANENT_ERROR_MARKERS)
-
 
 def is_cancel_error(error: str | None) -> bool:
     """True when the failure is a user/OS cancel — must not be retried."""
@@ -85,10 +82,7 @@ class Scheduler:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
         self._request_tracking_service = None  # Lazy-loaded
         self._outbox_processor = None  # Lazy-loaded for P36.2

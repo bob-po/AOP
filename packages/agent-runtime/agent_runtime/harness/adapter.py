@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..agent_collab import AgentCollaborator
-from ..a2a_server import extract_lineage, find_cancel_targets
+from ..a2a_server import extract_lineage, find_cancel_targets, format_sse_frame
 from ..collaboration import CallContext
 from .cost import attach_usage, report_usage_to_os
 from .events import apply_event, finalize_task, new_working_task, utc_now
@@ -34,6 +34,19 @@ except ImportError:  # pragma: no cover
     Request = None  # type: ignore[misc, assignment]
     JSONResponse = None  # type: ignore[misc, assignment]
     StreamingResponse = None  # type: ignore[misc, assignment]
+
+
+def _collab_authorized(request: Any) -> bool:
+    """Gate mid-run collab HTTP. Prefer shared token; else loopback-only."""
+    expected = (os.getenv("AOP_COLLAB_TOKEN") or "").strip()
+    if expected:
+        got = (request.headers.get("X-AOP-Collab-Token") or "").strip()
+        return got == expected and bool(got)
+    if (os.getenv("AOP_COLLAB_OPEN") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None) if client is not None else None
+    return host in {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 def load_agent_card(card_path: str | Path, *, agent_url: Optional[str] = None) -> dict[str, Any]:
@@ -310,6 +323,8 @@ def create_harness_app(
     @app.post("/v1/collab/spawn")
     async def collab_spawn(request: Request) -> JSONResponse:
         """Fire-and-forget peer spawn for mid-run tool use (Claude Bash etc.)."""
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
         body = await request.json()
         goal = str(body.get("goal") or "").strip()
         if not goal:
@@ -346,6 +361,8 @@ def create_harness_app(
 
     @app.post("/v1/collab/join")
     async def collab_join(request: Request) -> JSONResponse:
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
         body = await request.json()
         endpoint = str(body.get("endpoint") or "").strip()
         task_id = str(body.get("task_id") or body.get("taskId") or "").strip()
@@ -563,22 +580,14 @@ def create_harness_app(
                             "jsonrpc": "2.0",
                             "id": req_id,
                         }
-                        yield (
-                            f"event: status\ndata: {json.dumps(first, default=str)}\n\n".encode(
-                                "utf-8"
-                            )
-                        )
+                        yield format_sse_frame("status", first)
                         last_state = "submitted"
                         deadline = asyncio.get_event_loop().time() + max(1.0, timeout_s)
                         while asyncio.get_event_loop().time() < deadline:
                             current = tasks.get(task_id)
                             if current is None:
                                 miss = {"event": "not_found", "taskId": task_id}
-                                yield (
-                                    f"event: not_found\ndata: {json.dumps(miss)}\n\n".encode(
-                                        "utf-8"
-                                    )
-                                )
+                                yield format_sse_frame("not_found", miss)
                                 return
                             status = current.get("status")
                             state = (
@@ -594,11 +603,7 @@ def create_harness_app(
                                     "status": state,
                                     "task": current,
                                 }
-                                yield (
-                                    f"event: status\ndata: {json.dumps(frame, default=str)}\n\n".encode(
-                                        "utf-8"
-                                    )
-                                )
+                                yield format_sse_frame("status", frame)
                             if state in terminal:
                                 done = {
                                     "event": "final",
@@ -606,11 +611,7 @@ def create_harness_app(
                                     "status": state,
                                     "task": current,
                                 }
-                                yield (
-                                    f"event: final\ndata: {json.dumps(done, default=str)}\n\n".encode(
-                                        "utf-8"
-                                    )
-                                )
+                                yield format_sse_frame("final", done)
                                 return
                             await asyncio.sleep(0.25)
                         timed = {
@@ -618,11 +619,7 @@ def create_harness_app(
                             "taskId": task_id,
                             "lastStatus": last_state,
                         }
-                        yield (
-                            f"event: timeout\ndata: {json.dumps(timed, default=str)}\n\n".encode(
-                                "utf-8"
-                            )
-                        )
+                        yield format_sse_frame("timeout", timed)
 
                     return StreamingResponse(
                         _event_stream(),

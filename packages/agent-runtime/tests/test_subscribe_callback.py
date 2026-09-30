@@ -1,12 +1,12 @@
-"""Phase 2 — tasks/subscribe + callback helpers."""
+"""Callback SSRF + control-plane helpers (tasks/subscribe removed)."""
 
 from __future__ import annotations
 
 from agent_runtime.a2a_server import (
     extract_lineage,
+    format_sse_frame,
     handle_control_method,
     notify_callback,
-    subscribe_events,
 )
 
 
@@ -27,15 +27,11 @@ def test_extract_lineage_includes_callback_and_idempotency():
     assert lin["root_task_id"] == "root"
 
 
-def test_subscribe_events_emits_final_for_completed_task():
-    tasks = {
-        "t1": {"id": "t1", "status": {"state": "completed"}, "artifacts": []},
-    }
-    events = list(subscribe_events(tasks, {"id": "t1"}, timeout_s=1.0))
-    kinds = [e["event"] for e in events]
-    assert "status" in kinds or "final" in kinds
-    assert events[-1]["event"] == "final"
-    assert events[-1]["status"] == "completed"
+def test_format_sse_frame():
+    frame = format_sse_frame("status", {"taskId": "t1", "status": "completed"})
+    assert frame.startswith(b"event: status\n")
+    assert b"taskId" in frame
+    assert frame.endswith(b"\n\n")
 
 
 def test_handle_control_subscribe_removed():
@@ -64,3 +60,9 @@ def test_handle_control_delegate_removed():
 def test_notify_callback_best_effort_false_on_bad_url():
     assert notify_callback(None, {"id": "x"}) is False
     assert notify_callback("http://127.0.0.1:1/nope", {"id": "x"}, timeout=0.2) is False
+
+
+def test_notify_callback_blocks_metadata_url(monkeypatch):
+    monkeypatch.delenv("AOP_CALLBACK_ALLOW_PRIVATE", raising=False)
+    assert notify_callback("http://169.254.169.254/latest", {"id": "x"}) is False
+    assert notify_callback("file:///etc/passwd", {"id": "x"}) is False

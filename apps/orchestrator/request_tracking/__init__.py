@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 import uuid
 from datetime import datetime, timezone
@@ -12,12 +14,8 @@ from psycopg.rows import dict_row
 from db import connect
 from psycopg.types.json import Jsonb
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class RequestTrackingService:
     """Service for tracking A2A requests with idempotency keys."""
@@ -27,10 +25,7 @@ class RequestTrackingService:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def generate_idempotency_key(self) -> str:
@@ -200,10 +195,8 @@ class RequestTrackingService:
             return response_json
         return None
 
-
 # Singleton instance for application use
 _tracking_service: RequestTrackingService | None = None
-
 
 def get_request_tracking_service() -> RequestTrackingService:
     """Get or create the singleton request tracking service."""

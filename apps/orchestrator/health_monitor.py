@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import argparse
 import os
 import time
@@ -14,12 +16,8 @@ import redis
 from psycopg.rows import dict_row
 from db import connect
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class HealthMonitor:
     def __init__(
@@ -33,10 +31,7 @@ class HealthMonitor:
     ):
         self.interval = interval
         self.timeout = timeout
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         self.tenant_id = tenant_id
         self.redis = redis.Redis.from_url(self.redis_url, decode_responses=True)
@@ -149,7 +144,6 @@ class HealthMonitor:
                 pipe.sadd(f"agent:{agent_id}:skills", sk)
         pipe.execute()
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="AOP agent health monitor")
     parser.add_argument("--interval", type=float, default=float(os.getenv("HEALTH_INTERVAL", "30")))
@@ -161,7 +155,6 @@ def main() -> None:
             print(r)
         return
     mon.run_forever()
-
 
 if __name__ == "__main__":
     main()

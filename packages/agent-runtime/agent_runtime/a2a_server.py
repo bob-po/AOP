@@ -19,8 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-import time
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Optional
 
 from .collaboration import CallContext
 
@@ -151,71 +150,6 @@ def cancel_task(tasks: dict[str, Any], task_id: Optional[str]) -> tuple[bool, Op
     return primary is not None, primary
 
 
-def _task_state(task: dict[str, Any]) -> str:
-    status = task.get("status")
-    if isinstance(status, dict):
-        return str(status.get("state") or "submitted")
-    return str(status or "submitted")
-
-
-_TERMINAL = frozenset({"completed", "failed", "canceled", "cancelled"})
-
-
-def subscribe_events(
-    tasks: dict[str, Any],
-    params: dict[str, Any],
-    *,
-    poll_interval: float = 0.25,
-    timeout_s: float = 30.0,
-) -> Iterator[dict[str, Any]]:
-    """Yield task status events for ``tasks/subscribe`` (SSE / NDJSON friendly).
-
-    Watches a local task store. If ``id`` is given, streams that task until it
-    reaches a terminal state (or timeout). Otherwise emits a snapshot of matching
-    tasks keyed by ``correlationId`` / ``rootTaskId``.
-    """
-    task_id = _first_key(params, "id", "taskId", "task_id")
-    correlation_id = _first_key(params, "correlationId", "correlation_id")
-    root_task_id = _first_key(params, "rootTaskId", "root_task_id")
-    deadline = time.monotonic() + max(1.0, timeout_s)
-    last_state: Optional[str] = None
-
-    while time.monotonic() < deadline:
-        if task_id:
-            task = tasks.get(task_id)
-            if task is None:
-                yield {"event": "not_found", "taskId": task_id}
-                return
-            state = _task_state(task)
-            if state != last_state:
-                last_state = state
-                yield {"event": "status", "taskId": task_id, "status": state, "task": task}
-            if state in _TERMINAL:
-                yield {"event": "final", "taskId": task_id, "status": state, "task": task}
-                return
-        else:
-            matched = []
-            for tid, task in list(tasks.items()):
-                meta = task.get("metadata") or {}
-                if correlation_id and (
-                    meta.get("correlationId") != correlation_id
-                    and task.get("correlationId") != correlation_id
-                ):
-                    continue
-                if root_task_id and (
-                    meta.get("rootTaskId") != root_task_id
-                    and task.get("rootTaskId") != root_task_id
-                ):
-                    continue
-                if correlation_id or root_task_id:
-                    matched.append({"taskId": tid, "status": _task_state(task), "task": task})
-            yield {"event": "snapshot", "tasks": matched, "count": len(matched)}
-            return
-        time.sleep(poll_interval)
-
-    yield {"event": "timeout", "taskId": task_id, "lastStatus": last_state}
-
-
 def notify_callback(
     callback_url: Optional[str],
     task: dict[str, Any],
@@ -227,11 +161,16 @@ def notify_callback(
 
     Accepts legacy ``callbackUrl`` or official-shaped
     ``pushNotificationConfig.url``. Failures are logged and swallowed.
+    Blocks unsafe destinations (non-http(s), link-local/metadata, and by
+    default private/loopback unless ``AOP_CALLBACK_ALLOW_PRIVATE=1``).
     """
     url = callback_url
     if not url and isinstance(push_notification_config, dict):
         url = push_notification_config.get("url")
     if not url:
+        return False
+    if not _callback_url_allowed(str(url)):
+        logger.warning("callback notify blocked (unsafe url): %s", url)
         return False
     try:
         import httpx
@@ -248,6 +187,61 @@ def notify_callback(
         return False
 
 
+def _callback_url_allowed(url: str) -> bool:
+    from urllib.parse import urlparse
+    import ipaddress
+    import os
+    import socket
+
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:  # noqa: BLE001
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in {"metadata.google.internal", "metadata"}:
+        return False
+
+    allow_private = os.getenv("AOP_CALLBACK_ALLOW_PRIVATE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    def _ip_ok(ip: ipaddress._BaseAddress) -> bool:
+        if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            return False
+        if ip.is_loopback or ip.is_private:
+            return allow_private
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+        return _ip_ok(ip)
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if not _ip_ok(ip):
+            return False
+    return True
+
+
 def handle_control_method(
     method: Optional[str],
     params: dict[str, Any],
@@ -260,7 +254,8 @@ def handle_control_method(
 
     Supported: ``tasks/get``, ``tasks/cancel``.
     Removed: ``tasks/subscribe``, ``tasks/delegate`` (return -32601).
-    Agents that need streaming should use ``message/stream`` / :func:`subscribe_events`.
+    Agents that need streaming should use ``message/stream`` /
+    :func:`format_sse_frame`.
     """
     if method == "tasks/get":
         task_id = _first_key(params, "id", "taskId", "task_id")
@@ -285,11 +280,10 @@ def handle_control_method(
     return None
 
 
-def sse_bytes(events: Iterator[dict[str, Any]]) -> Iterator[bytes]:
-    """Encode subscribe events as Server-Sent Events frames."""
-    for ev in events:
-        payload = json.dumps(ev, default=str)
-        yield f"event: {ev.get('event', 'message')}\ndata: {payload}\n\n".encode("utf-8")
+def format_sse_frame(event: str, data: Any) -> bytes:
+    """Encode one Server-Sent Events frame for ``message/stream``."""
+    payload = json.dumps(data, default=str)
+    return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
 
 __all__ = [
@@ -299,8 +293,7 @@ __all__ = [
     "jsonrpc_error",
     "find_cancel_targets",
     "cancel_task",
-    "subscribe_events",
     "notify_callback",
     "handle_control_method",
-    "sse_bytes",
+    "format_sse_frame",
 ]

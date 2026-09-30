@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID
+
 import json
 import logging
 import os
@@ -18,20 +20,16 @@ EXECUTION_STREAM = "a2a.execution.queue"
 EXECUTION_EVENTS = "a2a.execution.events"
 TASK_EVENTS = "a2a.task.events"
 EXECUTOR_GROUP = "cg-executor"
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Pub/Sub channels — every WebSocket subscriber receives a copy (no competing group)
 CHANNEL_GLOBAL = "aop:events"
 CHANNEL_TASK_PREFIX = "aop:task:"
 
-
 def task_events_channel(task_id: str) -> str:
     return f"{CHANNEL_TASK_PREFIX}{task_id}:events"
 
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 class StreamClient:
     def __init__(self, redis_url: str | None = None):
@@ -154,7 +152,6 @@ class StreamClient:
         current = self.r.get(key)
         if current == worker_id:
             self.r.delete(key)
-
 
 def _stringify(v: Any) -> str:
     if v is None:

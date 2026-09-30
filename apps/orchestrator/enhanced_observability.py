@@ -6,6 +6,8 @@ distributed tracing integration, and SLO monitoring.
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import os
 import time
 from collections import defaultdict
@@ -18,17 +20,14 @@ import psycopg
 from psycopg.rows import dict_row
 from db import connect
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class MetricType(Enum):
     """Types of metrics."""
     COUNTER = "counter"
     GAUGE = "gauge"
     HISTOGRAM = "histogram"
-
 
 @dataclass
 class Metric:
@@ -45,15 +44,11 @@ class Metric:
         if self.timestamp is None:
             self.timestamp = _utc_now()
 
-
 class DistributedMetrics:
     """Distributed metrics collector for state monitoring."""
     
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.metrics: list[Metric] = []
         self.max_metrics = 10000
     
@@ -188,7 +183,6 @@ class DistributedMetrics:
         self.metrics.clear()
         return metrics
 
-
 class SLOMonitor:
     """SLO monitoring with alerts."""
     
@@ -235,11 +229,9 @@ class SLOMonitor:
         """Get recent alerts."""
         return self.alerts[-limit:]
 
-
 # Singleton instances
 _distributed_metrics: DistributedMetrics | None = None
 _slo_monitor: SLOMonitor | None = None
-
 
 def get_distributed_metrics() -> DistributedMetrics:
     """Get or create the singleton distributed metrics."""
@@ -247,7 +239,6 @@ def get_distributed_metrics() -> DistributedMetrics:
     if _distributed_metrics is None:
         _distributed_metrics = DistributedMetrics()
     return _distributed_metrics
-
 
 def get_slo_monitor() -> SLOMonitor:
     """Get or create the singleton SLO monitor."""

@@ -287,6 +287,69 @@ class ExecutionEngine:
         except Exception as exc:  # noqa: BLE001
             print(f"[worker] stale reclaim error: {exc}")
 
+    def _route_sandbox_and_claim(
+        self,
+        *,
+        fields: dict[str, str],
+        task_id: str,
+        node_key: str,
+        skill: str,
+        attempt: int,
+        exclude: set[str],
+    ):
+        """Select agent, sandbox-check endpoint, claim node.
+
+        Returns ``(routed, endpoint, idempotency_key)`` or ``None`` when the
+        worker should skip (already failed / not claimable).
+        Raises ``RouterError`` after recording failure so the caller can trace.
+        """
+        try:
+            routed = self.router.select(skill, exclude_agent_ids=exclude)
+        except RouterError as exc:
+            self._on_failure(
+                fields,
+                error=str(exc),
+                attempt=attempt,
+                agent_id=None,
+                exclude=exclude,
+                idempotency_key=None,
+            )
+            raise
+
+        print(
+            f"[worker] routed agent={routed.agent_key} score={routed.score} "
+            f"breakdown={routed.score_breakdown}"
+        )
+        if TRACING_AVAILABLE:
+            set_span_attribute("routing.agent_id", routed.agent_id)
+            set_span_attribute("routing.score", routed.score)
+
+        endpoint = normalize_endpoint(routed.endpoint)
+        try:
+            check_skill(skill)
+            check_endpoint(endpoint)
+        except SandboxViolation as exc:
+            self._on_failure(
+                fields,
+                error=f"sandbox: {exc}",
+                attempt=attempt,
+                agent_id=routed.agent_id,
+                exclude=exclude | {routed.agent_id},
+                idempotency_key=None,
+            )
+            return None
+
+        claimed = self.scheduler.claim_running(task_id, node_key, routed.agent_id, attempt)
+        if not claimed:
+            print(f"[worker] skip claim node={node_key} (not ready/retrying)")
+            return None
+
+        idempotency_key = self.scheduler.get_node_idempotency_key(task_id, node_key)
+        if not idempotency_key:
+            idempotency_key = f"req_{task_id[:8]}_{node_key}"
+        idempotency_key = f"{idempotency_key}:a{attempt}"
+        return routed, endpoint, idempotency_key
+
     def handle(self, fields: dict[str, str]) -> None:
         task_id = fields["task_id"]
         node_key = fields["node_key"]
@@ -314,58 +377,22 @@ class ExecutionEngine:
                 set_span_attribute("worker.goal_length", len(goal))
 
             try:
-                routed = self.router.select(skill, exclude_agent_ids=exclude)
-            except RouterError as exc:
-                self._on_failure(
-                    fields,
-                    error=str(exc),
+                prepared = self._route_sandbox_and_claim(
+                    fields=fields,
+                    task_id=task_id,
+                    node_key=node_key,
+                    skill=skill,
                     attempt=attempt,
-                    agent_id=None,
                     exclude=exclude,
-                    idempotency_key=None,  # Not generated yet
                 )
+            except RouterError as exc:
                 if TRACING_AVAILABLE:
                     record_span_exception(exc)
                 return
-
-            print(
-                f"[worker] routed agent={routed.agent_key} score={routed.score} "
-                f"breakdown={routed.score_breakdown}"
-            )
-
-            if TRACING_AVAILABLE and span:
-                set_span_attribute("routing.agent_id", routed.agent_id)
-                set_span_attribute("routing.score", routed.score)
-
-            endpoint = normalize_endpoint(routed.endpoint)
-            try:
-                check_skill(skill)
-                check_endpoint(endpoint)
-            except SandboxViolation as exc:
-                self._on_failure(
-                    fields,
-                    error=f"sandbox: {exc}",
-                    attempt=attempt,
-                    agent_id=routed.agent_id,
-                    exclude=exclude | {routed.agent_id},
-                    idempotency_key=None,  # Not generated yet
-                )
+            if prepared is None:
                 return
+            routed, endpoint, idempotency_key = prepared
 
-            claimed = self.scheduler.claim_running(task_id, node_key, routed.agent_id, attempt)
-            if not claimed:
-                print(f"[worker] skip claim node={node_key} (not ready/retrying)")
-                return
-
-            # P36.1: Get or generate stable idempotency key for this node
-            idempotency_key = self.scheduler.get_node_idempotency_key(task_id, node_key)
-            if not idempotency_key:
-                # Fallback for nodes created before migration
-                idempotency_key = f"req_{task_id[:8]}_{node_key}"
-            # Scope by attempt so agent-side caches don't poison retries with a
-            # prior terminal failure (e.g. timeout after join raced the CLI).
-            idempotency_key = f"{idempotency_key}:a{attempt}"
-            
             # P36.1: Track the request before execution
             tracking_service = self._get_request_tracking_service()
             if tracking_service:

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from defaults import database_url
+
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
 from scheduling.context import DEFAULT_TENANT_ID, TenantContext, get_tenant_context
-
 
 @dataclass
 class ResourceQuota:
@@ -26,7 +27,6 @@ class ResourceQuota:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
 
 class ResourceService:
     """Unify tenant_quotas + a2a_resource_quotas without a second enforcer."""
@@ -101,7 +101,7 @@ class ResourceService:
         try:
             from db import connect
 
-            url = os.getenv("DATABASE_URL", "postgresql://aop:aop@127.0.0.1:5432/aop")
+            url = database_url()
             with connect(url) as conn:
                 row = conn.execute(
                     """
@@ -122,6 +122,5 @@ class ResourceService:
                 return dict(row) if row else None
         except Exception:  # noqa: BLE001
             return None
-
 
 __all__ = ["ResourceQuota", "ResourceService"]

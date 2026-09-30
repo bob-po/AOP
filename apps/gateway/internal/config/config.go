@@ -12,7 +12,6 @@ type Config struct {
 	RedisAddr        string
 	RedisPassword    string
 	DefaultTenantID  string
-	OrchestratorURL  string
 	OrchestratorURLs []string // For load balancing
 	HTTPTimeout      time.Duration
 	AuthRequired     bool
@@ -48,7 +47,6 @@ func Load() Config {
 		RedisAddr:        getenv("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword:    getenv("REDIS_PASSWORD", ""),
 		DefaultTenantID:  getenv("DEFAULT_TENANT_ID", "00000000-0000-0000-0000-000000000001"),
-		OrchestratorURL:  orchURL,
 		OrchestratorURLs: orchURLs,
 		HTTPTimeout:      15 * time.Second,
 		AuthRequired:     authRequired,

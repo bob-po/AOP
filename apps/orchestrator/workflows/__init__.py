@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 import re
 import uuid
@@ -16,8 +18,6 @@ from psycopg.types.json import Jsonb
 from planner.dag import PlanNode, TaskPlan, validate_plan
 from router import hitl_skills
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
 DEFAULT_RESEARCH_DAG = {
     "title": "Claude Code Agent",
     "nodes": [
@@ -25,15 +25,12 @@ DEFAULT_RESEARCH_DAG = {
     ],
 }
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def _slugify(value: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
     return s or "workflow"
-
 
 class WorkflowService:
     def __init__(
@@ -41,10 +38,7 @@ class WorkflowService:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def ensure_defaults(self) -> None:

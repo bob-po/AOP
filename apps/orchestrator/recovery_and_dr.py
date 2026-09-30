@@ -1,20 +1,18 @@
 """Recovery and disaster preparedness (P36.8).
 
 This module implements startup reconciliation, state consistency checks,
-backup verification, and disaster recovery procedures.
+and disaster recovery procedures.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
 from db import connect
+from defaults import database_url as resolve_database_url
 
 
 def _utc_now() -> datetime:
@@ -23,6 +21,7 @@ def _utc_now() -> datetime:
 
 class ConsistencyIssue(Enum):
     """Types of consistency issues."""
+
     ORPHANED_TASK = "orphaned_task"
     ORPHANED_NODE = "orphaned_node"
     STALE_RUNNING_NODE = "stale_running_node"
@@ -35,13 +34,14 @@ class ConsistencyIssue(Enum):
 @dataclass
 class ConsistencyCheck:
     """Result of a consistency check."""
+
     issue_type: ConsistencyIssue
     severity: str  # "critical", "warning", "info"
     description: str
     affected_ids: list[str]
     timestamp: datetime = None
     recommendation: str = ""
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = _utc_now()
@@ -49,38 +49,21 @@ class ConsistencyCheck:
 
 class StartupReconciler:
     """Startup reconciliation for system recovery."""
-    
+
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.issues: list[ConsistencyCheck] = []
-    
+
     def run_full_reconciliation(self) -> list[ConsistencyCheck]:
         """Run full startup reconciliation."""
         self.issues = []
-        
-        # Check for orphaned tasks
         self.check_orphaned_tasks()
-        
-        # Check for orphaned nodes
         self.check_orphaned_nodes()
-        
-        # Check for stale running nodes
         self.check_stale_running_nodes()
-        
-        # Check for status mismatches
         self.check_status_mismatches()
-        
-        # Check for missing artifacts (skip if column doesn't exist)
-        # self.check_missing_artifacts()
-        
-        # Check for pending outbox events
         self.check_pending_outbox_events()
-        
         return self.issues
-    
+
     def check_orphaned_tasks(self) -> None:
         """Check for tasks with no running nodes but status=running."""
         with connect(self.database_url) as conn:
@@ -95,7 +78,7 @@ class StartupReconciler:
                   )
                 """,
             ).fetchall()
-            
+
             if rows:
                 self.issues.append(
                     ConsistencyCheck(
@@ -106,7 +89,7 @@ class StartupReconciler:
                         recommendation="Mark tasks as failed or reclaim nodes",
                     )
                 )
-    
+
     def check_orphaned_nodes(self) -> None:
         """Check for nodes with no associated task."""
         with connect(self.database_url) as conn:
@@ -120,7 +103,7 @@ class StartupReconciler:
                 )
                 """,
             ).fetchall()
-            
+
             if rows:
                 self.issues.append(
                     ConsistencyCheck(
@@ -131,11 +114,11 @@ class StartupReconciler:
                         recommendation="Delete orphaned nodes",
                     )
                 )
-    
+
     def check_stale_running_nodes(self) -> None:
         """Check for nodes stuck in running state for too long."""
         stale_threshold_hours = 24
-        
+
         with connect(self.database_url) as conn:
             rows = conn.execute(
                 """
@@ -146,22 +129,23 @@ class StartupReconciler:
                 """,
                 (stale_threshold_hours,),
             ).fetchall()
-            
+
             if rows:
                 self.issues.append(
                     ConsistencyCheck(
                         issue_type=ConsistencyIssue.STALE_RUNNING_NODE,
                         severity="critical",
-                        description=f"Nodes stuck in running state for > {stale_threshold_hours} hours",
+                        description=(
+                            f"Nodes stuck in running state for > {stale_threshold_hours} hours"
+                        ),
                         affected_ids=[row["node_id"] for row in rows],
                         recommendation="Mark as failed and reclaim",
                     )
                 )
-    
+
     def check_status_mismatches(self) -> None:
         """Check for task/node status mismatches."""
         with connect(self.database_url) as conn:
-            # Tasks marked completed but have running nodes
             rows = conn.execute(
                 """
                 SELECT t.id::text as task_id
@@ -173,7 +157,7 @@ class StartupReconciler:
                   )
                 """,
             ).fetchall()
-            
+
             if rows:
                 self.issues.append(
                     ConsistencyCheck(
@@ -184,34 +168,7 @@ class StartupReconciler:
                         recommendation="Update node statuses or recheck task status",
                     )
                 )
-    
-    def check_missing_artifacts(self) -> None:
-        """Check for missing artifacts referenced by nodes."""
-        with connect(self.database_url) as conn:
-            rows = conn.execute(
-                """
-                SELECT n.id::text as node_id, n.artifact_uris
-                FROM task_nodes n
-                WHERE n.artifact_uris IS NOT NULL
-                  AND n.artifact_uris != '[]'::jsonb
-                  AND NOT EXISTS (
-                    SELECT 1 FROM artifacts a
-                    WHERE a.uri = ANY(n.artifact_uris)
-                  )
-                """,
-            ).fetchall()
-            
-            if rows:
-                self.issues.append(
-                    ConsistencyCheck(
-                        issue_type=ConsistencyIssue.MISSING_ARTIFACT,
-                        severity="warning",
-                        description="Nodes reference missing artifacts",
-                        affected_ids=[row["node_id"] for row in rows],
-                        recommendation="Remove artifact references or restore artifacts",
-                    )
-                )
-    
+
     def check_pending_outbox_events(self) -> None:
         """Check for pending outbox events."""
         with connect(self.database_url) as conn:
@@ -225,7 +182,7 @@ class StartupReconciler:
                 LIMIT 100
                 """,
             ).fetchall()
-            
+
             if rows:
                 self.issues.append(
                     ConsistencyCheck(
@@ -236,17 +193,20 @@ class StartupReconciler:
                         recommendation="Process pending outbox events",
                     )
                 )
-    
+
     def auto_fix_critical_issues(self) -> dict[str, Any]:
-        """Automatically fix critical consistency issues."""
+        """Automatically fix critical consistency issues.
+
+        Dangerous on live systems — callers must opt in via
+        ``RECOVERY_AUTO_FIX=1`` (see orchestrator startup).
+        """
         fixed = {
             "orphaned_tasks": 0,
             "stale_nodes": 0,
         }
-        
+
         with connect(self.database_url) as conn:
             with conn.transaction():
-                # Fix orphaned tasks by marking as failed
                 result = conn.execute(
                     """
                     UPDATE tasks
@@ -263,8 +223,7 @@ class StartupReconciler:
                     """,
                 ).fetchall()
                 fixed["orphaned_tasks"] = len(result)
-                
-                # Fix stale running nodes
+
                 result = conn.execute(
                     """
                     UPDATE task_nodes
@@ -278,7 +237,7 @@ class StartupReconciler:
                     """,
                 ).fetchall()
                 fixed["stale_nodes"] = len(result)
-        
+
         return fixed
 
 
@@ -286,10 +245,7 @@ class SystemHealthProbe:
     """Read-only health snapshot from Postgres (no fake backup/restore)."""
 
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
 
     def get_system_health(self) -> dict[str, Any]:
         with connect(self.database_url) as conn:
@@ -314,24 +270,3 @@ class SystemHealthProbe:
                 "node_stats": {row["status"]: row["count"] for row in node_stats},
                 "timestamp": _utc_now().isoformat(),
             }
-
-
-# Singleton instances
-_startup_reconciler: StartupReconciler | None = None
-_system_health_probe: SystemHealthProbe | None = None
-
-
-def get_startup_reconciler() -> StartupReconciler:
-    """Get or create the singleton startup reconciler."""
-    global _startup_reconciler
-    if _startup_reconciler is None:
-        _startup_reconciler = StartupReconciler()
-    return _startup_reconciler
-
-
-def get_system_health_probe() -> SystemHealthProbe:
-    """Get or create the singleton system health probe."""
-    global _system_health_probe
-    if _system_health_probe is None:
-        _system_health_probe = SystemHealthProbe()
-    return _system_health_probe

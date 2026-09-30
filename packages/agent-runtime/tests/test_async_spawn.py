@@ -143,7 +143,7 @@ def test_callback_url_triggers_async_path(slow_client, monkeypatch):
     tc, _ = slow_client
     called = {"n": 0}
 
-    def fake_notify(url, task, *, timeout=10.0):
+    def fake_notify(url, task, *, timeout=10.0, **_kwargs):
         called["n"] += 1
         called["url"] = url
         called["state"] = (task.get("status") or {}).get("state")

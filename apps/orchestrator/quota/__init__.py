@@ -6,6 +6,8 @@ monthly estimated USD (via BillingService) before creating new work.
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import os
 from datetime import datetime, timezone
@@ -17,7 +19,6 @@ from db import connect
 
 from billing import BillingService, DEFAULT_TENANT_ID
 
-
 class QuotaExceeded(PermissionError):
     """Raised when a tenant would exceed configured quotas."""
 
@@ -26,7 +27,6 @@ class QuotaExceeded(PermissionError):
         self.code = code
         self.message = message
         self.snapshot = snapshot or {}
-
 
 _DEFAULTS = {
     "max_tasks_per_day": 100,
@@ -45,14 +45,11 @@ _DEFAULT_BOOST = {
     "usd_month_add_min": 50.0,
 }
 
-
 def quotas_enabled() -> bool:
     return os.getenv("TENANT_QUOTAS", "1").lower() not in {"0", "false", "no", "off"}
 
-
 def payment_boost_enabled() -> bool:
     return os.getenv("QUOTA_PAYMENT_BOOST", "1").lower() not in {"0", "false", "no", "off"}
-
 
 def load_boost_config() -> dict[str, float]:
     raw = os.getenv("QUOTA_BOOST_JSON", "").strip()
@@ -67,7 +64,6 @@ def load_boost_config() -> dict[str, float]:
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
     return out
-
 
 def compute_boosted_limits(
     current: dict[str, Any],
@@ -94,7 +90,6 @@ def compute_boosted_limits(
         ),
     }
 
-
 def next_plan_tier(current_tier: str | None, grant_count: int) -> str:
     tier = (current_tier or "free").lower()
     if grant_count >= 3 or tier == "pro":
@@ -103,7 +98,6 @@ def next_plan_tier(current_tier: str | None, grant_count: int) -> str:
         return "starter" if tier == "free" else tier
     return "free"
 
-
 class QuotaService:
     def __init__(
         self,
@@ -111,10 +105,7 @@ class QuotaService:
         tenant_id: str = DEFAULT_TENANT_ID,
         billing: BillingService | None = None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
         self.billing = billing or BillingService(database_url=self.database_url, tenant_id=tenant_id)
 

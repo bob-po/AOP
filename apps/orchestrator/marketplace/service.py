@@ -1,6 +1,8 @@
 """Phase 6 Marketplace Service — publish / install / activate on existing Registry."""
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import logging
 import os
@@ -19,8 +21,6 @@ from marketplace.skills import SkillRegistry, SkillSearchQuery
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
 # Version statuses for agent manifests
 VERSION_ACTIVE = "ACTIVE"
 VERSION_INACTIVE = "INACTIVE"
@@ -33,10 +33,8 @@ PKG_PUBLISHED = "PUBLISHED"
 PKG_DEPRECATED = "DEPRECATED"
 PKG_REVOKED = "REVOKED"
 
-
 def _agent_endpoint(env_key: str, fallback: str) -> str:
     return (os.getenv(env_key) or fallback).rstrip("/")
-
 
 # Curated catalog for local/dev marketplace — built from harness profile SoT.
 try:
@@ -62,7 +60,6 @@ except ImportError:  # pragma: no cover — orchestrator without editable agent-
         },
     ]
 
-
 class MarketplaceService:
     """Agent capability directory + install path into Gateway Registry."""
 
@@ -76,10 +73,7 @@ class MarketplaceService:
         lifecycle=None,
         pool=None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.gateway_url = (gateway_url or os.getenv("GATEWAY_URL", "http://127.0.0.1:8080")).rstrip(
             "/"
         )

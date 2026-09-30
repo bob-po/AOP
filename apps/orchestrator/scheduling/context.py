@@ -6,7 +6,7 @@ import contextvars
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+from defaults import DEFAULT_TENANT_ID
 
 _current: contextvars.ContextVar[Optional["TenantContext"]] = contextvars.ContextVar(
     "a2a_tenant_context", default=None

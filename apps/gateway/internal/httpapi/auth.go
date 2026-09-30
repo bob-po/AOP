@@ -95,10 +95,6 @@ func requireMutatingScope(store *auth.Store, scope string) func(http.Handler) ht
 	}
 }
 
-func requireScope(store *auth.Store, scope string) func(http.Handler) http.Handler {
-	return requireScopeIfAuthed(store, scope)
-}
-
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if h != "" {
@@ -110,9 +106,7 @@ func bearerToken(r *http.Request) string {
 	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
 		return key
 	}
-	if key := strings.TrimSpace(r.URL.Query().Get("api_key")); key != "" {
-		return key
-	}
+	// Query-string api_key removed: leaks via logs, Referer, and browser history.
 	return ""
 }
 

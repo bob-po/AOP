@@ -11,23 +11,20 @@ that Agent A must call Agent B.
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 from datetime import datetime, timezone
 from typing import Any
 
 from db import connect
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def _looks_like_uuid(value: str) -> bool:
     parts = value.split("-")
     return len(parts) == 5 and all(parts)
-
 
 class RuntimeGraphService:
     """Persist and query the runtime Agent-to-Agent execution graph."""
@@ -37,10 +34,7 @@ class RuntimeGraphService:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def record_edge(
@@ -583,6 +577,5 @@ class RuntimeGraphService:
         if isinstance(created, datetime):
             d["created_at"] = created.isoformat()
         return d
-
 
 __all__ = ["RuntimeGraphService"]

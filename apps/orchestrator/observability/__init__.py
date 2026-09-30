@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,8 +18,6 @@ try:
 except ImportError:
     PROMETHEUS_AVAILABLE = False
     generate_latest = None
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Create dummy metric class when prometheus_client is not available
 class DummyMetric:
@@ -58,11 +58,9 @@ else:
     queue_size = DummyMetric('aop_queue_size', 'Current queue size')
     memory_usage = DummyMetric('aop_memory_usage_bytes', 'Memory usage in bytes')
 
-
 def record_task_created(status: str = "running") -> None:
     task_counter.labels(status=status).inc()
     active_tasks.inc()
-
 
 def record_task_finished(status: str, duration_seconds: float | None = None) -> None:
     task_counter.labels(status=status).inc()
@@ -72,7 +70,6 @@ def record_task_finished(status: str, duration_seconds: float | None = None) -> 
         pass
     if duration_seconds is not None and duration_seconds >= 0:
         task_duration.observe(duration_seconds)
-
 
 def record_agent_call(
     agent: str,
@@ -88,10 +85,8 @@ def record_agent_call(
     if status != "success" and error_type:
         agent_errors.labels(agent=key, error_type=error_type[:64]).inc()
 
-
 def set_queue_size(n: int) -> None:
     queue_size.set(max(0, int(n)))
-
 
 def start_metrics_server(port: int = 9091):
     """Start Prometheus metrics server if available."""
@@ -110,10 +105,8 @@ def get_metrics_text() -> str:
         return generate_latest().decode('utf-8')
     return "# Metrics not available (prometheus-client not installed)\n"
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class MetricsService:
     def __init__(
@@ -121,10 +114,7 @@ class MetricsService:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def snapshot(self, *, hours: float = 24) -> dict[str, Any]:

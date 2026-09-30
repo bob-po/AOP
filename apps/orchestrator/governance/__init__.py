@@ -19,6 +19,8 @@ stable code and full lineage (queryable from Task/Audit), never silently dropped
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -26,8 +28,6 @@ from typing import Any, Optional
 
 from db import connect
 from runtime_graph import RuntimeGraphService
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Stable governance error codes (shared with the agent-side runtime).
 RECURSION_LIMIT_EXCEEDED = "RECURSION_LIMIT_EXCEEDED"
@@ -40,10 +40,8 @@ DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
 NO_AGENT_AVAILABLE = "NO_AGENT_AVAILABLE"
 POLICY_DISABLED = "POLICY_DISABLED"
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class BudgetMeter:
     """Extensible cost meter for A2A calls.
@@ -62,7 +60,6 @@ class BudgetMeter:
             return self.units_per_call, True  # flat default is an estimate
         return float(requested_units), bool(estimated)
 
-
 @dataclass
 class GovernanceDecision:
     allowed: bool
@@ -78,7 +75,6 @@ class GovernanceDecision:
             "context": self.context,
         }
 
-
 @dataclass
 class Policy:
     max_delegation_depth: int = 5
@@ -93,13 +89,11 @@ class Policy:
     policy_id: Optional[str] = None
     name: str = "global-default"
 
-
 _POLICY_FIELDS = (
     "max_delegation_depth", "max_calls_per_root", "max_agent_visits",
     "max_agent_concurrency", "max_tenant_concurrency", "max_task_lifetime_s",
     "max_budget_units_root", "max_budget_units_call", "enabled",
 )
-
 
 class GovernanceService:
     def __init__(
@@ -110,9 +104,7 @@ class GovernanceService:
         runtime_graph: Optional[RuntimeGraphService] = None,
         budget_meter: Optional[BudgetMeter] = None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL", "postgresql://aop:aop@127.0.0.1:5432/aop"
-        )
+        self.database_url = resolve_database_url(database_url)
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         self.tenant_id = tenant_id
         self.graph = runtime_graph or RuntimeGraphService(self.database_url)
@@ -437,7 +429,6 @@ class GovernanceService:
                 d["requested_units"] = float(d["requested_units"])
             out.append(d)
         return out
-
 
 __all__ = [
     "GovernanceService", "GovernanceDecision", "Policy", "BudgetMeter",

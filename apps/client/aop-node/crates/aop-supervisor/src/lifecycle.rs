@@ -33,7 +33,6 @@ struct Planned {
     args: Vec<String>,
     env: HashMap<String, String>,
     workdir: Option<PathBuf>,
-    #[allow(dead_code)]
     health_url: Option<String>,
 }
 
@@ -204,6 +203,8 @@ impl Supervisor {
     }
 
     pub async fn stop_child(&self, id: &str) -> Result<()> {
+        // Adopted (pid=0) children are not in ProcessManager — drop the adopt map entry.
+        self.adopted.write().await.remove(id);
         self.processes.kill(id).await
     }
 
@@ -288,8 +289,16 @@ impl Supervisor {
                 warn!(error = %e, "node heartbeat error");
             }
             // Child harness lifecycle (AOP_NODE_MANAGED children do not self-heartbeat).
+            // Skip plugins without health_url (e.g. sample echo) — they are not OS agents.
+            let planned_snapshot: HashMap<String, Option<String>> = {
+                let planned = self.planned.read().await;
+                planned
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.health_url.clone()))
+                    .collect()
+            };
             for id in planned_ids {
-                if id == "echo" {
+                if planned_snapshot.get(&id).and_then(|u| u.as_ref()).is_none() {
                     continue;
                 }
                 let child_extra = serde_json::json!({

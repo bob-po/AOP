@@ -185,19 +185,14 @@ class AgentCollaborator:
             # Allow join without OS when endpoint is known: bare A2A client.
             try:
                 from a2a_sdk import A2AClient
-                import time
 
                 client = A2AClient(endpoint, timeout=min(60.0, float(timeout_s)))
-                deadline = time.monotonic() + max(0.1, float(timeout_s))
-                terminal = {"completed", "failed", "canceled", "cancelled", "input-required"}
-                last = None
-                while time.monotonic() < deadline:
-                    last = client.get_task(task_id)
-                    status = getattr(last, "status", None)
-                    state = str(getattr(status, "value", status) or "").lower()
-                    if state in terminal:
-                        return last
-                    time.sleep(poll_interval_s)
+                return client.poll_task(
+                    task_id,
+                    timeout_s=timeout_s,
+                    poll_interval_s=poll_interval_s,
+                )
+            except TimeoutError:
                 return None
             except Exception as exc:  # noqa: BLE001
                 print(f"[{self.agent_id}] join failed: {exc}")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import logging
 import os
 from typing import Any, Optional
@@ -9,7 +11,6 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 EXECUTION_STREAM = "a2a.execution.events"
-
 
 def write_execution_outbox(
     conn,
@@ -61,7 +62,6 @@ def write_execution_outbox(
         ),
     )
 
-
 def emit_outbox_standalone(
     *,
     event_id: str,
@@ -78,9 +78,7 @@ def emit_outbox_standalone(
     try:
         from db import connect
 
-        url = database_url or os.getenv(
-            "DATABASE_URL", "postgresql://aop:aop@127.0.0.1:5432/aop"
-        )
+        url = database_url or resolve_database_url()
         with connect(url) as conn:
             with conn.transaction():
                 write_execution_outbox(
@@ -98,6 +96,5 @@ def emit_outbox_standalone(
     except Exception as exc:  # noqa: BLE001
         logger.debug("outbox standalone write skipped: %s", exc)
         return False
-
 
 __all__ = ["write_execution_outbox", "emit_outbox_standalone", "EXECUTION_STREAM"]

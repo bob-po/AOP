@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -11,17 +13,12 @@ from psycopg.types.json import Jsonb
 
 from handoff import parse_handoff, truncate_text
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
-
 class Aggregator:
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
 
     def build_result(self, task_id: str) -> dict[str, Any]:
         with connect(self.database_url) as conn:

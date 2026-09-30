@@ -6,6 +6,8 @@ between PostgreSQL state changes and Redis queue operations.
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import os
 from datetime import datetime, timezone
@@ -16,12 +18,8 @@ from psycopg.rows import dict_row
 from db import connect
 from psycopg.types.json import Jsonb
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class OutboxEvent:
     """Represents an outbox event for reliable message delivery."""
@@ -53,7 +51,6 @@ class OutboxEvent:
             "processed_at": self.processed_at.isoformat() if self.processed_at else None,
         }
 
-
 class OutboxProcessor:
     """Processes outbox events and publishes to Redis streams."""
 
@@ -62,10 +59,7 @@ class OutboxProcessor:
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
         self._streams_client = None  # Lazy-loaded
 
@@ -270,10 +264,8 @@ class OutboxProcessor:
             ).fetchall()
             return {row["status"]: row["count"] for row in rows}
 
-
 # Singleton instance for application use
 _outbox_processor: OutboxProcessor | None = None
-
 
 def get_outbox_processor() -> OutboxProcessor:
     """Get or create the singleton outbox processor."""

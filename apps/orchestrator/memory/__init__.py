@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import hashlib
 import os
 import re
@@ -15,25 +17,17 @@ from psycopg.types.json import Jsonb
 
 from .tfidf import rank_documents
 
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def _stable_key(prefix: str, text: str) -> str:
     digest = hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:12]
     slug = re.sub(r"[^a-zA-Z0-9_\-]+", "-", (text or "")[:40].strip()).strip("-").lower()
     return f"{prefix}:{slug or 'item'}:{digest}"
 
-
 class MemoryService:
     def __init__(self, database_url: str | None = None, tenant_id: str = DEFAULT_TENANT_ID):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def put(

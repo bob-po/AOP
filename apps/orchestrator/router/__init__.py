@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -19,8 +21,6 @@ except ImportError:  # pragma: no cover
 
 from .scoring import ScoringEngine, ScoringPolicy
 
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 ONLINE_STATUSES = frozenset({"online", "running"})
 
 # Optional: Import CandidateFilter for advanced filtering
@@ -29,7 +29,6 @@ try:
     HAS_FILTER = True
 except ImportError:  # pragma: no cover
     HAS_FILTER = False
-
 
 @dataclass
 class RoutedAgent:
@@ -44,14 +43,11 @@ class RoutedAgent:
     score: float = 0.0
     score_breakdown: dict[str, float] = field(default_factory=dict)
 
-
 class RouterError(LookupError):
     pass
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class AgentRouter:
     """Select an online agent that provides the requested skill (scored)."""
@@ -67,10 +63,7 @@ class AgentRouter:
         lifecycle_checker=None,
         capacity_queue_depth=None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.redis_url = redis_url or os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
         self.tenant_id = tenant_id
         self.metrics_window_hours = float(
@@ -488,9 +481,10 @@ class AgentRouter:
         agent_ids = list(self._redis.smembers(f"agent:skill:{skill}") or [])
         if not agent_ids:
             return []
+        by_id = self._get_agents([str(a) for a in agent_ids])
         out: list[dict[str, Any]] = []
         for agent_id in agent_ids:
-            row = self._get_agent(agent_id)
+            row = by_id.get(str(agent_id))
             if row and skill in (row.get("skills") or []):
                 out.append(row)
         return out
@@ -523,7 +517,11 @@ class AgentRouter:
             rows = conn.execute(sql, (self.tenant_id, skill)).fetchall()
         return [dict(r) for r in rows]
 
-    def _get_agent(self, agent_id: str) -> dict[str, Any] | None:
+    def _get_agents(self, agent_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Batch-load agents by id or agent_key (one PG round-trip)."""
+        ids = [str(a).strip() for a in agent_ids if str(a).strip()]
+        if not ids:
+            return {}
         sql = """
             SELECT a.id::text AS agent_id,
                    a.agent_key,
@@ -541,13 +539,22 @@ class AgentRouter:
                    ), '{}') AS skills
             FROM agents a
             WHERE a.tenant_id = %s::uuid
-              AND (a.id::text = %s OR a.agent_key = %s)
-            LIMIT 1
+              AND (a.id::text = ANY(%s) OR a.agent_key = ANY(%s))
         """
         with connect(self.database_url) as conn:
-            row = conn.execute(sql, (self.tenant_id, agent_id, agent_id)).fetchone()
-        return dict(row) if row else None
+            rows = conn.execute(sql, (self.tenant_id, ids, ids)).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = dict(row)
+            out[item["agent_id"]] = item
+            key = item.get("agent_key")
+            if key:
+                out[str(key)] = item
+        return out
 
+    def _get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        found = self._get_agents([agent_id])
+        return found.get(str(agent_id))
 
 def normalize_endpoint(url: str) -> str:
     """Map docker service hostnames to localhost when running agents on the host.
@@ -577,7 +584,6 @@ def normalize_endpoint(url: str) -> str:
         port = parsed.port or mapped[host]
         return f"http://127.0.0.1:{port}/"
     return url
-
 
 def hitl_skills() -> set[str]:
     """Skills that pause for human approval after success (comma-separated env)."""

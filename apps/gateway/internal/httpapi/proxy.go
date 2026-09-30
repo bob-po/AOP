@@ -60,9 +60,15 @@ func newLoadBalancedProxy(targets []string) http.Handler {
 		targetURL := u
 		proxy.Director = func(req *http.Request) {
 			ctx := req.Context()
+			originalHost := req.Header.Get("Host")
+			if originalHost == "" {
+				originalHost = req.Host
+			}
 			original(req)
 			req.Host = targetURL.Host
-			req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
+			// Never forward client-forged identity headers; set only from auth.
+			stripProxyIdentityHeaders(req)
+			req.Header.Set("X-Forwarded-Host", originalHost)
 			if p, ok := PrincipalFromContext(ctx); ok {
 				req.Header.Set("X-Tenant-ID", p.TenantID)
 				req.Header.Set("X-API-Key-ID", p.APIKeyID)
@@ -217,9 +223,14 @@ func newOrchestratorProxy(target string) http.Handler {
 	original := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		ctx := req.Context()
+		originalHost := req.Header.Get("Host")
+		if originalHost == "" {
+			originalHost = req.Host
+		}
 		original(req)
 		req.Host = u.Host
-		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
+		stripProxyIdentityHeaders(req)
+		req.Header.Set("X-Forwarded-Host", originalHost)
 		if p, ok := PrincipalFromContext(ctx); ok {
 			req.Header.Set("X-Tenant-ID", p.TenantID)
 			req.Header.Set("X-API-Key-ID", p.APIKeyID)
@@ -229,4 +240,19 @@ func newOrchestratorProxy(target string) http.Handler {
 		lbProxyRequests.WithLabelValues("single").Inc()
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+func stripProxyIdentityHeaders(req *http.Request) {
+	for _, h := range []string{
+		"X-Tenant-ID",
+		"X-Tenant-Id",
+		"X-API-Key-ID",
+		"X-API-Key-Id",
+		"X-Forwarded-Host",
+		"X-Forwarded-For",
+		"X-Forwarded-Proto",
+		"X-Real-IP",
+	} {
+		req.Header.Del(h)
+	}
 }

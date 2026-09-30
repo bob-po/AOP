@@ -52,6 +52,9 @@ func NewCardFetcher(timeout time.Duration) *CardFetcher {
 }
 
 func (f *CardFetcher) Fetch(ctx context.Context, endpoint string) (AgentCard, []byte, error) {
+	if err := ValidateAgentEndpoint(endpoint); err != nil {
+		return AgentCard{}, nil, err
+	}
 	base, err := normalizeBase(endpoint)
 	if err != nil {
 		return AgentCard{}, nil, err
@@ -74,10 +77,14 @@ func (f *CardFetcher) Fetch(ctx context.Context, endpoint string) (AgentCard, []
 			lastErr = err
 			continue
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxCardBodyBytes+1))
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
+			continue
+		}
+		if len(body) > maxCardBodyBytes {
+			lastErr = fmt.Errorf("%s: agent card exceeds %d bytes", p, maxCardBodyBytes)
 			continue
 		}
 		if resp.StatusCode == http.StatusNotFound {
@@ -108,6 +115,9 @@ func (f *CardFetcher) Fetch(ctx context.Context, endpoint string) (AgentCard, []
 }
 
 func (f *CardFetcher) Health(ctx context.Context, endpoint string) error {
+	if err := ValidateAgentEndpoint(endpoint); err != nil {
+		return err
+	}
 	base, err := normalizeBase(endpoint)
 	if err != nil {
 		return err

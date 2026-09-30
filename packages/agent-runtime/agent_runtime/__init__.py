@@ -35,9 +35,9 @@ from .a2a_server import (
     jsonrpc_result,
     jsonrpc_error,
     cancel_task,
-    subscribe_events,
     notify_callback,
     handle_control_method,
+    format_sse_frame,
 )
 from .agent_collab import AgentCollaborator
 
@@ -76,9 +76,9 @@ __all__ = [
     "jsonrpc_result",
     "jsonrpc_error",
     "cancel_task",
-    "subscribe_events",
     "notify_callback",
     "handle_control_method",
+    "format_sse_frame",
     "AgentCollaborator",
     "SCHEMA_VERSION",
     "HarnessEvent",

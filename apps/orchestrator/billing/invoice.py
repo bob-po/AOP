@@ -6,6 +6,8 @@ Optional STRIPE_SECRET_KEY enables a checkout-session *preview* payload only.
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import hashlib
 import json
 import os
@@ -30,10 +32,8 @@ from billing.webhook import (
     verify_stripe_signature,
 )
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 def build_invoice_from_usage(
     usage: dict[str, Any],
@@ -137,7 +137,6 @@ def build_invoice_from_usage(
     }
     return doc
 
-
 def invoice_to_markdown(invoice: dict[str, Any]) -> str:
     lines = [
         f"# Invoice {invoice.get('invoice_number')}",
@@ -170,11 +169,9 @@ def invoice_to_markdown(invoice: dict[str, Any]) -> str:
     )
     return "\n".join(lines)
 
-
 def _default_invoice_number(tenant_id: str, when: datetime) -> str:
     digest = hashlib.sha1(f"{tenant_id}:{when.date().isoformat()}".encode()).hexdigest()[:6].upper()
     return f"AOP-{when.strftime('%Y%m')}-{digest}"
-
 
 class InvoiceService:
     def __init__(
@@ -183,10 +180,7 @@ class InvoiceService:
         tenant_id: str = DEFAULT_TENANT_ID,
         billing: BillingService | None = None,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
         self.billing = billing or BillingService(
             database_url=self.database_url, tenant_id=tenant_id

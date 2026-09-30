@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import DEFAULT_TENANT_ID, database_url as resolve_database_url
+
 import json
 import os
 import re
@@ -14,8 +16,6 @@ from .dag import DAGValidationError, PlanNode, TaskPlan, validate_plan
 from .decompose import decompose_to_nodes
 from .json_plan import extract_json_object, nodes_from_payload
 from router import hitl_skills
-
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 _NO_SPAWN = "请独立完成本任务，不要再 spawn/委派同伴。"
 
@@ -52,7 +52,6 @@ _MULTI_AGENT_MARKERS = (
     "全部智能体",
 )
 
-
 @dataclass(frozen=True)
 class RegisteredAgent:
     """One schedulable agent from the registry (not a hardcoded catalog)."""
@@ -65,21 +64,17 @@ class RegisteredAgent:
     def label(self) -> str:
         return (self.name or self.key).strip() or self.key
 
-
 def _env_on(name: str, *, default: str = "") -> bool:
     return os.getenv(name, default).lower() in {"1", "true", "yes"}
 
-
 def _env_off(name: str, *, default: str = "1") -> bool:
     return os.getenv(name, default).lower() in {"0", "false", "no", "off"}
-
 
 def is_work_agent(key: str) -> bool:
     k = (key or "").strip().lower()
     if not k:
         return False
     return not any(k.startswith(p) for p in _SUPERVISOR_KEY_PREFIXES)
-
 
 def coerce_registry(
     agents: Sequence[RegisteredAgent] | Iterable[str] | None,
@@ -97,7 +92,6 @@ def coerce_registry(
             if is_work_agent(key):
                 out.append(RegisteredAgent(key=key, name=key))
     return out
-
 
 def _alias_patterns(key: str, name: str = "") -> list[tuple[int, str]]:
     """(specificity, regex) derived from registered key/name — longest first."""
@@ -142,7 +136,6 @@ def _alias_patterns(key: str, name: str = "") -> list[tuple[int, str]]:
     keyed.sort(key=lambda x: (-x[0], -len(x[1])))
     return keyed
 
-
 def default_agent(available: set[str]) -> str | None:
     """Prefer DEFAULT_AGENT when online; else any registered work agent."""
     work = {k for k in available if is_work_agent(k)}
@@ -153,7 +146,6 @@ def default_agent(available: set[str]) -> str | None:
         return preferred
     # Stable pick when env unset: lexicographic among online work agents.
     return sorted(work)[0]
-
 
 def mentioned_agents(
     goal: str,
@@ -179,7 +171,6 @@ def mentioned_agents(
             hits.append(key)
     return hits
 
-
 def wants_all_agents(
     goal: str,
     registry: Sequence[RegisteredAgent] | Iterable[str] | None = None,
@@ -191,7 +182,6 @@ def wants_all_agents(
     if registry is None:
         return False
     return len(mentioned_agents(goal, registry)) >= 2
-
 
 def requested_agent(
     goal: str,
@@ -210,7 +200,6 @@ def requested_agent(
     if available is not None and key not in available:
         return None
     return key
-
 
 def extract_work_goal(
     goal: str,
@@ -243,7 +232,6 @@ def extract_work_goal(
     cleaned = cleaned.strip(" ，,、；;：:")
     return cleaned or text
 
-
 def agent_instruction(
     agent_key: str,
     work_goal: str,
@@ -260,7 +248,6 @@ def agent_instruction(
         head = f"你是 {who}。{_NO_SPAWN}"
     return f"{head}\n\n任务：\n{work}"
 
-
 def _node_id_for(key: str, used: set[str]) -> str:
     base = re.sub(r"[^a-zA-Z0-9]+", "_", key).strip("_")[:24] or "agent"
     nid = base
@@ -270,7 +257,6 @@ def _node_id_for(key: str, used: set[str]) -> str:
         n += 1
     used.add(nid)
     return nid
-
 
 def parallel_harness_nodes(
     available: set[str] | Sequence[RegisteredAgent] | Sequence[str],
@@ -317,7 +303,6 @@ def parallel_harness_nodes(
         )
     return nodes
 
-
 def probe_agent_ready(endpoint: str, *, timeout_s: float = 2.0) -> bool:
     """GET ``/health`` — treat missing flag as ready (older agents)."""
     if _env_on("PLANNER_SKIP_READY_PROBE"):
@@ -338,7 +323,6 @@ def probe_agent_ready(endpoint: str, *, timeout_s: float = 2.0) -> bool:
     except Exception:  # noqa: BLE001
         return False
 
-
 @dataclass
 class PlannerResult:
     plan: TaskPlan
@@ -352,17 +336,13 @@ class PlannerResult:
             "plan": self.plan.to_dict(),
         }
 
-
 class Planner:
     def __init__(
         self,
         database_url: str | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
     ):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://aop:aop@127.0.0.1:5432/aop",
-        )
+        self.database_url = resolve_database_url(database_url)
         self.tenant_id = tenant_id
 
     def plan(self, goal: str, *, title: str | None = None) -> PlannerResult:
@@ -636,7 +616,6 @@ class Planner:
             except DAGValidationError:
                 return None, False
             return fixed, True
-
 
 def _short_title(goal: str, limit: int = 48) -> str:
     cleaned = re.sub(r"\s+", " ", goal).strip()

@@ -146,10 +146,13 @@ class HermesCliRunner:
         )
 
         msg_file: Optional[Path] = None
-        fd, path = tempfile.mkstemp(prefix="aop-hermes-", suffix=".txt", text=True)
-        os.close(fd)
-        msg_file = Path(path)
-        msg_file.write_text(prompt, encoding="utf-8")
+        # Prompt is passed via ``-z`` argv; only create a tempfile for preview
+        # workspaces that may read a query file from disk.
+        if should_use_live_preview():
+            fd, path = tempfile.mkstemp(prefix="aop-hermes-", suffix=".txt", text=True)
+            os.close(fd)
+            msg_file = Path(path)
+            msg_file.write_text(prompt, encoding="utf-8")
 
         # Top-level oneshot: avoid ``hermes chat`` (ImportError on shadowed ``cli``).
         argv = [binary, "--yolo", "--accept-hooks", "-z", prompt]

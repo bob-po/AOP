@@ -6,6 +6,8 @@ Supports an in-memory backend for hermetic tests and a Postgres backend for prod
 
 from __future__ import annotations
 
+from defaults import database_url as resolve_database_url
+
 import os
 import threading
 import time
@@ -21,14 +23,11 @@ from .state_machine import (
     RecoveryClass,
 )
 
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
-
 def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
-
 
 @dataclass
 class ExecutionRecord:
@@ -103,7 +102,6 @@ class ExecutionRecord:
             user_id=row.get("user_id"),
             project_id=row.get("project_id"),
         )
-
 
 class ExecutionRecordStore:
     """In-memory SoT used by unit tests and as fallback when DB is down."""
@@ -323,16 +321,13 @@ class ExecutionRecordStore:
         )
         return {"class": klass.value, "record": rec.to_dict(), "stale": stale}
 
-
 class PostgresExecutionRecordStore:
     """DB-backed SoT. Falls back is handled by ExecutionService."""
 
     _txn_outbox = True  # transitions write outbox in the same DB transaction
 
     def __init__(self, database_url: str | None = None):
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL", "postgresql://aop:aop@127.0.0.1:5432/aop"
-        )
+        self.database_url = resolve_database_url(database_url)
 
     def _connect(self):
         from db import connect
@@ -642,7 +637,6 @@ class PostgresExecutionRecordStore:
             rec.state, stale=stale, attempts_remaining=remaining
         )
         return {"class": klass.value, "record": rec.to_dict(), "stale": stale}
-
 
 __all__ = [
     "ExecutionRecord",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from defaults import database_url
+
 import os
 import threading
 from dataclasses import asdict, dataclass, field
@@ -10,10 +12,8 @@ from typing import Any, Optional
 
 from scheduling.context import DEFAULT_TENANT_ID, get_tenant_context
 
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 @dataclass
 class ExecutionCost:
@@ -41,7 +41,6 @@ class ExecutionCost:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-
 # Simple default pricing (USD) — Policy can override later
 _DEFAULT_RATES = {
     "input_token": 0.000001,
@@ -50,7 +49,6 @@ _DEFAULT_RATES = {
     "cpu_second": 0.00001,
     "wall_ms": 0.0,
 }
-
 
 def estimate_cost(
     *,
@@ -70,7 +68,6 @@ def estimate_cost(
         + wall_time_ms * r["wall_ms"]
     )
     return round(float(total), 8)
-
 
 class CostStore:
     """In-memory cost store for hermetic tests."""
@@ -116,7 +113,6 @@ class CostStore:
             "wall_time_ms": sum(c.wall_time_ms for c in costs),
             "currency": (costs[0].currency if costs else "USD"),
         }
-
 
 class CostService:
     def __init__(self, store: CostStore | None = None):
@@ -198,7 +194,7 @@ class CostService:
             from db import connect
             from psycopg.types.json import Jsonb
 
-            url = os.getenv("DATABASE_URL", "postgresql://aop:aop@127.0.0.1:5432/aop")
+            url = database_url()
             with connect(url) as conn:
                 with conn.transaction():
                     conn.execute(
@@ -240,6 +236,5 @@ class CostService:
                     )
         except Exception:  # noqa: BLE001
             pass
-
 
 __all__ = ["ExecutionCost", "CostStore", "CostService", "estimate_cost"]

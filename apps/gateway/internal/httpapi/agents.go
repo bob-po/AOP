@@ -52,6 +52,10 @@ func (h *AgentHandlers) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "validation_error", "endpoint is required", nil)
 		return
 	}
+	if err := registry.ValidateAgentEndpoint(req.Endpoint); err != nil {
+		writeError(w, http.StatusBadRequest, "validation_error", "endpoint not allowed", err.Error())
+		return
+	}
 
 	card, raw, err := h.Fetcher.Fetch(r.Context(), req.Endpoint)
 	if err != nil {
