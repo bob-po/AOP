@@ -69,6 +69,7 @@ def test_assert_blocks_concurrent(monkeypatch):
         with pytest.raises(QuotaExceeded) as ei:
             svc.assert_can_create_task()
         assert ei.value.code == "quota_concurrent"
+        assert "配额" in ei.value.message
 
 
 def test_assert_blocks_tasks_per_day(monkeypatch):
@@ -96,8 +97,9 @@ def test_assert_blocks_tasks_per_day(monkeypatch):
         patch.object(svc, "get", return_value=limits),
         patch.object(svc, "usage_snapshot", return_value=usage),
     ):
-        with pytest.raises(QuotaExceeded, match="tasks today"):
+        with pytest.raises(QuotaExceeded) as ei:
             svc.assert_can_create_task()
+        assert ei.value.code == "quota_tasks_per_day"
 
 
 def test_assert_ok_with_headroom(monkeypatch):

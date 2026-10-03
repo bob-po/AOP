@@ -50,6 +50,12 @@ func recordAudit(store *auth.AuditStore, r *http.Request, tenant, action, resour
 	if p, ok := PrincipalFromContext(r.Context()); ok {
 		payload["api_key_id"] = p.APIKeyID
 		payload["api_key_name"] = p.Name
+		if p.Email != "" {
+			payload["actor_email"] = p.Email
+		}
+		if p.UserID != "" {
+			payload["actor_user_id"] = p.UserID
+		}
 	}
 	_ = store.Append(r.Context(), tenant, action, resourceType, resourceID, clientIP(r), payload)
 }

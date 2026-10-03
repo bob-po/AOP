@@ -48,6 +48,7 @@ Orchestrator (Python :8090)
 |------|------|
 | [a2a-protocol.md](./a2a-protocol.md) | 官方 A2A 钉扎 · 支持矩阵 · Part.`kind` |
 | [agent-dev-guide.md](./agent-dev-guide.md) | 合规 Agent Card · 生命周期 |
+| [agent-approval.md](./agent-approval.md) | 四种审批门 · Agent 收信号 / 回调 |
 | [harness-migration.md](./harness-migration.md) | Harness 虚拟 Agent · 环境变量 · Edge |
 | [agent-sandbox.md](./agent-sandbox.md) | 沙箱 / seccomp |
 | [database.md](../reference/database.md) | ER / SQL / migrate |

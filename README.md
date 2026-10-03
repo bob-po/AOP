@@ -2,7 +2,7 @@
 
 基于 [A2A 协议](https://github.com/a2aproject/A2A) 的多 Agent **注册 · 发现 · 调度 · 编排 · 执行** 平台。
 
-**当前形态：** 平台能力 Phase 1–37 + A2A OS Phase 3–6；Agent 统一为 Harness 虚拟 Agent；可选边缘节点 `aop-node`。
+**当前形态：** 平台能力 Phase 1–37 + A2A OS Phase 3–6；Agent 统一为 Harness 虚拟 Agent；本地默认由 `aop-node` 拉起。
 
 ## 文档
 
@@ -17,7 +17,7 @@
 | [Harness](./docs/architecture/harness-migration.md) | 虚拟 Agent · CLI 环境 |
 | [API](./docs/reference/api.md) · [Database](./docs/reference/database.md) · [Redis](./docs/reference/redis.md) | 契约 |
 | [部署](./deployments/README.md) | 单机云部署 |
-| [aop-node](./apps/client/aop-node/README.md) | 边缘 Supervisor（可选） |
+| [aop-node](./apps/client/aop-node/README.md) | 边缘 Supervisor（本地默认拉起 Harness） |
 
 ## 仓库结构
 
@@ -36,10 +36,22 @@ packages/
 infrastructure/     postgres · redis · minio
 deployments/        docker-compose · deploy.sh · 可观测
 docs/               文档中心
-scripts/            start_and_register_agents.py
+scripts/            dev_up.py · golden_demo.py · start_and_register_agents.py
 ```
 
 ## 快速开始（本地）
+
+一键拉起（基础设施 + Orchestrator + Worker + Outbox + Gateway + Web + **aop-node**）：
+
+```bash
+python scripts/dev_up.py
+```
+
+打开 http://127.0.0.1:3000 — 账号 `admin@aop.local` / `aop_admin_dev`。  
+Harness 由 **aopd**（`:7920`）统一拉起并注册，不再默认开 5 个 uvicorn。`--skip-agents` 跳过；`--legacy-agents` 或 `AOP_LEGACY_AGENTS=1` 回退到旧的 5 进程。  
+黄金路径自检：`python scripts/golden_demo.py --check`；建一条 Command Center 同款任务：`python scripts/golden_demo.py`。
+
+下面是等价的分步启动（排障时用）。
 
 ### 1. 基础设施
 
@@ -73,14 +85,13 @@ go run ./cmd/
 
 ### 4. Harness Agents 并注册
 
-**推荐：** 用 aop-node（注册 + 心跳由 Supervisor 统一负责）：
+`dev_up.py` 默认走 aop-node。单独启动：
 
 ```bash
 cd apps/client/aop-node
+copy config\aop-node.example.toml aop-node.toml
 cargo run -p aopd -- --config aop-node.toml
 ```
-
-**无 Supervisor 的开发脚本：**
 
 ```bash
 pip install -e "packages/agent-runtime[harness]"
@@ -108,9 +119,9 @@ npm run dev
 
 打开 http://127.0.0.1:3000 — 账号 `admin@aop.local` / `aop_admin_dev`。
 
-### 6. Edge Node（可选）
+### 6. Edge Node
 
-用 Rust 守护进程在本机拉起 harness、注册 Gateway、装 Windows 服务：
+本机默认 Supervisor 即 aop-node（`dev_up.py` 会拉起）。装 Windows 服务：
 
 ```bash
 cd apps/client/aop-node
@@ -143,7 +154,7 @@ cp .env.example .env   # 编辑 AOP_PUBLIC_HOST
 
 | 现象 | 处理 |
 |------|------|
-| `429` + `quota_concurrent` | Settings「配额」调高，或取消卡住的 `running` 任务 |
+| `429` + `quota_concurrent` | Settings「配额」调高，或取消卡住的 `running` 任务；Console 会显示中文说明 |
 | Gateway `proxy error …:8090` | 确认 Orchestrator 在听；必要时重启 Gateway |
-| 任务 `ready` 不推进 | 确认 Outbox Processor 在跑 |
+| 任务 `ready` 不推进 | 确认 Outbox Processor 在跑；Console 预检横幅会标红 |
 | 鉴权 | Bearer 会话或 `X-API-Key`；本地可 `AUTH_REQUIRED=false` |

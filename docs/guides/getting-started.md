@@ -2,7 +2,8 @@
 
 本文档梳理 AOP（A2A Agent Orchestration Platform）本地启动的完整步骤、端口与环境变量约定，以及启动过程中最常踩的坑和排查方法。
 
-> 快速入口：根目录 [README.md](../README.md) 也有「快速开始」，本文档在此基础上补充了**依赖版本要求、端口占用、报错排查**等实战细节。
+> 推荐本地：仓库根目录 `python scripts/dev_up.py`（Worker + Outbox + **aop-node** 拉起 Harness）。  
+> 快速入口：根目录 [README.md](../../README.md) 也有「快速开始」，本文档补充依赖版本、端口占用、报错排查。
 
 ---
 
@@ -21,10 +22,10 @@
 | **Outbox Processor** | Python | 无（轮询 PG） | P36.2 outbox 投递（**必需**） |
 | **Gateway** | Go | `8080` | 注册中心 + 反向代理 + 鉴权 |
 | **Web Console** | Next.js 15 | `3000` | 前端 |
-| **Harness agents** | Python | `8011`–`8015` | claude-code / deepseek / pi / openclaw / hermes |
-| **aop-node**（可选） | Rust | `7920` | 边缘 Supervisor：拉起本地 harness、注册、Windows 服务 |
+| **Harness agents** | Python | `8011`–`8015` | 由 aop-node 拉起：claude-code / deepseek / pi / openclaw / hermes |
+| **aop-node** | Rust | `7920` | 边缘 Supervisor：默认本地拉起 harness、注册、心跳 |
 
-启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → Agents（或 aop-node）→ Web**。
+启动顺序（依赖关系）：**基础设施 → 数据库迁移 → Orchestrator → Worker → Outbox Processor → Gateway → aop-node（Harness）→ Web**。
 
 > ⚠️ **Outbox Processor 是 Phase 36.2 新增的必需服务**。缺少它时，任务的首批就绪节点会一直卡在 PostgreSQL `outbox_events` 表（状态 `pending`），任务表现为 `running` 但节点永远停在 `ready`。
 
@@ -147,7 +148,7 @@ python scripts/start_and_register_agents.py
 
 ### 3.6b Edge Node（可选，代替本机手动起 Agents）
 
-若本机用 Windows 服务托管 harness，见 [aop-node README](../../apps/client/aop-node/README.md)：
+若本机用 Windows 服务托管 aop-node，见 [aop-node README](../../apps/client/aop-node/README.md)：
 
 ```powershell
 cd apps\client\aop-node
@@ -193,7 +194,7 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess -ErrorActio
 | `9000/9001` | MinIO | `8080` | Gateway |
 | `9090` | Prometheus | `3000` | Web |
 | `3001` | Grafana | `8011–8015` | Harness agents |
-| `9093` | Alertmanager | `7920` | aop-node（可选） |
+| `9093` | Alertmanager | `7920` | aop-node |
 | `5000` | Webhook | | |
 
 ---
@@ -245,14 +246,21 @@ curl http://127.0.0.1:8090/health          # orchestrator ok
 curl http://127.0.0.1:8080/health          # gateway ok
 curl http://127.0.0.1:8080/v1/agents       # 已注册 agents
 curl http://127.0.0.1:3000/login           # web console
-curl http://127.0.0.1:7920/health          # aop-node（若启用）
+curl http://127.0.0.1:7920/health          # aop-node
 
 # outbox 处理器是否在跑（应该看到 "Starting outbox processor service"）
 # 建任务后确认 outbox_events 里 pending 被及时清空：
 docker exec aop-postgres psql -U aop -d aop -c "SELECT status, count(*) FROM outbox_events GROUP BY status;"
 ```
 
-浏览器：`/tasks` 建一个任务，观察 DAG 是否推进（首批节点经 outbox → Redis → Worker → Agent 执行）。
+浏览器：打开 http://127.0.0.1:3000，用 Command Center 第一条提示词跑一遍；或：
+
+```bash
+python scripts/golden_demo.py --check   # 只预检
+python scripts/golden_demo.py           # 建任务并等到完成 / HITL（约 90s）
+```
+
+脚本会打印 `/?task=` 链接。卡住则看 [chaos-checklist.md](../operations/chaos-checklist.md)。
 
 ---
 
@@ -376,6 +384,22 @@ cd apps/orchestrator && python scripts/phase25_auth_users.py
 ```
 
 前提是已跑过 `migrate.py`（`006_user_auth.sql` 已应用）。
+
+### 7.17 中途杀掉 Worker / Outbox / Orchestrator（Chaos 恢复）
+
+不要改 SQL。进程死了，计划还在 Postgres。
+
+1. 看 Console 顶栏预检：Worker / Outbox 红了会标「正在发生」。完整清单在 **设置 → 监控**。
+2. 把对应进程拉起来（或再跑一次 `python scripts/dev_up.py`）。
+3. 打开原任务（`/?task=` 或 Tasks），点 **Retry**。卡在 `running` 占配额时同样 Retry / Cancel。
+4. Gateway 掉了：重启 Gateway，刷新页面。
+
+| 杀谁 | 典型症状 | Console |
+|------|----------|---------|
+| Worker | 节点停在 ready/running，预检 Worker down | 进程起来后 Retry |
+| Outbox | 新任务卡在 ready，outbox pending | 心跳恢复会自动投递，否则 Retry |
+| Orchestrator | 502 / 预检失败 | 起来后打开原任务 Retry |
+| 任务卡 running | 配额占满 | Retry 或 Cancel |
 
 ---
 

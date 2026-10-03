@@ -452,3 +452,100 @@ def test_build_task_graph_invalid_id_is_404(monkeypatch):
     except HTTPException as exc:
         assert exc.status_code == 404
         assert exc.detail["code"] == "not_found"
+
+
+def test_post_completion_events_do_not_regress_task_status():
+    """task.aggregated / task.evaluated must not flip nodes back to running."""
+    events = [
+        {
+            "event_type": "task.created",
+            "event_id": "e1",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "payload": {"sequence": 1},
+        },
+        {
+            "event_type": "agent.started",
+            "event_id": "e2",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "agent_id": "claude-code",
+            "payload": {"sequence": 2},
+        },
+        {
+            "event_type": "agent.completed",
+            "event_id": "e3",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "agent_id": "claude-code",
+            "payload": {"sequence": 3},
+        },
+        {
+            "event_type": "task.completed",
+            "event_id": "e4",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "payload": {"sequence": 4},
+        },
+        {
+            "event_type": "task.aggregated",
+            "event_id": "e5",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "payload": {"sequence": 5},
+        },
+        {
+            "event_type": "task.evaluated",
+            "event_id": "e6",
+            "task_id": "t1",
+            "root_task_id": "t1",
+            "payload": {"sequence": 6},
+        },
+    ]
+    g = project_visual_graph(
+        task_id="t1",
+        events=events,
+        task_row={"id": "t1", "status": "completed", "title": "hello"},
+    )
+    assert g["status"] == "completed"
+    task_node = next(n for n in g["nodes"] if n["type"] == "task")
+    assert task_node["status"] == "completed"
+    agent = next(n for n in g["nodes"] if n.get("agent_id") == "claude-code")
+    assert agent["status"] == "completed"
+
+
+def test_task_row_reconciles_orphan_running_agent():
+    """Missing agent_id on agent.completed still closes hops when task is done."""
+    events = [
+        {
+            "event_type": "agent.started",
+            "event_id": "e1",
+            "task_id": "t2",
+            "root_task_id": "t2",
+            "agent_id": "agent-uuid",
+            "payload": {"sequence": 1},
+        },
+        {
+            "event_type": "agent.completed",
+            "event_id": "e2",
+            "task_id": "t2",
+            "root_task_id": "t2",
+            # no agent_id — regression seen in live Console runs
+            "payload": {"sequence": 2},
+        },
+        {
+            "event_type": "task.completed",
+            "event_id": "e3",
+            "task_id": "t2",
+            "root_task_id": "t2",
+            "payload": {"sequence": 3},
+        },
+    ]
+    g = project_visual_graph(
+        task_id="t2",
+        events=events,
+        task_row={"id": "t2", "status": "completed"},
+    )
+    agent = next(n for n in g["nodes"] if n.get("agent_id") == "agent-uuid")
+    assert agent["status"] == "completed"
+    assert g["status"] == "completed"

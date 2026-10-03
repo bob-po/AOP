@@ -76,9 +76,10 @@ class SchedulingEngine:
         *,
         node_key: str | None = None,
         human_input: str | None = None,
+        actor: str = "system",
     ) -> dict[str, Any]:
         result = self.scheduler.approve_node(
-            task_id, node_key, human_input=human_input
+            task_id, node_key, human_input=human_input, actor=actor
         )
         enqueued = self.enqueue_jobs(result.get("ready_jobs") or [], task_id=task_id)
         result["enqueued_nodes"] = enqueued

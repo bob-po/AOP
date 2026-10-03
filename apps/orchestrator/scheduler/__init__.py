@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 
 from db import connect
 from planner.dag import PlanNode, TaskPlan, ready_node_ids, validate_plan
+from approval import apply_decision, resolve_for_node
 
 # Request tracking will be imported lazily in methods to avoid circular dependency
 # Outbox pattern for P36.2 distributed transactions (lazy import)
@@ -30,7 +31,7 @@ __all__ = [
 ]
 
 _NODE_ACTIVE = frozenset(
-    {"pending", "ready", "running", "retrying", "waiting_for_user"}
+    {"pending", "ready", "running", "retrying", "waiting_for_user", "waiting_for_agent"}
 )
 _NODE_OK = frozenset({"success"})
 _NODE_BAD = frozenset({"failed", "cancelled"})
@@ -499,8 +500,9 @@ class Scheduler:
                 plan = self._load_plan(conn, task_id)
                 now = _utc_now()
                 plan_node = next((n for n in plan.nodes if n.id == node_key), None)
-                needs_hitl = bool(plan_node and plan_node.requires_approval)
-                
+                policy = resolve_for_node(plan_node=plan_node, output=output)
+                needs_hitl = policy.needs_gate
+
                 # P36.2: Write task event to outbox
                 self.write_outbox_event(
                     "task_event",
@@ -514,7 +516,13 @@ class Scheduler:
                     },
                     "task_events"
                 )
-                target_status = "waiting_for_user" if needs_hitl else "success"
+                target_status = policy.wait_status() if needs_hitl else "success"
+                stored_output = dict(output or {})
+                if needs_hitl:
+                    stored_output["hitl"] = {
+                        **(stored_output.get("hitl") if isinstance(stored_output.get("hitl"), dict) else {}),
+                        **policy.to_hitl(),
+                    }
 
                 node = conn.execute(
                     """
@@ -528,7 +536,7 @@ class Scheduler:
                     RETURNING id::text AS node_id, skill, assigned_agent_id::text AS agent_id,
                               attempt, input_json
                     """,
-                    (target_status, Jsonb(output), now, now, task_id, node_key),
+                    (target_status, Jsonb(stored_output), now, now, task_id, node_key),
                 ).fetchone()
                 if not node:
                     return []
@@ -557,9 +565,15 @@ class Scheduler:
                     (
                         f"Node {node_key} completed"
                         if not needs_hitl
-                        else f"Node {node_key} awaiting human approval"
+                        else f"Node {node_key} awaiting {policy.mode} approval"
                     ),
-                    {"node_key": node_key, "a2a_task_id": a2a_task_id, "latency_ms": latency_ms},
+                    {
+                        "node_key": node_key,
+                        "a2a_task_id": a2a_task_id,
+                        "latency_ms": latency_ms,
+                        "approval_mode": policy.mode,
+                        "approver_agent": policy.approver_agent,
+                    },
                 )
 
                 # agent_runs audit (HITL still counts as successful agent execution)
@@ -592,20 +606,37 @@ class Scheduler:
                     completed = {r["id"] for r in rows if r["status"] == "success"}
                     total = len(rows) or 1
                     progress = int(len(completed) * 100 / total)
+                    task_status = policy.wait_status()
                     conn.execute(
                         """
-                        UPDATE tasks SET status = 'waiting_for_user', progress = %s, updated_at = %s
+                        UPDATE tasks SET status = %s, progress = %s, updated_at = %s
                         WHERE id = %s::uuid
                         """,
-                        (progress, now, task_id),
+                        (task_status, progress, now, task_id),
                     )
+                    if policy.needs_agent and policy.approver_agent:
+                        self._signal_agent_approval(
+                            conn,
+                            task_id=task_id,
+                            node_id=node["node_id"],
+                            node_key=node_key,
+                            policy=policy,
+                            output=stored_output,
+                        )
                     self._append_event(
                         conn,
                         task_id,
                         node["node_id"],
-                        "task.waiting_for_user",
-                        f"Task paused for approval at {node_key}",
-                        {"node_key": node_key, "skill": node.get("skill")},
+                        "task.waiting_for_user"
+                        if task_status == "waiting_for_user"
+                        else "task.waiting_for_agent",
+                        f"Task paused for {policy.mode} approval at {node_key}",
+                        {
+                            "node_key": node_key,
+                            "skill": node.get("skill"),
+                            "approval_mode": policy.mode,
+                            "approver_agent": policy.approver_agent,
+                        },
                     )
                     return []
 
@@ -829,12 +860,12 @@ class Scheduler:
         node_key: str | None = None,
         *,
         human_input: str | None = None,
+        actor: str = "system",
     ) -> dict[str, Any]:
-        """Approve a waiting_for_user node and unlock dependents.
+        """Approve a waiting node. ``actor`` is system (Inbox) or agent (peer).
 
         Optional ``human_input`` is merged into ``output_json.hitl`` so
-        downstream ``_compose_query`` can resume with that content
-        (LangGraph Command(resume=value) analogue).
+        downstream ``_compose_query`` can resume with that content.
         """
         with self._connect() as conn:
             with conn.transaction():
@@ -853,55 +884,64 @@ class Scheduler:
                         """
                         SELECT id::text AS node_id, node_key, skill, status, output_json
                         FROM task_nodes
-                        WHERE task_id = %s::uuid AND status = 'waiting_for_user'
+                        WHERE task_id = %s::uuid
+                          AND status IN ('waiting_for_user', 'waiting_for_agent')
                         ORDER BY updated_at ASC
                         LIMIT 1
                         """,
                         (task_id,),
                     ).fetchone()
                 if not node:
-                    raise ValueError("no waiting_for_user node to approve")
-                if node["status"] != "waiting_for_user":
-                    raise ValueError(f"node status={node['status']} is not waiting_for_user")
+                    raise ValueError("no waiting node to approve")
+                if node["status"] not in {"waiting_for_user", "waiting_for_agent"}:
+                    raise ValueError(f"node status={node['status']} is not waiting")
 
+                plan = self._load_plan(conn, task_id)
+                plan_node = next((n for n in plan.nodes if n.id == node["node_key"]), None)
+                raw_out = node.get("output_json")
+                if isinstance(raw_out, str):
+                    try:
+                        raw_out = json.loads(raw_out)
+                    except Exception:
+                        raw_out = {}
+                if not isinstance(raw_out, dict):
+                    raw_out = {}
+                policy = apply_decision(
+                    resolve_for_node(plan_node=plan_node, output=raw_out),
+                    actor=actor,
+                    approved=True,
+                )
                 text = (human_input or "").strip() or None
-                hitl_patch = {
-                    "hitl": {
-                        "approved": True,
-                        "input": text,
-                        "approved_at": now.isoformat(),
-                    }
+                hitl = {
+                    **(raw_out.get("hitl") if isinstance(raw_out.get("hitl"), dict) else {}),
+                    **policy.to_hitl(),
+                    "approved": not policy.needs_gate,
+                    "input": text,
+                    "approved_at": now.isoformat(),
+                    "last_actor": "agent" if str(actor).lower() in {"agent", "peer", "a2a"} else "system",
                 }
+                merged = {**raw_out, "hitl": hitl}
+                next_status = "success" if not policy.needs_gate else policy.wait_status()
                 conn.execute(
                     """
                     UPDATE task_nodes
-                    SET status = 'success',
+                    SET status = %s,
                         updated_at = %s,
                         finished_at = COALESCE(finished_at, %s),
-                        output_json = COALESCE(output_json, '{}'::jsonb) || %s::jsonb
+                        output_json = %s::jsonb
                     WHERE id = %s::uuid
                     """,
-                    (now, now, Jsonb(hitl_patch), node["node_id"]),
+                    (next_status, now, now, Jsonb(merged), node["node_id"]),
                 )
-                # Refresh checkpoint with HITL resume content
-                merged = node.get("output_json")
-                if isinstance(merged, str):
-                    try:
-                        merged = json.loads(merged)
-                    except Exception:
-                        merged = {}
-                if not isinstance(merged, dict):
-                    merged = {}
-                merged = {**merged, **hitl_patch}
                 self._save_checkpoint(
                     conn,
                     task_id=task_id,
                     node_id=node["node_id"],
                     node_key=node["node_key"],
                     attempt=1,
-                    status="success",
+                    status=next_status,
                     snapshot=self._build_checkpoint_snapshot(
-                        status="success",
+                        status=next_status,
                         attempt=1,
                         skill=node.get("skill"),
                         output=merged,
@@ -912,15 +952,34 @@ class Scheduler:
                     task_id,
                     node["node_id"],
                     "task.node.approved",
-                    f"Node {node['node_key']} approved"
-                    + (" with human input" if text else ""),
+                    f"Node {node['node_key']} approved by {hitl.get('last_actor')}"
+                    + (" with input" if text else ""),
                     {
                         "node_key": node["node_key"],
+                        "actor": hitl.get("last_actor"),
+                        "approval_mode": policy.mode,
                         "has_human_input": bool(text),
                         "human_input_chars": len(text) if text else 0,
+                        "still_waiting": policy.needs_gate,
                     },
                 )
-                plan = self._load_plan(conn, task_id)
+                if policy.needs_gate:
+                    conn.execute(
+                        """
+                        UPDATE tasks SET status = %s, updated_at = %s
+                        WHERE id = %s::uuid
+                        """,
+                        (next_status, now, task_id),
+                    )
+                    return {
+                        "task_id": task_id,
+                        "node_key": node["node_key"],
+                        "approved": True,
+                        "has_human_input": bool(text),
+                        "ready_jobs": [],
+                        "status": next_status,
+                        "approval": policy.to_hitl(),
+                    }
                 ready_jobs = self._unlock_dependents(conn, task_id, plan, now)
                 return {
                     "task_id": task_id,
@@ -929,6 +988,7 @@ class Scheduler:
                     "has_human_input": bool(text),
                     "ready_jobs": ready_jobs,
                     "status": self._task_status(conn, task_id),
+                    "approval": policy.to_hitl(),
                 }
 
     def reject_node(
@@ -956,16 +1016,17 @@ class Scheduler:
                         """
                         SELECT id::text AS node_id, node_key, status
                         FROM task_nodes
-                        WHERE task_id = %s::uuid AND status = 'waiting_for_user'
+                        WHERE task_id = %s::uuid
+                          AND status IN ('waiting_for_user', 'waiting_for_agent')
                         ORDER BY updated_at ASC
                         LIMIT 1
                         """,
                         (task_id,),
                     ).fetchone()
                 if not node:
-                    raise ValueError("no waiting_for_user node to reject")
-                if node["status"] != "waiting_for_user":
-                    raise ValueError(f"node status={node['status']} is not waiting_for_user")
+                    raise ValueError("no waiting node to reject")
+                if node["status"] not in {"waiting_for_user", "waiting_for_agent"}:
+                    raise ValueError(f"node status={node['status']} is not waiting")
 
                 conn.execute(
                     """
@@ -1193,6 +1254,91 @@ class Scheduler:
                     "status": "running",
                 }
 
+    def _signal_agent_approval(
+        self,
+        conn: Any,
+        *,
+        task_id: str,
+        node_id: str,
+        node_key: str,
+        policy: Any,
+        output: dict[str, Any],
+    ) -> None:
+        """Tell the named peer agent a hop is waiting on its approval."""
+        key = (policy.approver_agent or "").strip()
+        if not key:
+            return
+        row = None
+        try:
+            row = conn.execute(
+                """
+                SELECT id::text AS agent_id, agent_key, endpoint, name
+                FROM agents
+                WHERE tenant_id = %s::uuid AND agent_key = %s
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                (self.tenant_id, key),
+            ).fetchone()
+        except Exception:  # noqa: BLE001
+            try:
+                row = conn.execute(
+                    """
+                    SELECT id::text AS agent_id, agent_key, name
+                    FROM agents
+                    WHERE agent_key = %s
+                    LIMIT 1
+                    """,
+                    (key,),
+                ).fetchone()
+            except Exception:  # noqa: BLE001
+                row = None
+        endpoint = (row or {}).get("endpoint") if row else None
+        payload = {
+            "type": "approval_request",
+            "task_id": task_id,
+            "node_key": node_key,
+            "approval_mode": policy.mode,
+            "approver_agent": key,
+            "reason": policy.reason,
+            "hitl": policy.to_hitl(),
+        }
+        self._append_event(
+            conn,
+            task_id,
+            node_id,
+            "agent.approval.requested",
+            f"Approval signal → {key}",
+            {
+                **payload,
+                "approver_agent_id": (row or {}).get("agent_id"),
+                "endpoint": endpoint,
+            },
+        )
+        try:
+            self.write_outbox_event(
+                "agent_approval",
+                payload,
+                "agent_signals",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if not endpoint:
+            return
+        try:
+            import os
+
+            import httpx
+
+            url = str(endpoint).rstrip("/") + "/v1/approvals"
+            headers = {"Content-Type": "application/json"}
+            token = (os.getenv("AOP_COLLAB_TOKEN") or "").strip()
+            if token:
+                headers["X-AOP-Collab-Token"] = token
+            httpx.post(url, json=payload, headers=headers, timeout=3.0)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _unlock_dependents(
         self,
         conn: Any,
@@ -1338,7 +1484,7 @@ class Scheduler:
         active = [r for r in rows if r["status"] in _NODE_ACTIVE]
         ok = [r for r in rows if r["status"] in _NODE_OK]
         bad = [r for r in rows if r["status"] in _NODE_BAD]
-        waiting = [r for r in rows if r["status"] == "waiting_for_user"]
+        waiting = [r for r in rows if r["status"] in {"waiting_for_user", "waiting_for_agent"}]
         total = len(rows) or 1
         progress = int(len(ok) * 100 / total)
 
@@ -1704,6 +1850,7 @@ class Scheduler:
                    tn.attempt,
                    tn.error_message,
                    tn.output_json->'handoff' AS handoff,
+                   tn.output_json->'hitl' AS hitl,
                    tn.checkpoint_at,
                    tn.checkpoint_attempt,
                    tn.checkpoint_json->'artifact_ids' AS checkpoint_artifact_ids,

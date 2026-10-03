@@ -37,7 +37,7 @@
 2. 平台侧统一通过 `packages/a2a-sdk` 访问 Agent，禁止在 Orchestrator 写死具体 Agent HTTP 细节。
 3. 注册时拉取 **Agent Card**，解析 skills / endpoint / capabilities，写入 Registry + Redis Skill Set。
 4. 执行路径：Scheduler 入队 → Worker 选 Agent → `message/send`（或 `message/stream`）→ Artifact 落 MinIO → 解锁下游。
-5. HITL：部分 skill（`HITL_SKILLS`）节点成功后进入 `waiting_for_user`，不立即解锁下游。
+5. 审批：`none` / `system` / `agent` / `both`。系统门 → `waiting_for_user`；Agent 门 → OS `POST {agent}/v1/approvals`，对端以 `actor=agent` 回调 `/v1/tasks/{id}/approve`。详见 [agent-approval.md](./agent-approval.md)。
 6. **能力诚实**：未实现 SSE 的 Agent 不得宣称 `capabilities.streaming: true`。
 
 ## 状态映射
@@ -45,7 +45,7 @@
 | A2A Task state | 平台 Node status | 备注 |
 |----------------|------------------|------|
 | `submitted` / `working` | `running` | |
-| `completed` | `success` 或 `waiting_for_user` | 若 `requires_approval` 则 HITL |
+| `completed` | `success` / `waiting_for_user` / `waiting_for_agent` | 四种审批门，见 [agent-approval.md](./agent-approval.md) |
 | `failed` / `rejected` | `failed` / `retrying` | Failover 同 skill 换 Agent |
 | `canceled` | `cancelled` | |
 | `input-required` / `auth-required` | `waiting_for_user` | 平台侧用审批闸门近似 |

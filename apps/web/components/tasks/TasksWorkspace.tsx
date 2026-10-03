@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  apiErrorMessage,
   approveTask,
   cancelTask,
   createTask,
@@ -49,7 +50,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       setTasks(data.tasks || []);
       setListError(null);
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "list failed");
+      setListError(apiErrorMessage(err, "list failed"));
     }
   }, [statusFilter]);
 
@@ -92,7 +93,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       await cancelTask(selectedId);
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "cancel failed");
+      setListError(apiErrorMessage(err, "cancel failed"));
     } finally {
       setBusy(false);
     }
@@ -108,7 +109,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       selectTask(created.task_id);
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "retry failed");
+      setListError(apiErrorMessage(err, "retry failed"));
     } finally {
       setBusy(false);
     }
@@ -122,7 +123,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       reload();
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "evaluate failed");
+      setListError(apiErrorMessage(err, "evaluate failed"));
     } finally {
       setBusy(false);
     }
@@ -136,7 +137,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       reload();
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "approve failed");
+      setListError(apiErrorMessage(err, "approve failed"));
     } finally {
       setBusy(false);
     }
@@ -150,7 +151,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       reload();
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "reject failed");
+      setListError(apiErrorMessage(err, "reject failed"));
     } finally {
       setBusy(false);
     }
@@ -164,7 +165,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
       reload();
       await loadList();
     } catch (err) {
-      setListError(err instanceof Error ? err.message : "replay failed");
+      setListError(apiErrorMessage(err, "replay failed"));
     } finally {
       setBusy(false);
     }

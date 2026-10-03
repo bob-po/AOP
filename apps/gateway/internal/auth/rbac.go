@@ -16,6 +16,7 @@ var RoleCatalog = map[string][]string{
 		"agent.write",
 		"memory.read",
 		"memory.write",
+		"audit.read",
 	},
 	"admin": {
 		"*",

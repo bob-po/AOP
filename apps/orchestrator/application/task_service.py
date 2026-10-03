@@ -104,9 +104,10 @@ class TaskService:
         *,
         node_key: str | None = None,
         human_input: str | None = None,
+        actor: str = "system",
     ) -> dict[str, Any]:
         return self.tasks.approve(
-            task_id, node_key=node_key, human_input=human_input
+            task_id, node_key=node_key, human_input=human_input, actor=actor
         )
 
     def reject(
@@ -148,6 +149,48 @@ class TaskService:
 
     def list_artifacts(self, task_id: str) -> list[dict[str, Any]]:
         return self.tasks.list_artifacts(task_id)
+
+    def build_package(self, task_id: str) -> bytes:
+        from artifacts.package import build_package_zip
+
+        row = self.get(task_id)
+        if not row:
+            raise KeyError(task_id)
+        store = self.artifacts
+        if hasattr(store, "store"):
+            store = store.store
+
+        def _fetch(uri: str) -> bytes | None:
+            getter = getattr(store, "get_bytes", None)
+            if not callable(getter) or not uri:
+                return None
+            try:
+                return getter(uri)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return build_package_zip(
+            row,
+            artifacts=self.list_artifacts(task_id),
+            events=self.events(task_id),
+            evaluation=self.get_evaluation(task_id),
+            fetch_bytes=_fetch,
+        )
+
+    def run_report_markdown(self, task_id: str) -> str:
+        from artifacts.package import build_citations, build_run_report_markdown
+
+        row = self.get(task_id)
+        if not row:
+            raise KeyError(task_id)
+        return build_run_report_markdown(
+            build_citations(
+                row,
+                artifacts=self.list_artifacts(task_id),
+                events=self.events(task_id),
+                evaluation=self.get_evaluation(task_id),
+            )
+        )
 
     def list_all_artifacts(
         self,

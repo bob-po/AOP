@@ -3,6 +3,8 @@
 import type { ReactNode } from "react";
 import type {
   Agent,
+  ArtifactItem,
+  PreflightAgent,
   VisualGraphNode,
   VisualGraphSnapshot,
   VisualRuntimeEvent,
@@ -22,6 +24,7 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
 export function AgentInspector({
   node,
   agent,
+  readiness,
   events,
   onPause,
   onRetry,
@@ -29,6 +32,7 @@ export function AgentInspector({
 }: {
   node: VisualGraphNode;
   agent?: Agent | null;
+  readiness?: PreflightAgent | null;
   events: VisualRuntimeEvent[];
   onPause?: () => void;
   onRetry?: () => void;
@@ -54,6 +58,18 @@ export function AgentInspector({
       <Row label="Name" value={agent?.name || node.label} />
       <Row label="ID" value={node.agent_id || node.id} />
       <Row label="Status" value={(node.status || "").toUpperCase()} />
+      {readiness ? (
+        <Row
+          label="Runner"
+          value={
+            readiness.runner_ready
+              ? "ready"
+              : readiness.reachable
+                ? `stub · ${readiness.runner_reason || "CLI / key missing"}`
+                : `offline · ${readiness.runner_reason || "unreachable"}`
+          }
+        />
+      ) : null}
       <Row
         label="Capabilities"
         value={(agent?.skills || (meta.skills as string[]) || []).join(", ") || "—"}
@@ -104,11 +120,19 @@ export function TaskInspector({
   events,
   stats,
   createdAt,
+  artifacts,
+  summary,
+  onDownloadPackage,
+  packageBusy,
 }: {
   snapshot: VisualGraphSnapshot | null;
   events: VisualRuntimeEvent[];
   stats: { agents: number; executions: number; retries: number };
   createdAt?: string;
+  artifacts?: ArtifactItem[];
+  summary?: string | null;
+  onDownloadPackage?: () => void | Promise<void>;
+  packageBusy?: boolean;
 }) {
   const t0 =
     createdAt ||
@@ -153,6 +177,62 @@ export function TaskInspector({
       <Row label="Retries" value={String(stats.retries)} />
       <Row label="Duration" value={duration} />
       {seq > 0 ? <Row label="Sequence" value={String(seq)} /> : null}
+      {onDownloadPackage ? (
+        <div className="border-b border-white/5 py-2">
+          <button
+            type="button"
+            disabled={packageBusy}
+            onClick={() => void onDownloadPackage()}
+            className="font-mono text-[11px] text-signal hover:underline disabled:opacity-50"
+          >
+            {packageBusy ? "Packing run…" : "Download run package"}
+          </button>
+          <div className="mt-0.5 font-mono text-[10px] text-mist-500">
+            ZIP · report + citations + artifacts
+          </div>
+        </div>
+      ) : null}
+      {summary ? (
+        <div className="border-b border-white/5 py-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-mist-400">
+            Result
+          </div>
+          <p className="mt-1 line-clamp-4 font-sans text-sm text-mist-100">{summary}</p>
+        </div>
+      ) : null}
+      {artifacts && artifacts.length > 0 ? (
+        <div className="py-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-mist-400">
+            Artifacts · {artifacts.length}
+          </div>
+          <ul className="mt-1 space-y-1">
+            {artifacts.slice(0, 8).map((a) => {
+              const label =
+                (a.name || a.uri || a.url || "artifact")
+                  .replace(/\\/g, "/")
+                  .split("/")
+                  .pop() || "artifact";
+              const href = a.url || a.uri;
+              return (
+                <li key={`${href || label}-${a.node_id || ""}`} className="truncate">
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-[11px] text-signal hover:underline"
+                    >
+                      {label}
+                    </a>
+                  ) : (
+                    <span className="font-mono text-[11px] text-mist-300">{label}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

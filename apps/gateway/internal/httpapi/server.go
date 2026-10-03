@@ -71,10 +71,13 @@ func (s *Server) Handler() http.Handler {
 				"POST /v1/auth/login",
 				"POST /v1/auth/logout",
 				"GET /v1/auth/me",
+				"GET /v1/auth/users",
+				"POST /v1/auth/invite",
 				"GET /v1/tasks",
 				"POST /v1/tasks",
 				"WS /v1/tasks/{id}/events/ws",
 				"WS /v1/events/ws",
+				"GET /v1/preflight",
 				"GET /v1/stats/overview",
 				"GET /v1/stats/agents",
 				"GET /v1/billing/usage",
@@ -161,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 		r.Handle("/v1/discover/skill", s.OrchestratorProxy)
 		r.Handle("/v1/invoke/skill", s.OrchestratorProxy)
 		r.Handle("/v1/health/probe", requireMutatingScope(s.AuthStore, "agent.write")(s.OrchestratorProxy))
+		r.Handle("/v1/preflight", s.OrchestratorProxy)
 		r.Handle("/v1/stats", s.OrchestratorProxy)
 		r.Handle("/v1/stats/*", s.OrchestratorProxy)
 		r.Handle("/v1/billing", s.OrchestratorProxy)

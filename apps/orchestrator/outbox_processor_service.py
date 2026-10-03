@@ -99,6 +99,12 @@ class OutboxProcessorService:
 
         while self.running:
             try:
+                try:
+                    from pulse import beat_outbox
+
+                    beat_outbox()
+                except Exception:  # noqa: BLE001
+                    pass
                 processed = self.process_batch()
                 if processed > 0:
                     print(f"[outbox] Processed {processed} events")

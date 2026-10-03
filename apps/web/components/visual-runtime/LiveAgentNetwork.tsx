@@ -11,9 +11,10 @@ import {
   type Node,
   type NodeProps,
   type NodeTypes,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { VisualGraphEdge, VisualGraphNode, VisualGraphSnapshot } from "@/lib/api";
+import type { PreflightAgent, VisualGraphEdge, VisualGraphNode, VisualGraphSnapshot } from "@/lib/api";
 import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
 
 const COL_W = 200;
@@ -29,16 +30,38 @@ function statusColor(status: string): string {
   return "#5a7a70";
 }
 
+function matchReadiness(
+  node: VisualGraphNode,
+  readiness: PreflightAgent[] | undefined,
+): PreflightAgent | undefined {
+  if (!readiness?.length) return undefined;
+  const id = (node.agent_id || node.label || "").toLowerCase();
+  return readiness.find((a) => {
+    const key = (a.agent_key || "").toLowerCase();
+    return key && (id === key || id.includes(key) || key.includes(id));
+  });
+}
+
 function VrNode({ data }: NodeProps) {
   const kind = String(data.kind || "agent");
   const status = String(data.status || "pending");
   const label = String(data.label || "");
+  const ready = data.runnerReady as boolean | undefined;
+  const hint = typeof data.runnerHint === "string" ? data.runnerHint : "";
   const color = statusColor(status);
   const running = status === "running" || status === "active";
   const waiting = status === "waiting" || status === "retrying";
   const size =
     kind === "task" ? 72 : kind === "tool" || kind === "data" ? 40 : kind === "error" ? 48 : 56;
   const radius = kind === "data" ? 6 : kind === "tool" ? 8 : "50%";
+  const subtitle =
+    kind === "agent" && ready === false
+      ? hint
+        ? hint.length > 22
+          ? `${hint.slice(0, 22)}…`
+          : hint
+        : "stub"
+      : status;
 
   return (
     <div className="relative flex flex-col items-center" style={{ width: size + 48 }}>
@@ -53,8 +76,8 @@ function VrNode({ data }: NodeProps) {
           width: size,
           height: size,
           borderRadius: radius,
-          borderColor: color,
-          borderStyle: waiting ? "dashed" : "solid",
+          borderColor: ready === false ? "#ffb454" : color,
+          borderStyle: waiting || ready === false ? "dashed" : "solid",
           borderWidth: kind === "task" ? 2 : 1.5,
           background:
             kind === "error"
@@ -67,7 +90,7 @@ function VrNode({ data }: NodeProps) {
       >
         <span
           className="font-mono text-[9px] uppercase tracking-[0.14em]"
-          style={{ color }}
+          style={{ color: ready === false ? "#ffb454" : color }}
         >
           {kind === "task" ? "TASK" : kind === "tool" ? "TOOL" : kind === "error" ? "ERR" : kind === "data" ? "DATA" : "AGT"}
         </span>
@@ -75,8 +98,12 @@ function VrNode({ data }: NodeProps) {
       <div className="mt-2 max-w-[140px] truncate text-center font-sans text-[11px] text-mist-100">
         {label}
       </div>
-      <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color }}>
-        {status}
+      <div
+        className="max-w-[140px] truncate text-center font-mono text-[9px] uppercase tracking-wider"
+        style={{ color: ready === false ? "#ffb454" : color }}
+        title={hint || status}
+      >
+        {subtitle}
       </div>
       <Handle type="source" position={Position.Bottom} className="!h-1.5 !w-1.5 !border-0 !bg-mist-400" />
     </div>
@@ -86,7 +113,10 @@ function VrNode({ data }: NodeProps) {
 const MemoVrNode = memo(VrNode);
 const NODE_TYPES = Object.freeze({ vr: MemoVrNode }) as unknown as NodeTypes;
 
-function layout(snapshot: VisualGraphSnapshot | null): { nodes: Node[]; edges: Edge[] } {
+function layout(
+  snapshot: VisualGraphSnapshot | null,
+  readiness?: PreflightAgent[],
+): { nodes: Node[]; edges: Edge[] } {
   const rawNodes = snapshot?.nodes || [];
   const rawEdges = snapshot?.edges || [];
   if (!rawNodes.length) {
@@ -120,6 +150,7 @@ function layout(snapshot: VisualGraphSnapshot | null): { nodes: Node[]; edges: E
   agents.forEach((a, i) => {
     const row = Math.floor(i / 5);
     const col = i % 5;
+    const pf = matchReadiness(a, readiness);
     positioned.push({
       id: a.id,
       type: "vr",
@@ -130,6 +161,8 @@ function layout(snapshot: VisualGraphSnapshot | null): { nodes: Node[]; edges: E
         status: a.status,
         meta: a,
         visit: (a.metadata as { visit_count?: number } | undefined)?.visit_count,
+        runnerReady: pf ? pf.runner_ready : undefined,
+        runnerHint: pf && !pf.runner_ready ? pf.runner_reason || (pf.reachable ? "stub" : "offline") : "",
       },
     });
   });
@@ -171,10 +204,13 @@ type Props = {
   selectedId?: string | null;
   onSelect?: (node: VisualGraphNode | null) => void;
   replayCursor?: number | null;
+  readiness?: PreflightAgent[];
 };
 
-export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor }: Props) {
+export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor, readiness }: Props) {
   const mounted = useClientMounted();
+  const nodeCount = snapshot?.nodes?.length || 0;
+  const [rf, setRf] = useState<ReactFlowInstance | null>(null);
   const view = useMemo(() => {
     if (replayCursor == null || !snapshot?.events?.length) return snapshot;
     // Replay projects only events up to cursor — UI-only, no re-execution
@@ -197,7 +233,7 @@ export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor 
     return { ...snapshot, nodes, edges };
   }, [snapshot, replayCursor]);
 
-  const { nodes, edges } = useMemo(() => layout(view), [view]);
+  const { nodes, edges } = useMemo(() => layout(view, readiness), [view, readiness]);
   const [rfNodes, setRfNodes] = useState<Node[]>(nodes);
   const [rfEdges, setRfEdges] = useState<Edge[]>(edges);
 
@@ -211,6 +247,14 @@ export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor 
     );
     setRfEdges(edges);
   }, [nodes, edges, selectedId]);
+
+  useEffect(() => {
+    if (!rf || nodeCount === 0) return;
+    const t = setTimeout(() => {
+      rf.fitView({ padding: 0.35, minZoom: 0.35, maxZoom: 1.4 });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [rf, nodeCount, snapshot?.sequence]);
 
   const onNodeClick = useCallback(
     (_: unknown, node: Node) => {
@@ -239,6 +283,7 @@ export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor 
         minZoom={0.2}
         maxZoom={1.8}
         proOptions={{ hideAttribution: true }}
+        onInit={setRf}
         onNodeClick={onNodeClick}
         onPaneClick={() => onSelect?.(null)}
         onError={reactFlowOnError}

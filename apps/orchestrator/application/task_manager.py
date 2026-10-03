@@ -119,9 +119,10 @@ class TaskManager:
         *,
         node_key: str | None = None,
         human_input: str | None = None,
+        actor: str = "system",
     ) -> dict[str, Any]:
         return self.scheduling.approve(
-            task_id, node_key=node_key, human_input=human_input
+            task_id, node_key=node_key, human_input=human_input, actor=actor
         )
 
     def reject(

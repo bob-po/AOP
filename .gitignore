@@ -32,6 +32,7 @@ Thumbs.db
 *.log
 .tmp/
 .data/
+.aop/
 
 # Secrets / local env
 .env.*

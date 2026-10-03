@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  downloadTaskPackage,
   listTaskCheckpoints,
   type ArtifactItem,
   type NodeCheckpoint,
@@ -136,6 +137,7 @@ export function TaskDetailDrawer({
   const [goalOpen, setGoalOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [packBusy, setPackBusy] = useState(false);
   const [hitlInput, setHitlInput] = useState("");
   const [detailNodeId, setDetailNodeId] = useState<string | null>(null);
   const [checkpoints, setCheckpoints] = useState<NodeCheckpoint[]>([]);
@@ -253,6 +255,18 @@ export function TaskDetailDrawer({
       text += "\n";
     });
     navigator.clipboard.writeText(text).catch(() => undefined);
+  }
+
+  async function downloadPackage() {
+    if (!taskId) return;
+    setPackBusy(true);
+    try {
+      await downloadTaskPackage(taskId);
+    } catch {
+      /* ignore — operator can retry */
+    } finally {
+      setPackBusy(false);
+    }
   }
 
   const wide = !!(detailNode && isWideDetail(detailNode.skill) && tab === "nodes");
@@ -480,15 +494,27 @@ export function TaskDetailDrawer({
             <Section
               title={`产物${artifacts.length ? ` · ${artifacts.length}` : ""}`}
               action={
-                artifacts.length > 0 ? (
-                  <button
-                    type="button"
-                    onClick={copyArtifactsToClipboard}
-                    className="font-mono text-[9px] uppercase tracking-[0.12em] text-mist-400 hover:text-mist-100"
-                  >
-                    复制全部
-                  </button>
-                ) : null
+                <span className="inline-flex gap-3">
+                  {taskId ? (
+                    <button
+                      type="button"
+                      disabled={packBusy}
+                      onClick={() => void downloadPackage()}
+                      className="font-mono text-[9px] uppercase tracking-[0.12em] text-signal hover:text-mist-100 disabled:opacity-50"
+                    >
+                      {packBusy ? "打包中" : "下载产物包"}
+                    </button>
+                  ) : null}
+                  {artifacts.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={copyArtifactsToClipboard}
+                      className="font-mono text-[9px] uppercase tracking-[0.12em] text-mist-400 hover:text-mist-100"
+                    >
+                      复制全部
+                    </button>
+                  ) : null}
+                </span>
               }
             >
               {artifacts.length === 0 ? (

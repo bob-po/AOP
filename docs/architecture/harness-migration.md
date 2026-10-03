@@ -144,14 +144,17 @@ curl -fsSL http://<a2a-os>:8000/install/claude-code.sh | bash
 
 ## Local run
 
-**推荐（Edge SoT）：**
+**默认：** `python scripts/dev_up.py` 会启动 **aopd**（`:7920`），由它 autostart `plugins/*` 并注册 Gateway。不要再并行跑 5 个 uvicorn。
+
+单独跑 Supervisor：
 
 ```powershell
 cd apps\client\aop-node
+copy config\aop-node.example.toml aop-node.toml
 cargo run -p aopd -- --config aop-node.toml
 ```
 
-**无 Supervisor 的开发快捷脚本**（若检测到 `:7920` aop-node 已在跑会直接退出）：
+**无 Supervisor 回退**（`dev_up.py --legacy-agents`，或 `start_and_register_agents.py`；若 `:7920` 已在跑会跳过）：
 
 ```powershell
 pip install -e "packages/agent-runtime[harness]"
@@ -164,6 +167,12 @@ python scripts/start_and_register_agents.py
 $env:HARNESS_PROFILE="claude-code"; $env:PORT="8011"
 uvicorn agent:app --app-dir agents/harness-agent --port 8011
 ```
+
+## 审批接入
+
+Harness 虚拟 Agent **共用** `create_harness_app` 上的 `/v1/approvals`。四种模式（`none` / `system` / `agent` / `both`）、计划字段、`hitl` 信号、回调 `actor=agent` 见 **[agent-approval.md](./agent-approval.md)**。
+
+加新 profile 时不要复制审批实现；对齐 `profiles.py` 端口与 `agent_key` 即可。`A2A_OS_URL`（或 `GATEWAY_URL`）必须能打到 Gateway，否则 Agent 审完无法解锁任务。
 
 ## Async spawn（Agent 内委派）
 

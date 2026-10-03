@@ -44,6 +44,13 @@ export type TaskNode = {
   attempt?: number;
   error_message?: string | null;
   handoff?: Record<string, unknown> | null;
+  hitl?: {
+    mode?: string;
+    approver_agent?: string;
+    system_approved?: boolean;
+    agent_approved?: boolean;
+    reason?: string;
+  } | null;
   checkpoint_at?: string | null;
   checkpoint_attempt?: number | null;
   checkpoint_artifact_ids?: string[] | null;
@@ -141,6 +148,68 @@ export type OverviewStats = {
   trend: Array<{ day: string; count: number }>;
 };
 
+export type PreflightService = {
+  ok: boolean;
+  detail?: string;
+  hint?: string | null;
+  worker_id?: string | null;
+  pending?: number | null;
+  pending_outbox?: number;
+  oldest_pending_s?: number | null;
+  queued?: number;
+  ttl_s?: number;
+  stuck_running?: number;
+  waiting_hitl?: number;
+};
+
+export type PreflightAgent = {
+  agent_key: string;
+  name?: string;
+  registry_status?: string;
+  endpoint?: string;
+  reachable: boolean;
+  runner_ready: boolean;
+  runner_reason?: string | null;
+  runner_mode?: string | null;
+};
+
+export type PreflightSnapshot = {
+  status: "ready" | "degraded" | "blocked";
+  can_run: boolean;
+  blocking: string[];
+  warnings: string[];
+  hints: string[];
+  ready_agents: number;
+  reachable_agents: number;
+  registered_agents: number;
+  /** Tasks in waiting_for_user — Inbox queue depth */
+  waiting_hitl?: number;
+  stuck_running?: number;
+  services: {
+    orchestrator?: PreflightService;
+    postgres?: PreflightService;
+    redis?: PreflightService;
+    worker?: PreflightService;
+    outbox?: PreflightService;
+  };
+  agents: PreflightAgent[];
+  dev_up?: string;
+  recover_steps?: RecoverStep[];
+};
+
+export type RecoverStep = {
+  id: string;
+  title: string;
+  symptom: string;
+  fix: string;
+  console: string;
+  active?: boolean;
+};
+
+export function getPreflight() {
+  return request<PreflightSnapshot>("/v1/preflight");
+}
+
 export type ApiKeyRecord = {
   id: string;
   name: string;
@@ -235,6 +304,46 @@ export function getTaskArtifacts(taskId: string) {
   return request<{ task_id: string; artifacts: ArtifactItem[] }>(
     `/v1/tasks/${taskId}/artifacts`,
   );
+}
+
+export async function downloadTaskPackage(
+  taskId: string,
+  filename?: string,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = authHeader();
+  if (token) {
+    headers.Authorization = token.startsWith("Bearer ")
+      ? token
+      : `Bearer ${token}`;
+    if (!isSessionToken(token) && !headers["X-API-Key"]) {
+      headers["X-API-Key"] = token.replace(/^Bearer\s+/i, "");
+    }
+  }
+  const res = await fetch(
+    `${API_BASE}/v1/tasks/${encodeURIComponent(taskId)}/package`,
+    { headers, cache: "no-store" },
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${text}`);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("Content-Disposition") || "";
+  const match = /filename="?([^";]+)"?/i.exec(cd);
+  const name = filename || match?.[1] || `aop-run-${taskId.slice(0, 8)}.zip`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export function taskReportUrl(taskId: string): string {
+  return `${API_BASE}/v1/tasks/${encodeURIComponent(taskId)}/report`;
 }
 
 export function listArtifacts(params?: {
@@ -497,6 +606,7 @@ export type AuditLogEntry = {
   ip?: string;
   payload?: Record<string, unknown>;
   created_at?: string;
+  summary?: string;
 };
 
 export function listAuditLogs(limit = 50) {
@@ -522,6 +632,27 @@ export function login(email: string, password: string) {
   }>("/v1/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
+  });
+}
+
+export function listTeammates() {
+  return request<{ users: AuthUser[] }>("/v1/auth/users");
+}
+
+export function inviteTeammate(body: {
+  email: string;
+  display_name?: string;
+  role?: string;
+  with_api_key?: boolean;
+}) {
+  return request<{
+    user: AuthUser;
+    temporary_password: string;
+    login_hint?: string;
+    api_key?: ApiKeyRecord;
+  }>("/v1/auth/invite", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 
@@ -652,6 +783,7 @@ export function approveTask(
   taskId: string,
   nodeKey?: string,
   humanInput?: string,
+  actor: "system" | "agent" = "system",
 ) {
   return request<{
     task_id: string;
@@ -660,11 +792,13 @@ export function approveTask(
     has_human_input?: boolean;
     status?: string;
     enqueued_nodes?: string[];
+    approval?: Record<string, unknown>;
   }>(`/v1/tasks/${taskId}/approve`, {
     method: "POST",
     body: JSON.stringify({
       node_key: nodeKey || null,
       input: humanInput?.trim() || null,
+      actor,
     }),
   });
 }
@@ -944,25 +1078,49 @@ const ORCHESTRATOR_BASE =
 
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
-/** Human-readable API error (403 cross-tenant, 404/503, etc.). */
+const QUOTA_COPY: Record<string, string> = {
+  quota_concurrent: "并发任务已满。到 Settings「配额」调高，或取消卡住的 running 任务。",
+  quota_tasks_per_day: "今日任务数已达上限。到 Settings「配额」调高，或明天再试。",
+  quota_runs_per_day: "今日 Agent 调用次数已达上限。到 Settings「配额」调高。",
+  quota_usd_month: "本月预估费用已达上限。到 Settings「配额」调高。",
+};
+
+function parseApiErrorBody(raw: string): { code?: string; message?: string } {
+  const m = raw.match(/^\d{3}\s+([\s\S]*)/);
+  const body = (m ? m[1] : raw).trim();
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    const detail = parsed.detail ?? parsed;
+    if (typeof detail === "string") return { message: detail };
+    if (detail && typeof detail === "object") {
+      const d = detail as { code?: string; message?: string };
+      return { code: d.code, message: d.message };
+    }
+  } catch {
+    /* not JSON */
+  }
+  return { message: body };
+}
+
+/** Human-readable API error (403 cross-tenant, 404/503, quota 429, etc.). */
 export function apiErrorMessage(err: unknown, fallback = "请求失败"): string {
   const raw = err instanceof Error ? err.message : String(err || fallback);
+  if (/failed to fetch|network|timeout|AbortError/i.test(raw)) {
+    return "网络超时或无法连接网关";
+  }
+  const parsed = parseApiErrorBody(raw);
+  if (parsed.code && QUOTA_COPY[parsed.code]) return QUOTA_COPY[parsed.code];
+  if (/^429\b/.test(raw) || parsed.code?.startsWith("quota_")) {
+    return parsed.message || QUOTA_COPY.quota_concurrent;
+  }
   if (/^403\b/.test(raw) || /\b403\b/.test(raw)) {
     return "无权访问其他租户数据";
   }
   if (/^404\b/.test(raw)) return "资源不存在或接口未部署";
   if (/^503\b/.test(raw)) return "服务暂不可用";
-  if (/failed to fetch|network|timeout|AbortError/i.test(raw)) {
-    return "网络超时或无法连接网关";
-  }
-  // Strip leading status code for display
-  const m = raw.match(/^\d{3}\s+([\s\S]*)/);
-  if (m) {
-    const body = m[1].trim();
-    if (body.length > 180) return body.slice(0, 180) + "…";
-    return body || fallback;
-  }
-  return raw || fallback;
+  const msg = parsed.message || raw;
+  if (msg.length > 180) return msg.slice(0, 180) + "…";
+  return msg || fallback;
 }
 
 export function getDefaultTenantId() {

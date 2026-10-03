@@ -14,7 +14,7 @@
 
 Gateway 将以下路径 **反向代理** 到 Orchestrator（默认 `:8090`）：
 
-`/v1/tasks*` · `/v1/workflows*` · `/v1/marketplace*` · `/v1/artifacts*` · `/v1/evaluations*` · `/v1/stats*` · `/v1/billing*` · `/v1/quotas*` · `/v1/egress*` · `/v1/memory*` · `/v1/router*` · `/v1/metrics*` · `/v1/health/probe`
+`/v1/tasks*` · `/v1/workflows*` · `/v1/marketplace*` · `/v1/artifacts*` · `/v1/evaluations*` · `/v1/stats*` · `/v1/preflight` · `/v1/billing*` · `/v1/quotas*` · `/v1/egress*` · `/v1/memory*` · `/v1/router*` · `/v1/metrics*` · `/v1/health/probe`
 
 Agent / API Key / Auth / RBAC / Audit 由 Gateway 本机处理。
 
@@ -58,7 +58,7 @@ Gateway (:8080)
 
 **响应 `201`：** 含 `task_id`、`status`、`plan`、`ready_nodes`、`enqueued_nodes`、`nodes`。
 
-创建时写入工作记忆 `goal`；Planner 对 `HITL_SKILLS`（默认 `report-generation,ppt-generation`）节点标记 `requires_approval`。
+创建时写入工作记忆 `goal`；Planner 对 `HITL_SKILLS`（默认 `report-generation,ppt-generation`）节点标记 `approval_mode=system`（`requires_approval`）。Agent 也可在产出里发 `hitl` 信号，指定 `agent` / `both` 与 `approver_agent`。
 
 ### 2.2 查询 / 列表 / 取消
 
@@ -73,24 +73,56 @@ Gateway (:8080)
 | 状态 | 含义 |
 |------|------|
 | `running` / `ready` / `planned` | 执行中 |
-| `waiting_for_user` | HITL 待审批 |
+| `waiting_for_user` | 系统（Inbox）待审批 |
+| `waiting_for_agent` | 对端 Agent 待审批 |
 | `completed` / `failed` / `cancelled` | 终态 |
-| 节点 `waiting_for_user` | 节点产出后等待 Approve/Reject |
+| 节点 `waiting_for_user` / `waiting_for_agent` | 节点产出后进入审批门 |
 
-### 2.3 HITL
+### 2.3 HITL（四种门）
+
+审批模式写在计划节点或 Agent 产出的 `hitl` 信号上：
+
+| `approval_mode` | 行为 |
+|-----------------|------|
+| `none` | 无审批，节点成功后立刻解锁下游 |
+| `system` | 仅系统审批（Inbox / Console Approve） |
+| `agent` | 仅 Agent 审批：向 `approver_agent` 发 `agent.approval.requested` 信号后等待 |
+| `both` | 系统与指定 Agent 都要通过 |
+
+Agent 互调时若声明需要审批，产出例如：
+
+```json
+{ "hitl": { "mode": "agent", "approver_agent": "claude-code", "reason": "peer review" } }
+```
+
+会与计划门取并集（`system` + Agent 信号 → `both`）。未指定 `approver_agent` 的 Agent 门会回退到系统 Inbox，避免悬空。
+
+Harness Agent（Claude Code / Pi / DeepSeek 等共用 `create_harness_app`）提供对端审批入口：
 
 ```
-POST /v1/tasks/{task_id}/approve   { "node_key": null }
+POST {agent}/v1/approvals              # Orchestrator 信号；入队并进入审批阶段
+GET  {agent}/v1/approvals?status=pending
+POST {agent}/v1/approvals/{id}/decide  { "approved": true, "reason": "..." }
+```
+
+Runner 就绪时会用审批提示跑一轮，解析 `{"approved": true|false, "reason": "..."}` 后回调：
+
+```
+POST /v1/tasks/{task_id}/approve   { "node_key": null, "actor": "system"|"agent", "input": "..." }
 POST /v1/tasks/{task_id}/reject    { "node_key": null, "reason": "..." }
 ```
 
-批准后解锁下游并重新入队；驳回则 Task `failed` 并评分。
+`actor=system` 走 Inbox；`actor=agent` 表示对端 Agent 已批准。`both` 时两边都过才解锁下游。驳回则 Task `failed`。
+
+Agent 接入清单（新 profile / 自研实现 `/v1/approvals`）：[agent-approval.md](../architecture/agent-approval.md)。
 
 ### 2.4 Trace / Artifacts
 
 ```
 GET /v1/tasks/{task_id}/events
 GET /v1/tasks/{task_id}/artifacts
+GET /v1/tasks/{task_id}/package     # zip：run-report.md + citations.json + 产物文件
+GET /v1/tasks/{task_id}/report      # 可分享 Markdown 运行报告
 GET /v1/artifacts?task_id=&type=&limit=
 ```
 
@@ -189,6 +221,7 @@ POST /v1/health/probe              # 批量探测已注册 Agent
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/v1/router/preview?skill=` | 智能路由候选与 score 分解 |
+| `GET` | `/v1/preflight` | 控制面预检；含 `recover_steps`（Worker/Outbox/Orchestrator 中途退出后的 Console 恢复步骤） |
 | `GET` | `/v1/stats/overview` | Dashboard KPI |
 | `GET` | `/v1/stats/agents?limit=` | agent_runs 窗口成功率 / 延迟 |
 | `GET` | `/v1/metrics?hours=24` | 观测快照 JSON |
@@ -230,6 +263,8 @@ GET    /v1/audit-logs?limit=
 POST   /v1/auth/login     { "email", "password" }  → session token
 POST   /v1/auth/logout
 GET    /v1/auth/me
+GET    /v1/auth/users              # 同事列表（admin）
+POST   /v1/auth/invite             # { email, display_name?, role?, with_api_key? } → 一次性临时密码
 ```
 
 创建时明文 `api_key` 仅返回一次；库中存 SHA-256 `key_hash`。  

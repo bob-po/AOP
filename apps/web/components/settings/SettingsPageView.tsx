@@ -13,12 +13,14 @@ import {
   getInvoicePreview,
   getQuotaStatus,
   getRbacMe,
+  inviteTeammate,
   invoiceMarkdownUrl,
   listApiKeys,
   listAuditLogs,
   listCheckouts,
   listInvoices,
   listRbacRoles,
+  listTeammates,
   probeHealth,
   revokeApiKey,
   simulateCheckoutPaid,
@@ -26,6 +28,7 @@ import {
   updateQuota,
   type ApiKeyRecord,
   type AuditLogEntry,
+  type AuthUser,
   type BillingUsage,
   type CheckoutResult,
   type EgressPolicy,
@@ -35,6 +38,8 @@ import {
 } from "@/lib/api";
 import { TenantPanel } from "@/components/settings/TenantPanel";
 import { GovernancePanel } from "@/components/settings/GovernancePanel";
+import { ChaosPlaybook } from "@/components/ops/ChaosPlaybook";
+import { usePreflight } from "@/hooks/usePreflight";
 
 const NAV_GROUPS = [
   {
@@ -42,6 +47,7 @@ const NAV_GROUPS = [
     label: "访问",
     items: [
       { id: "keys", label: "API Keys", hint: "密钥创建与撤销" },
+      { id: "team", label: "同事", hint: "邀请登录与角色" },
       { id: "rbac", label: "权限", hint: "角色与 scopes" },
     ],
   },
@@ -66,7 +72,7 @@ const NAV_GROUPS = [
     label: "运维",
     items: [
       { id: "egress", label: "出站", hint: "Browser URL 策略" },
-      { id: "monitor", label: "监控", hint: "Gateway health" },
+      { id: "monitor", label: "监控", hint: "健康探测与故障恢复" },
       { id: "storage", label: "存储", hint: "MinIO / artifacts" },
       { id: "audit", label: "审计", hint: "操作日志" },
     ],
@@ -84,6 +90,12 @@ const TAB_META: Record<TabId, { label: string; hint: string }> = Object.fromEntr
   ALL_TABS.map((t) => [t.id, { label: t.label, hint: t.hint }]),
 ) as Record<TabId, { label: string; hint: string }>;
 
+const ROLE_HINTS: Record<string, string> = {
+  viewer: "只读任务与 Agent，不能跑任务或改密钥",
+  operator: "跑任务、审批、查看审计；不能邀请同事或管密钥",
+  admin: "全部权限，含邀请同事与 API Key",
+};
+
 const FALLBACK_ROLES: RbacRole[] = [
   { role: "viewer", scopes: ["task.read", "agent.read", "memory.read"] },
   {
@@ -95,6 +107,7 @@ const FALLBACK_ROLES: RbacRole[] = [
       "agent.write",
       "memory.read",
       "memory.write",
+      "audit.read",
     ],
   },
   { role: "admin", scopes: ["*"] },
@@ -148,9 +161,17 @@ export function SettingsPageView() {
   const [name, setName] = useState("console-key");
   const [role, setRole] = useState("operator");
   const [createdPlain, setCreatedPlain] = useState<string | null>(null);
+  const [teammates, setTeammates] = useState<AuthUser[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState("operator");
+  const [inviteWithKey, setInviteWithKey] = useState(false);
+  const [inviteSecret, setInviteSecret] = useState<string | null>(null);
+  const [inviteKey, setInviteKey] = useState<string | null>(null);
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { snapshot: preflight } = usePreflight();
 
   useEffect(() => {
     if (tabFromUrl && ALL_TABS.some((t) => t.id === tabFromUrl)) {
@@ -174,6 +195,16 @@ export function SettingsPageView() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "load keys failed");
+    }
+  }
+
+  async function loadTeammates() {
+    try {
+      const data = await listTeammates();
+      setTeammates(data.users || []);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "load teammates failed");
     }
   }
 
@@ -291,6 +322,7 @@ export function SettingsPageView() {
 
   useEffect(() => {
     if (tab === "keys") loadKeys();
+    if (tab === "team") loadTeammates();
     if (tab === "rbac") loadRbac();
     if (tab === "audit") loadAudits();
     if (tab === "billing") loadBilling();
@@ -313,6 +345,31 @@ export function SettingsPageView() {
       await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : "create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onInvite(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setInviteSecret(null);
+    setInviteKey(null);
+    try {
+      const rec = await inviteTeammate({
+        email: inviteEmail.trim(),
+        display_name: inviteName.trim() || undefined,
+        role: inviteRole,
+        with_api_key: inviteWithKey,
+      });
+      setInviteSecret(rec.temporary_password);
+      setInviteKey(rec.api_key?.api_key || null);
+      setInviteEmail("");
+      setInviteName("");
+      await loadTeammates();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "invite failed");
     } finally {
       setBusy(false);
     }
@@ -477,6 +534,9 @@ export function SettingsPageView() {
                     </option>
                   ))}
                 </select>
+                <p className="mt-1 max-w-[16rem] text-[11px] text-mist-500">
+                  {ROLE_HINTS[role] || (roles.find((r) => r.role === role)?.scopes || []).join(" · ")}
+                </p>
               </label>
               <button
                 type="submit"
@@ -518,6 +578,95 @@ export function SettingsPageView() {
                       >
                         撤销
                       </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {tab === "team" ? (
+          <div className="space-y-5">
+            <form
+              onSubmit={onInvite}
+              className="space-y-3 rounded-xl border border-white/10 bg-ink-900/40 p-4"
+            >
+              <p className="text-sm text-mist-400">
+                邀请同事用邮箱登录 Console。临时密码只显示一次；可选同时发一把同角色 API Key。
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <label className="block min-w-[12rem] flex-1">
+                  <span className="font-mono text-[10px] uppercase text-mist-400">Email</span>
+                  <input
+                    type="email"
+                    required
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
+                    placeholder="sam@company.com"
+                  />
+                </label>
+                <label className="block min-w-[8rem] flex-1">
+                  <span className="font-mono text-[10px] uppercase text-mist-400">显示名</span>
+                  <input
+                    value={inviteName}
+                    onChange={(e) => setInviteName(e.target.value)}
+                    className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
+                  />
+                </label>
+                <label className="block min-w-[8rem]">
+                  <span className="font-mono text-[10px] uppercase text-mist-400">角色</span>
+                  <select
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value)}
+                    className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
+                  >
+                    {roles.map((r) => (
+                      <option key={r.role} value={r.role}>
+                        {r.role}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="text-[11px] text-mist-500">{ROLE_HINTS[inviteRole] || ""}</p>
+              <label className="flex items-center gap-2 text-sm text-mist-300">
+                <input
+                  type="checkbox"
+                  checked={inviteWithKey}
+                  onChange={(e) => setInviteWithKey(e.target.checked)}
+                />
+                同时创建 API Key（脚本/CI 用）
+              </label>
+              <button
+                type="submit"
+                disabled={busy || !inviteEmail.trim()}
+                className="rounded-xl bg-signal px-4 py-2 font-mono text-xs font-semibold uppercase text-ink-950 disabled:opacity-40"
+              >
+                邀请
+              </button>
+            </form>
+            {inviteSecret ? (
+              <div className="space-y-1 rounded-xl border border-signal/30 bg-signal/10 p-3 font-mono text-xs text-signal">
+                <div>临时密码（只显示一次）：{inviteSecret}</div>
+                {inviteKey ? <div>API Key（只显示一次）：{inviteKey}</div> : null}
+                <div className="text-mist-400">请立刻发给对方，登录页 /login</div>
+              </div>
+            ) : null}
+            <div className="overflow-hidden rounded-xl border border-white/10">
+              {teammates.length === 0 ? (
+                <p className="px-4 py-8 text-center font-mono text-xs text-mist-500">暂无同事</p>
+              ) : (
+                <div className="divide-y divide-white/10">
+                  {teammates.map((u) => (
+                    <div key={u.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                      <div>
+                        <div className="text-sm text-mist-100">{u.display_name || u.email}</div>
+                        <div className="mt-0.5 font-mono text-[11px] text-mist-400">
+                          {u.email} · {u.role} · {u.status || "active"}
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -934,6 +1083,7 @@ export function SettingsPageView() {
 
         {tab === "monitor" ? (
           <div className="space-y-4 rounded-2xl border border-white/10 bg-ink-900/50 p-5">
+            <ChaosPlaybook steps={preflight?.recover_steps} />
             <button
               type="button"
               disabled={busy}
@@ -984,13 +1134,16 @@ export function SettingsPageView() {
                 {audits.map((a) => (
                   <div key={a.id} className="px-4 py-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="font-mono text-sm text-signal-dim">{a.action}</span>
+                      <span className="text-sm text-mist-100">
+                        {a.summary || a.action}
+                      </span>
                       <span className="font-mono text-[10px] text-mist-500">
                         {a.created_at || ""}
                       </span>
                     </div>
-                    <div className="mt-1 font-mono text-[11px] text-mist-400">
-                      {[a.resource_type, a.resource_id].filter(Boolean).join(" · ") || "—"}
+                    <div className="mt-1 font-mono text-[11px] text-mist-500">
+                      {a.action}
+                      {a.resource_type ? ` · ${a.resource_type}` : ""}
                       {a.ip ? ` · ${a.ip}` : ""}
                     </div>
                   </div>

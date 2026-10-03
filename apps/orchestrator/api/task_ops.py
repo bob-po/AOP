@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response, PlainTextResponse
 from pydantic import BaseModel
 
 from app_context import ctx
@@ -17,11 +18,12 @@ router = APIRouter(tags=["task-ops"])
 
 
 class HitlDecisionRequest(BaseModel):
-    """HITL decision — LangGraph-style resume with optional human content."""
+    """HITL decision — operator Inbox or peer-agent resume."""
 
     node_key: str | None = None
     reason: str = "rejected by user"
     input: str | None = None
+    actor: str = "system"
 
 
 class NodeReplayRequest(BaseModel):
@@ -229,6 +231,7 @@ def approve_task(task_id: str, body: HitlDecisionRequest | None = None) -> dict[
             task_id,
             node_key=(body.node_key if body else None),
             human_input=(body.input if body else None),
+            actor=(body.actor if body else "system"),
         )
     except ValueError as exc:
         raise HTTPException(
@@ -282,6 +285,55 @@ def get_artifacts(task_id: str) -> dict[str, Any]:
             detail={"code": "storage_error", "message": str(exc)},
         ) from exc
     return {"task_id": task_id, "artifacts": artifacts}
+
+
+@router.get("/v1/tasks/{task_id}/package")
+def download_task_package(task_id: str) -> Response:
+    row = ctx.tasks.get(task_id)
+    if not row:
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "task not found"}
+        )
+    try:
+        data = ctx.tasks.build_package(task_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "task not found"}
+        ) from None
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "package_error", "message": str(exc)},
+        ) from exc
+    short = task_id.replace("-", "")[:8]
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="aop-run-{short}.zip"',
+        },
+    )
+
+
+@router.get("/v1/tasks/{task_id}/report")
+def download_task_report(task_id: str) -> PlainTextResponse:
+    row = ctx.tasks.get(task_id)
+    if not row:
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "task not found"}
+        )
+    try:
+        md = ctx.tasks.run_report_markdown(task_id)
+    except KeyError:
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "task not found"}
+        ) from None
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "package_error", "message": str(exc)},
+        ) from exc
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
 
 
 @router.get("/v1/tasks/{task_id}/evaluation")

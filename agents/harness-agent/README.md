@@ -13,6 +13,27 @@
 
 Card 通常 **`skills: []`**（直通用户目标）；规划器默认打到 `claude-code`。
 
+## 审批（随 `create_harness_app` 自带）
+
+四种模式与互调信号写在 **[agent-approval.md](../../docs/architecture/agent-approval.md)**。本进程已提供：
+
+```
+POST /v1/approvals
+GET  /v1/approvals?status=pending
+POST /v1/approvals/{id}/decide
+```
+
+OS 在 `approval_mode=agent|both` 时把请求打到本 Agent；决定后回调 Gateway：
+
+`POST /v1/tasks/{id}/approve` ，body 必须含 `"actor": "agent"`。
+
+加新 profile **不必**再写审批代码；改 `profiles.py`、补 `profiles/<key>/`、设 `A2A_OS_URL`/`GATEWAY_URL` 即可。自研非 harness Agent 按该文档实现同一 HTTP 契约。
+
+| 变量 | 默认 | 含义 |
+|------|------|------|
+| `HARNESS_APPROVAL_REVIEW` | 开 | `0` 只入队，不跑 runner 评审 |
+| `A2A_OS_URL` / `GATEWAY_URL` | （空则无法回调） | 批准/驳回打到 OS |
+
 ## 本地 monorepo
 
 ```powershell
@@ -41,4 +62,4 @@ irm http://<a2a-os>/install/claude-code.ps1 | iex
 
 也可用 [`apps/client/aop-node`](../../apps/client/aop-node) 以 Windows 服务拉起本机 plugins/harness。
 
-完整说明：[harness-migration.md](../../docs/architecture/harness-migration.md) · [a2a-protocol.md](../../docs/architecture/a2a-protocol.md)。
+完整说明：[harness-migration.md](../../docs/architecture/harness-migration.md) · [agent-approval.md](../../docs/architecture/agent-approval.md) · [a2a-protocol.md](../../docs/architecture/a2a-protocol.md)。

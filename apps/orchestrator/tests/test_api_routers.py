@@ -73,6 +73,52 @@ class _FakeTasks:
     def list_all_artifacts(self, task_id=None, type_filter=None, limit=100):
         return []
 
+    def list_artifacts(self, task_id):
+        return [
+            {
+                "name": "output.md",
+                "uri": "s3://aop-artifacts/tasks/t1/n1/output.md",
+                "url": "http://127.0.0.1:9000/aop-artifacts/tasks/t1/n1/output.md",
+                "node_id": "n1",
+                "mime_type": "text/markdown",
+            }
+        ]
+
+    def events(self, task_id):
+        return [
+            {
+                "event_type": "task.completed",
+                "message": "done",
+                "ts": "2026-01-01T00:00:00Z",
+            }
+        ]
+
+    def get_evaluation(self, task_id):
+        return {"score": 81.6, "grade": "B", "method": "heuristic"}
+
+    def build_package(self, task_id):
+        from artifacts.package import build_package_zip
+
+        return build_package_zip(
+            self.get(task_id),
+            artifacts=self.list_artifacts(task_id),
+            events=self.events(task_id),
+            evaluation=self.get_evaluation(task_id),
+            fetch_bytes=lambda _uri: b"# hello\n",
+        )
+
+    def run_report_markdown(self, task_id):
+        from artifacts.package import build_citations, build_run_report_markdown
+
+        return build_run_report_markdown(
+            build_citations(
+                self.get(task_id),
+                artifacts=self.list_artifacts(task_id),
+                events=self.events(task_id),
+                evaluation=self.get_evaluation(task_id),
+            )
+        )
+
     def list_evaluations(self, limit=50, min_score=None):
         return []
 
@@ -89,6 +135,13 @@ class _FakeExecution:
 
     def get(self, task_id):
         return None
+
+    @property
+    def events(self):
+        return SimpleNamespace(
+            list_for_root=lambda root: [],
+            list_for_task=lambda task_id: [],
+        )
 
 
 class _FakeMarketplace:
@@ -199,6 +252,10 @@ def test_extracted_api_routers(monkeypatch):
         "attach_bundle_meta",
         lambda pkg, base_url="", catalog=None: {**pkg, "install_url": f"{base_url}/x"},
     )
+    monkeypatch.setattr(
+        "api.preflight.collect_preflight",
+        lambda: {"status": "blocked", "can_run": False, "blocking": ["worker"], "agents": []},
+    )
 
     bind_services(
         tasks=_FakeTasks(),
@@ -282,6 +339,10 @@ def test_extracted_api_routers(monkeypatch):
     r = client.get("/v1/stats/overview")
     assert r.status_code == 200
 
+    r = client.get("/v1/preflight")
+    assert r.status_code == 200
+    assert r.json()["status"] == "blocked"
+
     r = client.post(
         "/v1/discover",
         json={"required_skills": ["code"], "limit": 5},
@@ -303,3 +364,21 @@ def test_extracted_api_routers(monkeypatch):
     r = client.get("/v1/artifacts")
     assert r.status_code == 200
     assert r.json()["artifacts"] == []
+
+    r = client.get("/v1/tasks/t1/report")
+    assert r.status_code == 200
+    assert "AOP run report" in r.text
+    assert "t1" in r.text
+
+    r = client.get("/v1/tasks/t1/package")
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("application/zip")
+    assert r.content[:2] == b"PK"
+
+    r = client.get("/v1/tasks/t1/graph")
+    assert r.status_code == 200
+    body = r.json()
+    assert "nodes" in body or "task" in body
+
+    r = client.get("/v1/tasks/missing/package")
+    assert r.status_code == 404

@@ -171,6 +171,16 @@ class WorkflowService:
                 depends_on=[str(d) for d in (n.get("depends_on") or [])],
                 requires_approval=bool(n.get("requires_approval"))
                 or str(n["skill"]) in hitl_skills(),
+                approval_mode=(
+                    str(n["approval_mode"]).strip().lower()
+                    if isinstance(n.get("approval_mode"), str) and n["approval_mode"].strip()
+                    else None
+                ),
+                approver_agent=(
+                    str(n["approver_agent"]).strip()
+                    if isinstance(n.get("approver_agent"), str) and n["approver_agent"].strip()
+                    else None
+                ),
             )
             for n in nodes_raw
         ]

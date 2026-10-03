@@ -15,6 +15,11 @@ from ..agent_collab import AgentCollaborator
 from ..a2a_server import extract_lineage, find_cancel_targets, format_sse_frame
 from ..collaboration import CallContext
 from .cost import attach_usage, report_usage_to_os
+from .approvals import (
+    ApprovalInbox,
+    approval_prompt,
+    parse_approval_decision,
+)
 from .events import apply_event, finalize_task, new_working_task, utc_now
 from .protocol import (
     HarnessEvent,
@@ -188,6 +193,7 @@ def create_harness_app(
                     "harness": True,
                     "streaming": bool((card.get("capabilities") or {}).get("streaming")),
                     "asyncSpawn": True,
+                    "peerApproval": True,
                     "runnerReady": bool(ready.get("ready")),
                     "runnerMode": ready.get("mode"),
                     "runnerReason": ready.get("reason"),
@@ -213,6 +219,8 @@ def create_harness_app(
     app.state.collab = collab
     app.state.system_prompt = sys_prompt
     app.state.runner_readiness = _runner_readiness
+    inbox = ApprovalInbox(agent_id=agent_id)
+    app.state.approvals = inbox
 
     async def _finalize_run(
         *,
@@ -309,7 +317,141 @@ def create_harness_app(
             "runner_ready": bool(ready.get("ready")),
             "runner_mode": ready.get("mode"),
             "runner_reason": ready.get("reason"),
+            "peer_approval": True,
+            "pending_approvals": len(inbox.list_pending()),
         }
+
+    def _review_enabled() -> bool:
+        raw = (os.getenv("HARNESS_APPROVAL_REVIEW") or "1").strip().lower()
+        return raw not in {"0", "false", "off", "no"}
+
+    async def _run_peer_review(approval_id: str) -> None:
+        rec = inbox.get(approval_id)
+        if not rec or rec.get("status") != "pending":
+            return
+        ready = _runner_readiness()
+        if not ready.get("ready"):
+            logger.info(
+                "[%s] peer approval %s queued (runner not ready)",
+                agent_id,
+                approval_id,
+            )
+            return
+        message = {
+            "role": "user",
+            "parts": [{"type": "text", "text": approval_prompt(rec)}],
+            "metadata": {
+                "kind": "peer_approval",
+                "approvalId": approval_id,
+                "taskId": rec.get("task_id"),
+                "agentId": agent_id,
+            },
+        }
+
+        async def _noop(_event: HarnessEvent) -> None:
+            return
+
+        try:
+            result = await runner.run(
+                task_id=f"approval-{approval_id}",
+                message=message,
+                skill_id="peer-approval",
+                on_event=_noop,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] peer approval review failed: %s", agent_id, exc)
+            return
+        parsed = parse_approval_decision(result.text or "")
+        if parsed is None and result.data:
+            parsed = parse_approval_decision(json.dumps(result.data))
+        if parsed is None:
+            logger.info(
+                "[%s] peer approval %s left pending (unparsed review)",
+                agent_id,
+                approval_id,
+            )
+            rec["review_text"] = (result.text or "")[:2000]
+            return
+        inbox.decide(
+            approval_id,
+            approved=bool(parsed["approved"]),
+            reason=str(parsed.get("reason") or ""),
+            os_url=collab.os_url or None,
+            api_key=collab.api_key,
+        )
+
+    @app.post("/v1/approvals")
+    async def receive_approval(request: Request) -> JSONResponse:
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "invalid json"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "object required"}, status_code=400)
+        rec = inbox.receive(body)
+        if _review_enabled():
+            if (os.getenv("HARNESS_APPROVAL_SYNC") or "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }:
+                await _run_peer_review(rec["id"])
+            else:
+                job = asyncio.create_task(_run_peer_review(rec["id"]))
+                background_jobs.add(job)
+                job.add_done_callback(background_jobs.discard)
+        rec = inbox.get(rec["id"]) or rec
+        return JSONResponse(rec, status_code=202)
+
+    @app.get("/v1/approvals")
+    async def list_approvals(request: Request) -> JSONResponse:
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
+        pending = request.query_params.get("status") == "pending"
+        items = inbox.list_pending() if pending else inbox.list_all()
+        return JSONResponse({"items": items, "count": len(items)})
+
+    @app.get("/v1/approvals/{approval_id}")
+    async def get_approval(approval_id: str, request: Request) -> JSONResponse:
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
+        rec = inbox.get(approval_id)
+        if not rec:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(rec)
+
+    @app.post("/v1/approvals/{approval_id}/decide")
+    async def decide_approval(approval_id: str, request: Request) -> JSONResponse:
+        if not _collab_authorized(request):
+            return JSONResponse({"error": "collab unauthorized"}, status_code=403)
+        rec = inbox.get(approval_id)
+        if not rec:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        approved = body.get("approved")
+        if approved is None:
+            dec = str(body.get("decision") or "").strip().lower()
+            approved = dec in {"approve", "approved", "yes", "true"}
+        reason = str(body.get("reason") or body.get("input") or "")
+        try:
+            out = inbox.decide(
+                approval_id,
+                approved=bool(approved),
+                reason=reason,
+                os_url=collab.os_url or None,
+                api_key=collab.api_key,
+            )
+        except KeyError:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(out)
 
     @app.get("/.well-known/agent-card.json")
     @app.get("/.well-known/agent.json")

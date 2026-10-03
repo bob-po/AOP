@@ -16,8 +16,17 @@ type VisualWsMessage = WebSocketMessage & {
   event?: VisualRuntimeEvent;
 };
 
+const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled"]);
+const POLL_MS_LIVE = 2000;
+const POLL_MS_DISCONNECTED = 1500;
+
+function isTerminalStatus(status: string | undefined | null): boolean {
+  return TERMINAL.has(String(status || "").toLowerCase());
+}
+
 /**
  * Visual Runtime live state: Snapshot + incremental events.
+ * HTTP graph (Postgres SoT) is authoritative; WS is acceleration only.
  * UI disconnect must never stop Agent Runtime — this is observation only.
  */
 export function useVisualRuntime(taskId: string | null) {
@@ -27,10 +36,12 @@ export function useVisualRuntime(taskId: string | null) {
   const [error, setError] = useState<string | null>(null);
   const seenIds = useRef<Set<string>>(new Set());
   const lastSeq = useRef(0);
+  const graphRef = useRef<VisualGraphSnapshot | null>(null);
 
   const reset = useCallback(() => {
     seenIds.current = new Set();
     lastSeq.current = 0;
+    graphRef.current = null;
     setGraph(null);
     setEvents([]);
     setSequence(0);
@@ -38,6 +49,21 @@ export function useVisualRuntime(taskId: string | null) {
   }, []);
 
   const applySnapshot = useCallback((snap: VisualGraphSnapshot) => {
+    // Ignore stale / empty overwrite when we already have a richer snapshot
+    const prev = graphRef.current;
+    const nextSeq = snap.sequence || 0;
+    if (
+      prev &&
+      (prev.nodes?.length || 0) > 0 &&
+      (snap.nodes?.length || 0) === 0 &&
+      nextSeq <= (prev.sequence || 0)
+    ) {
+      return;
+    }
+    if (prev && nextSeq < (prev.sequence || 0) && !isTerminalStatus(snap.status)) {
+      return;
+    }
+    graphRef.current = snap;
     setGraph(snap);
     const evs = snap.events || [];
     seenIds.current = new Set(
@@ -79,11 +105,7 @@ export function useVisualRuntime(taskId: string | null) {
         return;
       }
       if (type === "graph" && data.graph) {
-        setGraph(data.graph);
-        if (typeof data.sequence === "number") {
-          lastSeq.current = Math.max(lastSeq.current, data.sequence);
-          setSequence(lastSeq.current);
-        }
+        applySnapshot(data.graph);
         return;
       }
       if (type === "event" && data.event) {
@@ -123,6 +145,49 @@ export function useVisualRuntime(taskId: string | null) {
     applySnapshot(snap);
   }, [taskId, applySnapshot]);
 
+  // Durable poll: keep Console honest when WS lags, drops, or never connects.
+  // Stop once Postgres reports a terminal status (one extra tick after terminal).
+  useEffect(() => {
+    if (!taskId) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (!alive) return;
+      const status = graphRef.current?.status || graphRef.current?.task?.status;
+      const terminal = isTerminalStatus(status);
+      // Still poll briefly after terminal so late artifacts/events land
+      const justTerminal =
+        terminal && (graphRef.current?.nodes?.length || 0) > 0;
+      try {
+        const snap = await getTaskVisualGraph(taskId);
+        if (!alive) return;
+        applySnapshot(snap);
+        setError(null);
+        const done = isTerminalStatus(snap.status || snap.task?.status);
+        if (done && (snap.nodes?.length || 0) > 0) {
+          // Final settle poll once more then stop
+          if (justTerminal) return;
+          timer = setTimeout(tick, POLL_MS_LIVE);
+          return;
+        }
+      } catch (err) {
+        if (alive && !graphRef.current) {
+          setError(err instanceof Error ? err.message : "graph poll failed");
+        }
+      }
+      if (!alive) return;
+      const interval = isConnected ? POLL_MS_LIVE : POLL_MS_DISCONNECTED;
+      timer = setTimeout(tick, interval);
+    };
+
+    timer = setTimeout(tick, isConnected ? POLL_MS_LIVE : 400);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [taskId, isConnected, applySnapshot]);
+
   const stats = useMemo(() => {
     const nodes = graph?.nodes || [];
     const agents = nodes.filter((n) => n.type === "agent");
@@ -139,8 +204,17 @@ export function useVisualRuntime(taskId: string | null) {
     };
   }, [graph, events]);
 
+  const displayStatus =
+    graph?.task?.status && isTerminalStatus(graph.task.status)
+      ? String(graph.task.status).toLowerCase() === "canceled"
+        ? "cancelled"
+        : String(graph.task.status).toLowerCase()
+      : graph?.status;
+
   return {
-    graph,
+    graph: graph
+      ? { ...graph, status: displayStatus || graph.status }
+      : null,
     events,
     sequence,
     isConnected,

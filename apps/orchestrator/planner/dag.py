@@ -16,6 +16,10 @@ class PlanNode:
     skill: str
     depends_on: list[str] = field(default_factory=list)
     requires_approval: bool = False
+    # none | system | agent | both — empty falls back to requires_approval → system
+    approval_mode: str | None = None
+    # Peer agent_key that must approve when mode is agent or both
+    approver_agent: str | None = None
     # Per-agent work brief (routing preamble stripped). Worker sends this to the agent.
     instruction: str | None = None
 
@@ -23,8 +27,13 @@ class PlanNode:
         payload: dict[str, Any] = {"id": self.id, "skill": self.skill}
         if self.depends_on:
             payload["depends_on"] = list(self.depends_on)
-        if self.requires_approval:
+        mode = (self.approval_mode or "").strip().lower() or None
+        if mode and mode not in {"none", "off"}:
+            payload["approval_mode"] = mode
+        if self.requires_approval or mode in {"system", "both"}:
             payload["requires_approval"] = True
+        if self.approver_agent:
+            payload["approver_agent"] = self.approver_agent
         if self.instruction:
             payload["instruction"] = self.instruction
         return payload
@@ -51,6 +60,16 @@ class TaskPlan:
                 skill=str(n["skill"]),
                 depends_on=[str(d) for d in (n.get("depends_on") or [])],
                 requires_approval=bool(n.get("requires_approval")),
+                approval_mode=(
+                    str(n["approval_mode"]).strip().lower()
+                    if isinstance(n.get("approval_mode"), str) and n["approval_mode"].strip()
+                    else None
+                ),
+                approver_agent=(
+                    str(n["approver_agent"]).strip()
+                    if isinstance(n.get("approver_agent"), str) and n["approver_agent"].strip()
+                    else None
+                ),
                 instruction=(
                     str(n["instruction"]).strip()
                     if isinstance(n.get("instruction"), str) and n["instruction"].strip()

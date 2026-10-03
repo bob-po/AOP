@@ -20,13 +20,16 @@ Open http://127.0.0.1:3000
 | Route | Purpose |
 |-------|---------|
 | `/` | Command Center — Live Agent Network + Run |
-| `/tasks/[id]` | DAG + Live Trace + Artifacts |
-| `/agents` | Registry + router preview by **agent_key**（`claude-code` / `deepseek-harness` / `pi` / `openclaw` / `hermes`） |
-| `/workflows` | 编排模板（节点用 harness agent_key） |
-| `/settings` | API Keys · RBAC · 审计 · 用量 · 配额 · 出站 |
+| `/inbox` | HITL 待审批队列（Approve / Reject） |
+| `/tasks` | 任务列表 · DAG · 产物 |
+| `/agents` | Registry + router preview by **agent_key** |
+| `/workflows` | 编排模板（主导航 Flows） |
+| `/settings` | API Keys · 团队 · 监控（Chaos 恢复） · 审计 · 配额 |
 | `/login` | 开发账号 `admin@aop.local` / `aop_admin_dev` |
 
-全栈启动见 [docs/guides/getting-started.md](../../docs/guides/getting-started.md)。
+全栈一键启动：仓库根目录 `python scripts/dev_up.py`（默认 aop-node 拉起 Harness）。分步见 [getting-started](../../docs/guides/getting-started.md)。
+
+CI：`npm run typecheck` 与 `npm run smoke`（黄金路径文件 + 导航冻结）。
 
 ## Stack
 

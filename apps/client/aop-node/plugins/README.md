@@ -29,7 +29,7 @@ plugins/<id>/
   plugin.toml   # id, port, HARNESS_PROFILE, args → ../_harness/run_profile.py
 ```
 
-**Agent code is not vendored here.** Runtime lives in monorepo `agents/harness-agent` + `packages/agent-runtime`.
+**Agent code is not vendored here.** Runtime lives in monorepo `agents/harness-agent` + `packages/agent-runtime`. Peer approval (`/v1/approvals`) is on the harness process; see [agent-approval.md](../../../../docs/architecture/agent-approval.md).
 
 ## Prerequisites
 

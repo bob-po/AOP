@@ -37,7 +37,7 @@ docs/
 | 把本机跑起来 | [getting-started.md](./guides/getting-started.md) |
 | 理解系统分层 | [overview.md](./architecture/overview.md) |
 | 对接官方 A2A | [a2a-protocol.md](./architecture/a2a-protocol.md) |
-| 写 / 挂一个 Agent | [agent-dev-guide.md](./architecture/agent-dev-guide.md) · [harness-migration.md](./architecture/harness-migration.md) |
+| 写 / 挂一个 Agent | [agent-dev-guide.md](./architecture/agent-dev-guide.md) · [agent-approval.md](./architecture/agent-approval.md) · [harness-migration.md](./architecture/harness-migration.md) |
 | 装边缘节点 aop-node | [apps/client/aop-node/README.md](../apps/client/aop-node/README.md) |
 | 查 API / 表结构 | [api.md](./reference/api.md) · [database.md](./reference/database.md) |
 | 单机云部署 | [deployments/README.md](../deployments/README.md) |
@@ -48,7 +48,7 @@ docs/
 
 | 文档 | 说明 |
 |------|------|
-| [getting-started.md](./guides/getting-started.md) | 本地完整启动 · 端口 · 环境变量 · 排障 |
+| [getting-started.md](./guides/getting-started.md) | 本地完整启动 · 端口 · 环境变量 · 排障 · Chaos 恢复 · golden_demo |
 | [error-handling.md](./guides/error-handling.md) | 错误处理约定 |
 
 ## Architecture
@@ -60,6 +60,7 @@ docs/
 | [a2a-os-architecture-analysis.md](./architecture/a2a-os-architecture-analysis.md) | A2A OS 能力演进 |
 | [a2a-protocol.md](./architecture/a2a-protocol.md) | 官方 A2A 兼容约定（钉扎 spec） |
 | [agent-dev-guide.md](./architecture/agent-dev-guide.md) | Agent Card / 开发规范 |
+| [agent-approval.md](./architecture/agent-approval.md) | 四种审批门 · `/v1/approvals` · 新 Agent 清单 |
 | [harness-migration.md](./architecture/harness-migration.md) | Harness 虚拟 Agent · 环境变量 |
 | [agent-sandbox.md](./architecture/agent-sandbox.md) | seccomp / 隔离 |
 | [mvp-plan.md](./architecture/mvp-plan.md) | Phase 1–34 验收表 |
@@ -70,7 +71,7 @@ docs/
 |------|------|
 | [api.md](./reference/api.md) · [database.md](./reference/database.md) · [redis.md](./reference/redis.md) | 核心契约 |
 | [billing.md](./reference/billing.md) · [billing-invoice.md](./reference/billing-invoice.md) · [quotas.md](./reference/quotas.md) · [egress.md](./reference/egress.md) | 商业与租户 |
-| [monitoring.md](./operations/monitoring.md) · [tracing.md](./operations/tracing.md) · [high-availability.md](./operations/high-availability.md) | 运维 |
+| [monitoring.md](./operations/monitoring.md) · [tracing.md](./operations/tracing.md) · [high-availability.md](./operations/high-availability.md) · [chaos-checklist.md](./operations/chaos-checklist.md) | 运维 |
 
 ## 组件 README（包内）
 

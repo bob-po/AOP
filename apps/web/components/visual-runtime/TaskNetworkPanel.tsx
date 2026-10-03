@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import {
+  apiErrorMessage,
   cancelTask,
   pauseTask,
   recoverTask,
@@ -10,6 +11,7 @@ import {
   type VisualGraphNode,
 } from "@/lib/api";
 import { useVisualRuntime } from "@/hooks/useVisualRuntime";
+import { usePreflight } from "@/hooks/usePreflight";
 import { LiveAgentNetwork } from "./LiveAgentNetwork";
 import {
   AgentInspector,
@@ -35,6 +37,7 @@ export function TaskNetworkPanel({
 }) {
   const { graph, events, isConnected, stats, refresh, error } =
     useVisualRuntime(taskId);
+  const { snapshot: preflight } = usePreflight();
   const [selected, setSelected] = useState<VisualGraphNode | null>(null);
   const [ctrlError, setCtrlError] = useState<string | null>(null);
 
@@ -46,7 +49,7 @@ export function TaskNetworkPanel({
         await fn();
         await refresh();
       } catch (err) {
-        setCtrlError(err instanceof Error ? err.message : "control failed");
+        setCtrlError(apiErrorMessage(err, "control failed"));
       } finally {
         onBusyChange?.(false);
       }
@@ -93,6 +96,7 @@ export function TaskNetworkPanel({
               snapshot={graph}
               selectedId={selected?.id}
               onSelect={setSelected}
+              readiness={preflight?.agents}
             />
           </div>
           <div className="max-h-40 border-t border-white/10 px-3 py-2">
@@ -106,6 +110,7 @@ export function TaskNetworkPanel({
               snapshot={graph}
               selectedId={selected?.id}
               onSelect={setSelected}
+              readiness={preflight?.agents}
             />
           </div>
           <div className="border-t border-white/10 p-3 lg:border-l lg:border-t-0">
@@ -113,6 +118,13 @@ export function TaskNetworkPanel({
               <AgentInspector
                 node={selected}
                 events={events}
+                readiness={
+                  preflight?.agents.find((a) => {
+                    const id = (selected.agent_id || selected.label || "").toLowerCase();
+                    const key = (a.agent_key || "").toLowerCase();
+                    return key && (id === key || id.includes(key) || key.includes(id));
+                  }) || null
+                }
                 onPause={() => run(() => pauseTask(taskId))}
                 onRetry={() => run(() => recoverTask(taskId))}
               />

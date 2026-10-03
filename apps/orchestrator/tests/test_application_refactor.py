@@ -86,7 +86,7 @@ def test_scheduling_engine_approve_enqueues_ready_jobs():
     assert out["enqueued_nodes"] == ["b"]
     job_queue.enqueue.assert_called_once()
     sched.approve_node.assert_called_once_with(
-        "t1", "hitl", human_input="补充定价分析"
+        "t1", "hitl", human_input="补充定价分析", actor="system"
     )
 
 

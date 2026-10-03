@@ -25,6 +25,9 @@ func TestHasScopeWithRole(t *testing.T) {
 	if !s.HasScope(p, "agent.write") {
 		t.Fatal("operator should have agent.write")
 	}
+	if !s.HasScope(p, "audit.read") {
+		t.Fatal("operator should have audit.read")
+	}
 	viewer := Principal{Scopes: []string{"viewer"}}
 	if viewerHas := s.HasScope(viewer, "task.write"); viewerHas {
 		t.Fatal("viewer must not have task.write")

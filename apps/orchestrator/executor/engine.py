@@ -173,6 +173,12 @@ class ExecutionEngine:
         print(f"[worker] started consumer={self.worker_id}")
         while True:
             try:
+                try:
+                    from pulse import beat_worker
+
+                    beat_worker(self.worker_id)
+                except Exception:  # noqa: BLE001
+                    pass
                 self._maybe_reclaim_stale()
                 messages = self.streams.read_execution(self.worker_id, count=1, block_ms=2000)
                 if not messages:
@@ -709,12 +715,12 @@ class ExecutionEngine:
             print(f"[worker] enqueued downstream {job['node_key']}")
 
         task = self.scheduler.get_task(task_id)
-        if task and task.get("status") == "waiting_for_user":
+        if task and task.get("status") in {"waiting_for_user", "waiting_for_agent"}:
             self.streams.publish_task_event(
-                "task.waiting_for_user",
+                str(task.get("status")),
                 {"task_id": task_id, "node_key": node_key},
             )
-            print(f"[worker] task waiting_for_user {task_id} at {node_key}")
+            print(f"[worker] task {task.get('status')} {task_id} at {node_key}")
         elif task and task.get("status") == "completed":
             result_json = self.aggregator.build_result(task_id)
             self.streams.publish_task_event(

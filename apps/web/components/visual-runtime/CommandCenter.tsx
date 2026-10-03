@@ -1,20 +1,30 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  apiErrorMessage,
+  approveTask,
   cancelTask,
   createTask,
+  downloadTaskPackage,
   getTask,
+  getTaskArtifacts,
   listAgents,
   pauseTask,
   recoverTask,
+  rejectTask,
   resumeTask,
   type Agent,
+  type ArtifactItem,
+  type PreflightAgent,
   type VisualGraphNode,
 } from "@/lib/api";
 import { useVisualRuntime } from "@/hooks/useVisualRuntime";
+import { usePreflight } from "@/hooks/usePreflight";
 import { LiveAgentNetwork } from "./LiveAgentNetwork";
+import { ChaosPlaybook } from "@/components/ops/ChaosPlaybook";
 import {
   AgentInspector,
   ExecutionTimeline,
@@ -38,12 +48,25 @@ export function CommandCenter() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selected, setSelected] = useState<VisualGraphNode | null>(null);
   const [createdAt, setCreatedAt] = useState<string | undefined>();
+  const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
+  const [summary, setSummary] = useState<string | null>(null);
   const [replayCursor, setReplayCursor] = useState<number | null>(null);
   const [replaying, setReplaying] = useState(false);
+  const [hitlBusy, setHitlBusy] = useState(false);
+  const [packBusy, setPackBusy] = useState(false);
   const replayTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { graph, events, isConnected, stats, refresh, error: liveError } =
     useVisualRuntime(taskId);
+  const { snapshot: preflight } = usePreflight();
+  const runBlocked = preflight ? !preflight.can_run : false;
+  const waitingHitl =
+    (graph?.status || "").toLowerCase() === "waiting" ||
+    (graph?.status || "").toLowerCase() === "waiting_for_user" ||
+    (graph?.task?.status || "").toLowerCase() === "waiting_for_user";
+  const waitingAgent =
+    (graph?.status || "").toLowerCase() === "waiting_for_agent" ||
+    (graph?.task?.status || "").toLowerCase() === "waiting_for_agent";
 
   useEffect(() => {
     const tid = searchParams.get("task");
@@ -59,11 +82,31 @@ export function CommandCenter() {
   }, []);
 
   useEffect(() => {
-    if (!taskId) return;
+    if (!taskId) {
+      setArtifacts([]);
+      setSummary(null);
+      return;
+    }
+    let alive = true;
     getTask(taskId)
-      .then((t) => setCreatedAt(t.created_at as string | undefined))
+      .then((t) => {
+        if (!alive) return;
+        setCreatedAt(t.created_at as string | undefined);
+        const s = t.result_json?.summary;
+        setSummary(typeof s === "string" ? s : null);
+      })
       .catch(() => undefined);
-  }, [taskId]);
+    getTaskArtifacts(taskId)
+      .then((r) => {
+        if (alive) setArtifacts(r.artifacts || []);
+      })
+      .catch(() => {
+        if (alive) setArtifacts([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [taskId, graph?.status]);
 
   useEffect(() => {
     return () => {
@@ -83,6 +126,18 @@ export function CommandCenter() {
     );
   }, [agents, selected]);
 
+  const readinessForSelected = useMemo((): PreflightAgent | null => {
+    const list = preflight?.agents || [];
+    if (!list.length || !selected) return null;
+    const id = (selected.agent_id || selected.label || "").toLowerCase();
+    return (
+      list.find((a) => {
+        const key = (a.agent_key || "").toLowerCase();
+        return key && (id === key || id.includes(key) || key.includes(id));
+      }) || null
+    );
+  }, [preflight, selected]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const content = goal.trim();
@@ -97,7 +152,7 @@ export function CommandCenter() {
       setTaskId(task.task_id);
       router.replace(`/?task=${encodeURIComponent(task.task_id)}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "create failed");
+      setError(apiErrorMessage(err, "创建任务失败"));
     } finally {
       setLoading(false);
     }
@@ -109,7 +164,7 @@ export function CommandCenter() {
       await pauseTask(taskId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "pause failed");
+      setError(apiErrorMessage(err, "pause failed"));
     }
   }, [taskId, refresh]);
 
@@ -119,7 +174,7 @@ export function CommandCenter() {
       await resumeTask(taskId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "resume failed");
+      setError(apiErrorMessage(err, "resume failed"));
     }
   }, [taskId, refresh]);
 
@@ -129,7 +184,7 @@ export function CommandCenter() {
       await recoverTask(taskId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "retry failed");
+      setError(apiErrorMessage(err, "retry failed"));
     }
   }, [taskId, refresh]);
 
@@ -139,9 +194,39 @@ export function CommandCenter() {
       await cancelTask(taskId);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "cancel failed");
+      setError(apiErrorMessage(err, "cancel failed"));
     }
   }, [taskId, refresh]);
+
+  const onApproveHitl = useCallback(async () => {
+    if (!taskId || hitlBusy) return;
+    setHitlBusy(true);
+    try {
+      await approveTask(taskId);
+      await refresh();
+      const t = await getTask(taskId);
+      setSummary(
+        typeof t.result_json?.summary === "string" ? t.result_json.summary : null,
+      );
+    } catch (err) {
+      setError(apiErrorMessage(err, "approve failed"));
+    } finally {
+      setHitlBusy(false);
+    }
+  }, [taskId, hitlBusy, refresh]);
+
+  const onRejectHitl = useCallback(async () => {
+    if (!taskId || hitlBusy) return;
+    setHitlBusy(true);
+    try {
+      await rejectTask(taskId, "rejected from Network");
+      await refresh();
+    } catch (err) {
+      setError(apiErrorMessage(err, "reject failed"));
+    } finally {
+      setHitlBusy(false);
+    }
+  }, [taskId, hitlBusy, refresh]);
 
   const startReplay = useCallback(() => {
     if (!events.length) return;
@@ -192,6 +277,26 @@ export function CommandCenter() {
               <p className="mt-8 font-mono text-[10px] uppercase tracking-[0.22em] text-mist-400">
                 Live Agent Network · idle
               </p>
+              {preflight?.agents?.length ? (
+                <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
+                  {preflight.agents.map((a) => (
+                    <span
+                      key={a.agent_key}
+                      title={a.runner_reason || a.agent_key}
+                      className={`rounded-full border px-2.5 py-1 font-mono text-[10px] ${
+                        a.runner_ready
+                          ? "border-signal/30 text-signal"
+                          : a.reachable
+                            ? "border-signal-warm/40 text-signal-warm"
+                            : "border-white/10 text-mist-400"
+                      }`}
+                    >
+                      {a.agent_key}
+                      {a.runner_ready ? "" : a.reachable ? " · stub" : " · off"}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : (
             <>
@@ -216,12 +321,56 @@ export function CommandCenter() {
                   }
                 />
               </div>
-              <LiveAgentNetwork
-                snapshot={graph}
-                selectedId={selected?.id}
-                onSelect={setSelected}
-                replayCursor={replayCursor}
-              />
+              {waitingHitl ? (
+                <div className="absolute left-4 right-4 top-12 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-signal-warm/40 bg-ink-950/85 px-3 py-2 backdrop-blur md:left-auto md:right-4 md:max-w-md">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-signal-warm">
+                    Waiting for system approval
+                  </span>
+                  <button
+                    type="button"
+                    disabled={hitlBusy}
+                    onClick={() => void onApproveHitl()}
+                    className="rounded-md bg-signal px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-ink-950 disabled:opacity-40"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    disabled={hitlBusy}
+                    onClick={() => void onRejectHitl()}
+                    className="rounded-md border border-signal-warm/50 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-signal-warm disabled:opacity-40"
+                  >
+                    Reject
+                  </button>
+                  <Link
+                    href="/inbox"
+                    className="font-mono text-[10px] uppercase tracking-wider text-signal hover:underline"
+                  >
+                    Open Inbox
+                  </Link>
+                </div>
+              ) : waitingAgent ? (
+                <div className="absolute left-4 right-4 top-12 z-20 flex flex-wrap items-center gap-2 rounded-lg border border-signal/30 bg-ink-950/85 px-3 py-2 backdrop-blur md:left-auto md:right-4 md:max-w-md">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-signal">
+                    Waiting for agent approval
+                  </span>
+                  <Link
+                    href="/inbox"
+                    className="font-mono text-[10px] uppercase tracking-wider text-mist-300 hover:text-signal"
+                  >
+                    Inbox
+                  </Link>
+                </div>
+              ) : null}
+              <div className="absolute inset-0 min-h-[52vh]">
+                <LiveAgentNetwork
+                  snapshot={graph}
+                  selectedId={selected?.id}
+                  onSelect={setSelected}
+                  replayCursor={replayCursor}
+                  readiness={preflight?.agents}
+                />
+              </div>
             </>
           )}
         </section>
@@ -232,6 +381,7 @@ export function CommandCenter() {
               <AgentInspector
                 node={selected}
                 agent={agentForSelected}
+                readiness={readinessForSelected}
                 events={events}
                 onPause={onPause}
                 onRetry={onRetry}
@@ -245,6 +395,24 @@ export function CommandCenter() {
                 events={events}
                 stats={stats}
                 createdAt={createdAt}
+                artifacts={artifacts}
+                summary={summary}
+                onDownloadPackage={
+                  taskId
+                    ? async () => {
+                        setPackBusy(true);
+                        setError(null);
+                        try {
+                          await downloadTaskPackage(taskId);
+                        } catch (e) {
+                          setError(apiErrorMessage(e, "下载产物包失败"));
+                        } finally {
+                          setPackBusy(false);
+                        }
+                      }
+                    : undefined
+                }
+                packageBusy={packBusy}
               />
             )}
             <ExecutionTimeline events={events} />
@@ -271,9 +439,16 @@ export function CommandCenter() {
 
       {/* Command bar */}
       <div className="relative z-30 border-t border-white/10 bg-ink-950/85 px-4 py-4 backdrop-blur-md md:px-8">
-        {(error || liveError) && (
-          <div className="mb-2 font-mono text-xs text-signal-warm">
-            {error || liveError}
+        {(error || liveError || runBlocked) && (
+          <div className="mb-3 space-y-2">
+            <div className="font-mono text-xs text-signal-warm">
+              {runBlocked
+                ? preflight?.hints[0] || "Worker / Outbox 未就绪，任务会停在 ready"
+                : error || liveError}
+            </div>
+            {runBlocked || (preflight?.stuck_running || 0) > 0 ? (
+              <ChaosPlaybook steps={preflight?.recover_steps} compact />
+            ) : null}
           </div>
         )}
         <form
@@ -307,10 +482,10 @@ export function CommandCenter() {
           </div>
           <button
             type="submit"
-            disabled={loading || !goal.trim()}
+            disabled={loading || !goal.trim() || runBlocked}
             className="shrink-0 rounded-xl bg-signal px-5 py-3 font-mono text-xs font-semibold uppercase tracking-[0.18em] text-ink-950 transition hover:bg-white disabled:opacity-40"
           >
-            {loading ? "…" : "Run →"}
+            {loading ? "…" : runBlocked ? "Blocked" : "Run →"}
           </button>
         </form>
       </div>

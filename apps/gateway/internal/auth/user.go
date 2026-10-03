@@ -199,6 +199,84 @@ func (s *Store) GetUserByID(ctx context.Context, userID string) (User, error) {
 	return u, err
 }
 
+func GenerateTempPassword() (string, error) {
+	buf := make([]byte, 9)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return "Aop-" + hex.EncodeToString(buf), nil
+}
+
+func (s *Store) InviteUser(
+	ctx context.Context,
+	tenantID, email, displayName, role, password string,
+) (User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return User{}, fmt.Errorf("valid email required")
+	}
+	role = NormalizeRole(role)
+	if role == "" || role == "member" {
+		role = "operator"
+	}
+	if _, ok := RoleCatalog[role]; !ok {
+		role = "operator"
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		displayName = strings.Split(email, "@")[0]
+	}
+	if password == "" {
+		pw, err := GenerateTempPassword()
+		if err != nil {
+			return User{}, err
+		}
+		password = pw
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return User{}, err
+	}
+	var u User
+	err = s.DB.QueryRow(ctx, `
+		INSERT INTO users (tenant_id, email, display_name, role, status, password_hash, created_at, updated_at)
+		VALUES ($1::uuid, $2, $3, $4, 'active', $5, now(), now())
+		RETURNING id::text, tenant_id::text, email, COALESCE(display_name, ''), role, status
+	`, tenantID, email, displayName, role, hash).Scan(
+		&u.ID, &u.TenantID, &u.Email, &u.DisplayName, &u.Role, &u.Status,
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") ||
+			strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+			return User{}, fmt.Errorf("user already exists")
+		}
+		return User{}, err
+	}
+	return u, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context, tenantID string) ([]User, error) {
+	rows, err := s.DB.Query(ctx, `
+		SELECT id::text, tenant_id::text, email, COALESCE(display_name, ''), role, status
+		FROM users
+		WHERE tenant_id = $1::uuid
+		ORDER BY created_at DESC
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.TenantID, &u.Email, &u.DisplayName, &u.Role, &u.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) RevokeUserSessions(ctx context.Context, userID string) error {
 	_, err := s.DB.Exec(ctx, `DELETE FROM user_sessions WHERE user_id = $1::uuid`, userID)
 	return err

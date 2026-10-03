@@ -439,25 +439,25 @@ class QuotaService:
         if usage["concurrent_tasks"] >= int(limits["max_concurrent_tasks"]):
             raise QuotaExceeded(
                 "quota_concurrent",
-                f"concurrent tasks {usage['concurrent_tasks']} >= limit {limits['max_concurrent_tasks']}",
+                "并发任务已满。到 Settings「配额」调高，或取消卡住的 running 任务。",
                 snapshot=snap,
             )
         if usage["tasks_today"] >= int(limits["max_tasks_per_day"]):
             raise QuotaExceeded(
                 "quota_tasks_per_day",
-                f"tasks today {usage['tasks_today']} >= limit {limits['max_tasks_per_day']}",
+                "今日任务数已达上限。到 Settings「配额」调高，或明天再试。",
                 snapshot=snap,
             )
         if usage["agent_runs_today"] >= int(limits["max_agent_runs_per_day"]):
             raise QuotaExceeded(
                 "quota_runs_per_day",
-                f"agent runs today {usage['agent_runs_today']} >= limit {limits['max_agent_runs_per_day']}",
+                "今日 Agent 调用次数已达上限。到 Settings「配额」调高。",
                 snapshot=snap,
             )
         if usage["estimated_usd_30d"] >= float(limits["max_estimated_usd_per_month"]):
             raise QuotaExceeded(
                 "quota_usd_month",
-                f"estimated USD 30d {usage['estimated_usd_30d']} >= limit {limits['max_estimated_usd_per_month']}",
+                "本月预估费用已达上限。到 Settings「配额」调高。",
                 snapshot=snap,
             )
         return snap

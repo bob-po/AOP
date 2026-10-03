@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +19,7 @@ type AuditEntry struct {
 	IP           string          `json:"ip,omitempty"`
 	Payload      json.RawMessage `json:"payload,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
+	Summary      string          `json:"summary"`
 }
 
 type AuditStore struct {
@@ -75,6 +78,7 @@ func (s *AuditStore) List(ctx context.Context, tenantID string, limit int) ([]Au
 		}
 		e.TenantID = tid
 		e.Payload = payload
+		e.Summary = SummarizeAudit(e)
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -85,4 +89,74 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func payloadString(p map[string]any, key string) string {
+	if p == nil {
+		return ""
+	}
+	v, ok := p[key]
+	if !ok || v == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+// SummarizeAudit turns a raw audit row into one operator-readable sentence.
+func SummarizeAudit(e AuditEntry) string {
+	var p map[string]any
+	if len(e.Payload) > 0 {
+		_ = json.Unmarshal(e.Payload, &p)
+	}
+	who := payloadString(p, "email")
+	if who == "" {
+		who = payloadString(p, "api_key_name")
+	}
+	if who == "" {
+		who = payloadString(p, "name")
+	}
+	switch e.Action {
+	case "auth.login":
+		if who != "" {
+			return who + " signed in"
+		}
+		return "Someone signed in"
+	case "auth.logout":
+		if who != "" {
+			return who + " signed out"
+		}
+		return "Session ended"
+	case "auth.invite":
+		email := payloadString(p, "invited_email")
+		if email == "" {
+			email = payloadString(p, "email")
+		}
+		role := payloadString(p, "role")
+		if email != "" && role != "" {
+			return "Invited " + email + " as " + role
+		}
+		if email != "" {
+			return "Invited " + email
+		}
+		return "Invited a teammate"
+	case "api_key.create":
+		name := payloadString(p, "name")
+		if name != "" {
+			return "Created API key “" + name + "”"
+		}
+		return "Created an API key"
+	case "api_key.revoke":
+		if e.ResourceID != "" {
+			return "Revoked API key " + e.ResourceID
+		}
+		return "Revoked an API key"
+	default:
+		if who != "" {
+			return who + " · " + e.Action
+		}
+		if e.ResourceType != "" && e.ResourceID != "" {
+			return e.Action + " on " + e.ResourceType + " " + e.ResourceID
+		}
+		return e.Action
+	}
 }

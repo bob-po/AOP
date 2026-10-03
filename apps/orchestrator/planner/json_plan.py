@@ -80,12 +80,20 @@ def nodes_from_payload(
         deps = [str(d).strip() for d in deps_raw if str(d).strip()]
 
         requires = bool(item.get("requires_approval")) or skill in hitl
+        mode_raw = item.get("approval_mode")
+        mode = str(mode_raw).strip().lower() if isinstance(mode_raw, str) and mode_raw.strip() else None
+        if requires and not mode:
+            mode = "system"
+        approver = item.get("approver_agent") or item.get("approver_agent_key")
+        approver_s = str(approver).strip() if isinstance(approver, str) and approver.strip() else None
         built.append(
             PlanNode(
                 id=node_id,
                 skill=skill,
                 depends_on=deps,
-                requires_approval=requires,
+                requires_approval=requires or (mode in {"system", "both"}),
+                approval_mode=mode,
+                approver_agent=approver_s,
             )
         )
 

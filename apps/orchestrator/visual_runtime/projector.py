@@ -10,7 +10,8 @@ from typing import Any
 from .events import normalize_event
 
 
-def _status_from_event(event_type: str) -> str:
+def _status_from_event(event_type: str) -> str | None:
+    """Map event → node status. None = informational, do not regress status."""
     if event_type.endswith(".failed") or event_type.endswith(".timeout"):
         return "failed"
     if event_type.endswith(".waiting"):
@@ -29,6 +30,10 @@ def _status_from_event(event_type: str) -> str:
         return "running"
     if event_type.endswith(".created"):
         return "pending"
+    # Post-completion lifecycle (aggregated / evaluated / …) must not
+    # overwrite task.completed → running on the TASK / agent nodes.
+    if event_type.startswith("task.") or event_type.startswith("execution."):
+        return None
     return "running"
 
 
@@ -89,8 +94,9 @@ def apply_event_to_graph(
             "metadata": {"root_task_id": root},
         }
 
-    if et.startswith("task."):
-        nodes[task_node_id]["status"] = _status_from_event(et)
+    node_status = _status_from_event(et)
+    if et.startswith("task.") and node_status is not None:
+        nodes[task_node_id]["status"] = node_status
         if et == "task.completed":
             nodes[task_node_id]["status"] = "completed"
         elif et == "task.failed":
@@ -109,7 +115,7 @@ def apply_event_to_graph(
                 "id": stable_id,
                 "type": "agent",
                 "label": agent_id,
-                "status": _status_from_event(et),
+                "status": node_status or "running",
                 "agent_id": agent_id,
                 "execution_id": ev.get("execution_id"),
                 "parent_id": f"agent:{parent_agent_id}" if parent_agent_id else task_node_id,
@@ -128,7 +134,8 @@ def apply_event_to_graph(
             meta["last_task_id"] = task_id or last
             meta["correlation_id"] = ev.get("correlation_id") or meta.get("correlation_id")
             existing["metadata"] = meta
-            existing["status"] = _status_from_event(et)
+            if node_status is not None:
+                existing["status"] = node_status
             existing["execution_id"] = ev.get("execution_id") or existing.get("execution_id")
             nodes[stable_id] = existing
 
@@ -146,12 +153,17 @@ def apply_event_to_graph(
                     "metadata": {"visit_count": 1},
                 }
             edge_id = f"edge:{parent_agent_id}->{agent_id}:{task_id or seq or ev.get('event_id')}"
+            edge_status = (
+                "active"
+                if node_status == "running"
+                else (node_status or "completed")
+            )
             edges[edge_id] = {
                 "id": edge_id,
                 "source": parent_stable,
                 "target": f"agent:{agent_id}",
                 "type": _edge_type_from_event(et),
-                "status": "active" if _status_from_event(et) == "running" else _status_from_event(et),
+                "status": edge_status,
                 "timestamp": ts,
                 "metadata": {
                     "task_id": task_id,
@@ -375,7 +387,9 @@ def project_visual_graph(
             nid = f"agent:{agent}"
             for n in graph["nodes"]:
                 if n["id"] == nid:
-                    n["status"] = str(execute.get("state") or n["status"]).lower()
+                    mapped = _map_exec_state(execute.get("state"))
+                    if mapped:
+                        n["status"] = mapped
                     n["execution_id"] = execute.get("task_id") or n.get("execution_id")
                     meta = dict(n.get("metadata") or {})
                     meta["attempt"] = execute.get("attempt")
@@ -383,12 +397,60 @@ def project_visual_graph(
                     meta["visited_agents"] = execute.get("visited_agents")
                     n["metadata"] = meta
 
+    # Postgres task row is source of truth after restart / post-lifecycle events
+    graph = _reconcile_with_task_row(graph, task_row)
+
     # Final sequence
     seqs = [e.get("sequence") for e in timeline if e.get("sequence") is not None]
     if seqs:
         graph["sequence"] = max(int(s) for s in seqs)
 
     graph["events"] = timeline
+    return graph
+
+
+def _map_exec_state(state: Any) -> str | None:
+    st = str(state or "").lower()
+    if st in {"succeeded", "success", "completed"}:
+        return "completed"
+    if st in {"failed", "error", "timeout"}:
+        return "failed" if st != "timeout" else "timeout"
+    if st in {"cancelled", "canceled"}:
+        return "cancelled"
+    if st in {"waiting"}:
+        return "waiting"
+    if st in {"running", "pending", "retrying"}:
+        return st
+    return None
+
+
+_TERMINAL = frozenset({"completed", "failed", "cancelled"})
+_OPEN_AGENT = frozenset({"running", "active", "discovered", "pending", "retrying"})
+
+
+def _reconcile_with_task_row(
+    graph: dict[str, Any],
+    task_row: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Clamp projected status to durable task row so refresh/history stay true."""
+    if not task_row:
+        return graph
+    mapped = _map_task_status(task_row.get("status"))
+    if not mapped:
+        return graph
+    graph["status"] = mapped
+    root = str(task_row.get("id") or graph.get("task_id") or "")
+    task_node_id = f"task:{root}"
+    for n in graph.get("nodes") or []:
+        if n.get("id") == task_node_id or n.get("type") == "task":
+            n["status"] = mapped
+        elif (
+            mapped in _TERMINAL
+            and n.get("type") == "agent"
+            and str(n.get("status") or "").lower() in _OPEN_AGENT
+        ):
+            # agent.completed sometimes lacks agent_id; terminal task closes hops
+            n["status"] = "completed" if mapped == "completed" else mapped
     return graph
 
 
@@ -400,7 +462,7 @@ def _map_task_status(status: Any) -> str:
         return "failed"
     if s in {"cancelled", "canceled"}:
         return "cancelled"
-    if s in {"waiting_for_user", "waiting"}:
+    if s in {"waiting_for_user", "waiting", "waiting_for_agent"}:
         return "waiting"
     if s in {"running", "planning", "ready"}:
         return "running"

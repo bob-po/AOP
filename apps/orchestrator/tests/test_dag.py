@@ -100,9 +100,17 @@ def test_ready_node_ids_unlocks_after_deps():
 def test_plan_roundtrip_dict():
     plan = _plan(
         PlanNode(id="a", skill="web-search", requires_approval=True),
-        PlanNode(id="b", skill="report-generation", depends_on=["a"]),
+        PlanNode(
+            id="b",
+            skill="report-generation",
+            depends_on=["a"],
+            approval_mode="both",
+            approver_agent="pi",
+        ),
     )
     restored = TaskPlan.from_dict(plan.to_dict())
     assert restored.title == plan.title
     assert restored.nodes[0].requires_approval is True
     assert restored.nodes[1].depends_on == ["a"]
+    assert restored.nodes[1].approval_mode == "both"
+    assert restored.nodes[1].approver_agent == "pi"

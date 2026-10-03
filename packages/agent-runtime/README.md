@@ -295,6 +295,8 @@ app = create_harness_app(
 )
 ```
 
+`create_harness_app` also serves peer approval (`POST /v1/approvals`) and callbacks the OS with `actor=agent`. Modes and the new-agent checklist: [`docs/architecture/agent-approval.md`](../../docs/architecture/agent-approval.md).
+
 See [`docs/architecture/harness-migration.md`](../../docs/architecture/harness-migration.md) and `agents/harness-agent/`.
 
 ## Testing
