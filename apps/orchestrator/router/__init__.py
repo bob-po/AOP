@@ -272,13 +272,23 @@ class AgentRouter:
 
         candidates = self._all_candidates_with_cards(tenant_id=tid)
 
-        # Stage 1: skill match (union by default, intersection when match_all_skills)
+        # Stage 1: skill match (union by default, intersection when match_all_skills).
+        # Harness cards often ship skills:[]; planner still routes by agent_key, so
+        # treat agent_key as an implicit skill for discovery/route.
         if skills:
             wanted = set(skills)
+
+            def _skill_set(c: dict[str, Any]) -> set[str]:
+                have = {str(s) for s in (c.get("skills") or []) if s}
+                key = str(c.get("agent_key") or "").strip()
+                if key:
+                    have.add(key)
+                return have
+
             if match_all_skills:
-                candidates = [c for c in candidates if wanted.issubset(set(c.get("skills") or []))]
+                candidates = [c for c in candidates if wanted.issubset(_skill_set(c))]
             else:
-                candidates = [c for c in candidates if wanted & set(c.get("skills") or [])]
+                candidates = [c for c in candidates if wanted & _skill_set(c)]
 
         if not include_offline:
             candidates = [c for c in candidates if c.get("status") in ONLINE_STATUSES and c.get("endpoint")]

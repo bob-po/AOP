@@ -35,6 +35,7 @@ from scheduling import SchedulingService
 from recovery_and_dr import StartupReconciler
 from app_context import bind_services
 from api import register_api_routes
+from api.runtime import _json_safe
 
 # OpenTelemetry tracing
 try:
@@ -245,11 +246,19 @@ async def websocket_task_events(websocket: WebSocket, task_id: str):
     try:
         row = tasks.get(task_id)
         if row:
-            await websocket.send_json({"type": "initial_state", "task_id": task_id, "data": row})
+            await websocket.send_json(
+                {"type": "initial_state", "task_id": task_id, "data": _json_safe(row)}
+            )
 
         events = tasks.events(task_id)
         if events:
-            await websocket.send_json({"type": "initial_events", "task_id": task_id, "data": events})
+            await websocket.send_json(
+                {
+                    "type": "initial_events",
+                    "task_id": task_id,
+                    "data": _json_safe(events),
+                }
+            )
 
         pubsub = streams.subscribe_task_events(task_id)
         event_listener = asyncio.create_task(

@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   createApiKey,
@@ -35,20 +36,53 @@ import {
 import { TenantPanel } from "@/components/settings/TenantPanel";
 import { GovernancePanel } from "@/components/settings/GovernancePanel";
 
-const TABS = [
-  { id: "tenant", label: "租户" },
-  { id: "governance", label: "治理" },
-  { id: "keys", label: "API Keys" },
-  { id: "rbac", label: "权限" },
-  { id: "billing", label: "用量" },
-  { id: "quotas", label: "配额" },
-  { id: "egress", label: "出站" },
-  { id: "monitor", label: "监控" },
-  { id: "storage", label: "存储" },
-  { id: "audit", label: "审计" },
+const NAV_GROUPS = [
+  {
+    id: "access",
+    label: "访问",
+    items: [
+      { id: "keys", label: "API Keys", hint: "密钥创建与撤销" },
+      { id: "rbac", label: "权限", hint: "角色与 scopes" },
+    ],
+  },
+  {
+    id: "org",
+    label: "租户",
+    items: [
+      { id: "tenant", label: "租户", hint: "配额 · 预算 · 策略" },
+      { id: "governance", label: "治理", hint: "委托审计与检查" },
+    ],
+  },
+  {
+    id: "cost",
+    label: "计费",
+    items: [
+      { id: "billing", label: "用量", hint: "成本与发票" },
+      { id: "quotas", label: "配额", hint: "日限额与并发" },
+    ],
+  },
+  {
+    id: "ops",
+    label: "运维",
+    items: [
+      { id: "egress", label: "出站", hint: "Browser URL 策略" },
+      { id: "monitor", label: "监控", hint: "Gateway health" },
+      { id: "storage", label: "存储", hint: "MinIO / artifacts" },
+      { id: "audit", label: "审计", hint: "操作日志" },
+    ],
+  },
 ] as const;
 
-type TabId = (typeof TABS)[number]["id"];
+type TabId = (typeof NAV_GROUPS)[number]["items"][number]["id"];
+
+const ALL_TABS: { id: TabId; label: string; hint: string; group: string }[] =
+  NAV_GROUPS.flatMap((g) =>
+    g.items.map((item) => ({ ...item, group: g.label })),
+  );
+
+const TAB_META: Record<TabId, { label: string; hint: string }> = Object.fromEntries(
+  ALL_TABS.map((t) => [t.id, { label: t.label, hint: t.hint }]),
+) as Record<TabId, { label: string; hint: string }>;
 
 const FALLBACK_ROLES: RbacRole[] = [
   { role: "viewer", scopes: ["task.read", "agent.read", "memory.read"] },
@@ -76,7 +110,7 @@ export function SettingsPageView() {
   const tabFromUrl = searchParams.get("tab") as TabId | null;
   const rootFromUrl = searchParams.get("root_task_id");
   const [tab, setTab] = useState<TabId>(
-    tabFromUrl && TABS.some((t) => t.id === tabFromUrl) ? tabFromUrl : "keys",
+    tabFromUrl && ALL_TABS.some((t) => t.id === tabFromUrl) ? tabFromUrl : "keys",
   );
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [roles, setRoles] = useState<RbacRole[]>(FALLBACK_ROLES);
@@ -119,7 +153,7 @@ export function SettingsPageView() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (tabFromUrl && TABS.some((t) => t.id === tabFromUrl)) {
+    if (tabFromUrl && ALL_TABS.some((t) => t.id === tabFromUrl)) {
       setTab(tabFromUrl);
     }
   }, [tabFromUrl]);
@@ -130,6 +164,8 @@ export function SettingsPageView() {
     q.set("tab", id);
     router.replace(`/settings?${q.toString()}`);
   }
+
+  const meta = useMemo(() => TAB_META[tab], [tab]);
 
   async function loadKeys() {
     try {
@@ -335,28 +371,75 @@ export function SettingsPageView() {
   }
 
   return (
-    <div className="px-4 py-6 md:px-8">
-      <h1 className="font-display text-3xl text-mist-100">系统设置</h1>
-      <p className="mt-1 text-sm text-mist-400">租户、密钥、角色权限与基础运维配置。</p>
-
-      <div className="mt-5 flex flex-wrap gap-1 border-b border-white/10 pb-2">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => selectTab(t.id)}
-            className={`rounded-lg px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.12em] ${
-              tab === t.id ? "bg-signal/15 text-signal" : "text-mist-400"
-            }`}
+    <div className="flex min-h-[calc(100vh-4rem)] flex-col lg:flex-row">
+      <aside className="w-full shrink-0 border-b border-white/10 lg:w-52 lg:border-b-0 lg:border-r">
+        <div className="flex items-end justify-between gap-3 px-4 py-4 lg:block lg:px-4 lg:py-5">
+          <div>
+            <h1 className="font-display text-xl text-mist-100 lg:text-2xl">设置</h1>
+            <p className="mt-0.5 hidden font-mono text-[11px] text-mist-500 lg:block">
+              访问 · 租户 · 计费 · 运维
+            </p>
+          </div>
+          <Link
+            href="/workflows"
+            className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-500 hover:text-mist-200 lg:hidden"
           >
-            {t.label}
-          </button>
-        ))}
-      </div>
+            模板
+          </Link>
+        </div>
+        <nav className="flex gap-4 overflow-x-auto px-3 pb-3 lg:block lg:space-y-4 lg:overflow-visible lg:px-2 lg:pb-4">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.id} className="shrink-0 lg:shrink">
+              <div className="px-1 pb-1 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-500">
+                {group.label}
+              </div>
+              <div className="flex gap-0.5 lg:flex-col">
+                {group.items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => selectTab(item.id)}
+                    className={`rounded-lg px-2.5 py-1.5 text-left transition lg:w-full lg:py-2 ${
+                      tab === item.id
+                        ? "bg-signal/10 text-signal"
+                        : "text-mist-300 hover:bg-white/5 hover:text-mist-100"
+                    }`}
+                  >
+                    <div className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.1em]">
+                      {item.label}
+                    </div>
+                    <div className="mt-0.5 hidden font-mono text-[10px] text-mist-500 lg:block">
+                      {item.hint}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="mt-3 hidden border-t border-white/10 pt-3 lg:block">
+            <div className="px-1 pb-1 font-mono text-[10px] uppercase tracking-[0.16em] text-mist-500">
+              高级
+            </div>
+            <Link
+              href="/workflows"
+              className="block rounded-lg px-2.5 py-2 font-mono text-[11px] uppercase tracking-[0.1em] text-mist-400 hover:bg-white/5 hover:text-mist-100"
+            >
+              编排模板
+            </Link>
+          </div>
+        </nav>
+      </aside>
 
-      {error ? <div className="mt-4 font-mono text-xs text-signal-warm">{error}</div> : null}
+      <section className="min-w-0 flex-1 px-4 py-5 md:px-8 md:py-6">
+        <div className="mb-5 max-w-3xl">
+          <div className="font-display text-xl text-mist-100">{meta.label}</div>
+          <p className="mt-1 text-sm text-mist-400">{meta.hint}</p>
+          {error ? (
+            <div className="mt-3 font-mono text-xs text-signal-warm">{error}</div>
+          ) : null}
+        </div>
 
-      <div className="mt-6 max-w-3xl">
+        <div className="max-w-3xl">
         {tab === "tenant" ? <TenantPanel /> : null}
 
         {tab === "governance" ? (
@@ -365,25 +448,28 @@ export function SettingsPageView() {
 
         {tab === "keys" ? (
           <div className="space-y-5">
-            <form onSubmit={onCreate} className="flex flex-wrap items-end gap-2">
-              <label className="block">
+            <form
+              onSubmit={onCreate}
+              className="flex flex-wrap items-end gap-3 rounded-xl border border-white/10 bg-ink-900/40 p-4"
+            >
+              <label className="block min-w-[10rem] flex-1">
                 <span className="font-mono text-[10px] uppercase text-mist-400">名称</span>
                 <input
                   id="settings-key-name"
                   name="api-key-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="mt-1 block rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
+                  className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
                 />
               </label>
-              <label className="block">
+              <label className="block min-w-[8rem]">
                 <span className="font-mono text-[10px] uppercase text-mist-400">角色</span>
                 <select
                   id="settings-key-role"
                   name="api-key-role"
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
-                  className="mt-1 block rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
+                  className="mt-1 block w-full rounded-xl border border-white/10 bg-ink-800/60 px-3 py-2 text-sm text-mist-100"
                 >
                   {roles.map((r) => (
                     <option key={r.role} value={r.role}>
@@ -405,25 +491,37 @@ export function SettingsPageView() {
                 明文密钥（仅显示一次）：{createdPlain}
               </div>
             ) : null}
-            <div className="divide-y divide-white/10 border-y border-white/10">
-              {keys.map((k) => (
-                <div key={k.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                  <div>
-                    <div className="text-sm text-mist-100">{k.name}</div>
-                    <div className="font-mono text-[11px] text-mist-400">
-                      {k.key_prefix}… · {k.status} · {(k.scopes || []).join(",")}
+            <div className="overflow-hidden rounded-xl border border-white/10">
+              {keys.length === 0 ? (
+                <p className="px-4 py-8 text-center font-mono text-xs text-mist-500">暂无 API Key</p>
+              ) : (
+                <div className="divide-y divide-white/10">
+                  {keys.map((k) => (
+                    <div
+                      key={k.id}
+                      className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm text-mist-100">{k.name}</div>
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-mist-400">
+                          {k.key_prefix}… · {k.status}
+                          {(k.scopes || []).length
+                            ? ` · ${(k.scopes || []).slice(0, 4).join(", ")}`
+                            : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={busy || k.status === "revoked"}
+                        onClick={() => onRevoke(k.id)}
+                        className="shrink-0 rounded-lg border border-white/15 px-3 py-1 font-mono text-[10px] uppercase text-mist-300 disabled:opacity-40"
+                      >
+                        撤销
+                      </button>
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy || k.status === "revoked"}
-                    onClick={() => onRevoke(k.id)}
-                    className="rounded-lg border border-white/15 px-3 py-1 font-mono text-[10px] uppercase text-mist-300 disabled:opacity-40"
-                  >
-                    撤销
-                  </button>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           </div>
         ) : null}
@@ -901,7 +999,8 @@ export function SettingsPageView() {
             )}
           </div>
         ) : null}
-      </div>
+        </div>
+      </section>
     </div>
   );
 }

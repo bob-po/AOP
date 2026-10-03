@@ -300,8 +300,16 @@ class A2ACollaborationRuntime:
         match_all_skills: bool = False,
         exclude_agent_ids: list[str] | None = None,
         limit: int = 20,
+        root_task_id: str | None = None,
+        correlation_id: str | None = None,
+        task_id: str | None = None,
+        caller_agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Ask the OS for Agents matching a capability requirement."""
+        """Ask the OS for Agents matching a capability requirement.
+
+        Optional lineage fields feed Visual Runtime observation only; they do
+        not change discovery semantics.
+        """
         payload: dict[str, Any] = {
             "required_skills": required_skills or [],
             "capabilities": capabilities or {},
@@ -313,6 +321,14 @@ class A2ACollaborationRuntime:
             payload["input"] = input
         if output:
             payload["output"] = output
+        if root_task_id:
+            payload["root_task_id"] = root_task_id
+        if correlation_id:
+            payload["correlation_id"] = correlation_id
+        if task_id:
+            payload["task_id"] = task_id
+        if caller_agent_id or self.agent_id:
+            payload["caller_agent_id"] = caller_agent_id or self.agent_id
         return self._post("/v1/discover", payload)
 
     def route(
@@ -324,8 +340,15 @@ class A2ACollaborationRuntime:
         input: dict[str, Any] | None = None,
         output: dict[str, Any] | None = None,
         exclude_agent_ids: list[str] | None = None,
+        root_task_id: str | None = None,
+        correlation_id: str | None = None,
+        task_id: str | None = None,
+        caller_agent_id: str | None = None,
     ) -> dict[str, Any]:
-        """Ask the OS to select the best Agent for a requirement."""
+        """Ask the OS to select the best Agent for a requirement.
+
+        Optional lineage fields feed Visual Runtime observation only.
+        """
         payload: dict[str, Any] = {
             "required_skills": required_skills or [],
             "capabilities": capabilities or {},
@@ -337,6 +360,14 @@ class A2ACollaborationRuntime:
             payload["input"] = input
         if output:
             payload["output"] = output
+        if root_task_id:
+            payload["root_task_id"] = root_task_id
+        if correlation_id:
+            payload["correlation_id"] = correlation_id
+        if task_id:
+            payload["task_id"] = task_id
+        if caller_agent_id or self.agent_id:
+            payload["caller_agent_id"] = caller_agent_id or self.agent_id
         return self._post("/v1/route", payload)
 
     # ── Agent-to-Agent calls ─────────────────────────────────────────────
@@ -601,6 +632,10 @@ class A2ACollaborationRuntime:
             input=input,
             output=output,
             exclude_agent_ids=[self.agent_id] if self.agent_id else None,
+            root_task_id=context.root_task_id,
+            correlation_id=context.correlation_id,
+            task_id=self_task_id or context.parent_task_id,
+            caller_agent_id=self.agent_id,
         )
         chosen = selection.get("selected_agent") or (
             (selection.get("candidates") or [None])[0]

@@ -1,6 +1,6 @@
 # AOP Web Console
 
-Next.js console for **A2A OS** — central composer, task DAG, live trace, agents registry.
+Next.js console for **A2A OS** — Visual Runtime (Live Agent Network + Command Center), task DAG, live trace, agents registry.
 
 ## Run
 
@@ -19,7 +19,7 @@ Open http://127.0.0.1:3000
 
 | Route | Purpose |
 |-------|---------|
-| `/` | Central dialog — create Task |
+| `/` | Command Center — Live Agent Network + Run |
 | `/tasks/[id]` | DAG + Live Trace + Artifacts |
 | `/agents` | Registry + router preview by **agent_key**（`claude-code` / `deepseek-harness` / `pi` / `openclaw` / `hermes`） |
 | `/workflows` | 编排模板（节点用 harness agent_key） |

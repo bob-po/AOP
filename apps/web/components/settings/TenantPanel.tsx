@@ -122,12 +122,13 @@ export function TenantPanel() {
 
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl border border-white/10 bg-ink-900/50 p-5">
-        <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-mist-400">
-          Default Tenant
+      <div className="rounded-xl border border-white/10 bg-ink-900/40 px-4 py-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="font-mono text-sm text-mist-100">{tenantId}</div>
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-mist-500">
+            Default
+          </span>
         </div>
-        <div className="mt-2 font-mono text-sm text-mist-100">{tenantId}</div>
-        <p className="mt-2 text-sm text-mist-400">名称：Default · Phase 5 配额 / 预算 / 成本 / 调度策略</p>
       </div>
 
       {error ? <p className="font-mono text-xs text-signal-warm">{error}</p> : null}

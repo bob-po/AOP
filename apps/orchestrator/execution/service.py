@@ -261,6 +261,24 @@ class ExecutionService:
             }
         try:
             updated = self.mark_retry(task_id, operation=operation, error_code="RECOVER")
+            # Visual Runtime observation (does not alter recovery semantics)
+            try:
+                self.events.emit(
+                    ExecutionEvent(
+                        event_type="agent.recovered",
+                        root_task_id=updated.root_task_id,
+                        correlation_id=updated.correlation_id,
+                        task_id=updated.task_id,
+                        agent_id=updated.agent_id,
+                        payload={
+                            "reason": "recover",
+                            "state": updated.state,
+                            "attempt": updated.attempt,
+                        },
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                pass
             return {
                 "action": "retry",
                 "class": klass,

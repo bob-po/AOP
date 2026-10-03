@@ -23,10 +23,19 @@ class ExecutionEvent:
     task_id: Optional[str] = None
     agent_id: Optional[str] = None
     parent_task_id: Optional[str] = None
+    parent_agent_id: Optional[str] = None
+    execution_id: Optional[str] = None
+    sequence: Optional[int] = None
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        # Keep sequence in payload for backward compatibility with collab WS clients
+        if data.get("sequence") is not None:
+            payload = dict(data.get("payload") or {})
+            payload.setdefault("sequence", data["sequence"])
+            data["payload"] = payload
+        return data
 
 
 class ExecutionEventBus:
@@ -58,7 +67,8 @@ class ExecutionEventBus:
             root = event.root_task_id or event.task_id or "_"
             seq = self._root_seq.get(root, 0) + 1
             self._root_seq[root] = seq
-            if "sequence" not in event.payload:
+            event.sequence = seq
+            if "sequence" not in (event.payload or {}):
                 event.payload = {**(event.payload or {}), "sequence": seq}
             self._events.append(event)
         for hook in list(self._hooks):
@@ -105,6 +115,20 @@ AGENT_BUSY = "agent.busy"
 AGENT_DRAINING = "agent.draining"
 AGENT_OFFLINE = "agent.offline"
 
+# Visual Runtime observation types (emitted by observation layer / discovery hooks)
+AGENT_DISCOVERED = "agent.discovered"
+AGENT_SELECTED = "agent.selected"
+AGENT_DELEGATED = "agent.delegated"
+AGENT_STARTED = "agent.started"
+AGENT_WAITING = "agent.waiting"
+AGENT_COMPLETED = "agent.completed"
+AGENT_FAILED = "agent.failed"
+AGENT_RETRYING = "agent.retrying"
+AGENT_RECOVERED = "agent.recovered"
+TOOL_CALLED = "tool.called"
+TOOL_COMPLETED = "tool.completed"
+TOOL_FAILED = "tool.failed"
+
 
 __all__ = [
     "ExecutionEvent",
@@ -128,4 +152,16 @@ __all__ = [
     "AGENT_BUSY",
     "AGENT_DRAINING",
     "AGENT_OFFLINE",
+    "AGENT_DISCOVERED",
+    "AGENT_SELECTED",
+    "AGENT_DELEGATED",
+    "AGENT_STARTED",
+    "AGENT_WAITING",
+    "AGENT_COMPLETED",
+    "AGENT_FAILED",
+    "AGENT_RETRYING",
+    "AGENT_RECOVERED",
+    "TOOL_CALLED",
+    "TOOL_COMPLETED",
+    "TOOL_FAILED",
 ]

@@ -11,11 +11,10 @@ import {
 } from "@/lib/api";
 
 const NAV = [
-  { href: "/", label: "首页", hint: "Dashboard" },
-  { href: "/tasks", label: "任务", hint: "Tasks" },
-  { href: "/agents", label: "Agent", hint: "Agents" },
-  { href: "/workflows", label: "工作流", hint: "Workflows" },
-  { href: "/settings", label: "设置", hint: "Settings" },
+  { href: "/", label: "Network", hint: "Live Agent Network" },
+  { href: "/tasks", label: "Tasks", hint: "Tasks" },
+  { href: "/agents", label: "Agents", hint: "Agents" },
+  { href: "/settings", label: "Settings", hint: "Settings" },
 ];
 
 function navActive(pathname: string, href: string) {
@@ -87,7 +86,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             A2A OS
           </span>
           <span className="hidden font-mono text-[10px] uppercase tracking-[0.22em] text-mist-400 sm:inline">
-            control plane
+            visual runtime
           </span>
         </Link>
         <div className="flex items-center gap-3 font-mono text-[11px] text-mist-400">

@@ -81,6 +81,52 @@ def test_discover_posts_to_os():
     assert out["selected_agent"]["agent_key"] == "agent-b"
 
 
+def test_route_includes_visual_runtime_lineage():
+    """Fusion A: route/discover payloads carry root_task_id for observation."""
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in {"/v1/route", "/v1/discover"}:
+            body = json.loads(request.content)
+            captured.append({"path": request.url.path, **body})
+            return httpx.Response(200, json=SELECTION)
+        if request.url.path == "/v1/runtime/edges":
+            return httpx.Response(201, json={"ok": True})
+        if request.url.path == "/v1/governance/check":
+            return httpx.Response(200, json={"allowed": True})
+        return httpx.Response(404, json={"error": "not found"})
+
+    clients: list[FakeClient] = []
+
+    def factory(endpoint, timeout):
+        c = FakeClient(endpoint, timeout)
+        clients.append(c)
+        return c
+
+    rt = A2ACollaborationRuntime(
+        agent_id="agent-a",
+        os_base_url="http://os:8080",
+        http_transport=httpx.MockTransport(handler),
+        a2a_client_factory=factory,
+    )
+    ctx = CallContext(
+        correlation_id="corr-fuse",
+        caller_agent_id="agent-a",
+        root_task_id="root-fuse",
+        parent_task_id="task-a",
+        depth=0,
+        visited_agents=("agent-a",),
+    )
+    rt.delegate("need rag", context=ctx, skill="rag", self_task_id="task-a")
+    route_calls = [c for c in captured if c["path"] == "/v1/route"]
+    assert route_calls, "expected /v1/route call with lineage"
+    payload = route_calls[0]
+    assert payload["root_task_id"] == "root-fuse"
+    assert payload["correlation_id"] == "corr-fuse"
+    assert payload["task_id"] == "task-a"
+    assert payload["caller_agent_id"] == "agent-a"
+
+
 def test_delegate_propagates_lineage():
     rt, clients = _runtime(SELECTION)
     ctx = CallContext(
@@ -92,7 +138,8 @@ def test_delegate_propagates_lineage():
         visited_agents=("agent-a",),
     )
     result = rt.delegate("need rag", context=ctx, skill="rag", self_task_id="task-a")
-    assert result.target_agent_id == "id-b"
+    # Runtime prefers agent_key for target identity when present
+    assert result.target_agent_id == "agent-b"
     assert result.depth == 1
     sent = clients[0].calls[0]
     assert sent["correlation_id"] == "corr-1"
@@ -184,12 +231,12 @@ def test_governance_allows_reverse_call_but_blocks_runaway_cycle():
     """A -> B -> A is allowed; A -> B -> A -> B -> A is not (visit bound)."""
     gov = GovernanceConfig(max_delegation_depth=10, max_agent_visits=2)
     rt, _ = _runtime(SELECTION, governance=gov, agent_id="agent-b")
-    # Chain already visited agent-b twice -> next visit to id-b would be the 3rd.
+    # Chain already visited agent-b twice -> next visit would be the 3rd.
     ctx = CallContext(
         correlation_id="c",
         caller_agent_id="agent-a",
         depth=3,
-        visited_agents=("agent-a", "id-b", "agent-a", "id-b"),
+        visited_agents=("agent-a", "agent-b", "agent-a", "agent-b"),
     )
     with pytest.raises(GovernanceError) as ei:
         rt.delegate("x", context=ctx, skill="rag")
@@ -199,15 +246,15 @@ def test_governance_allows_reverse_call_but_blocks_runaway_cycle():
 def test_reverse_call_within_limit_succeeds():
     gov = GovernanceConfig(max_agent_visits=2)
     rt, _ = _runtime(SELECTION, governance=gov, agent_id="agent-b")
-    # id-b visited once already; a second visit is within the bound.
+    # agent-b visited once already; a second visit is within the bound.
     ctx = CallContext(
         correlation_id="c",
         caller_agent_id="agent-a",
         depth=1,
-        visited_agents=("agent-a", "id-b"),
+        visited_agents=("agent-a", "agent-b"),
     )
     result = rt.delegate("x", context=ctx, skill="rag")
-    assert result.target_agent_id == "id-b"
+    assert result.target_agent_id == "agent-b"
 
 
 def test_call_context_child_increments():

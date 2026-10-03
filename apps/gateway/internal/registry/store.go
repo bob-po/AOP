@@ -45,10 +45,24 @@ func (s *Store) Register(ctx context.Context, tenantID, endpoint string, card Ag
 		tenantID = defaultTenantID
 	}
 	agentKey := DeriveAgentKey(card, endpoint)
-	skillIDs := make([]string, 0, len(card.Skills))
+	skillIDs := make([]string, 0, len(card.Skills)+1)
 	for _, sk := range card.Skills {
 		if sk.ID != "" {
 			skillIDs = append(skillIDs, sk.ID)
+		}
+	}
+	// Planner / harness route by agent_key when cards ship skills:[].
+	// Index agent_key as a synthetic skill so Redis/PG skill lookup stays aligned.
+	if agentKey != "" {
+		found := false
+		for _, id := range skillIDs {
+			if id == agentKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			skillIDs = append(skillIDs, agentKey)
 		}
 	}
 
@@ -123,6 +137,11 @@ func (s *Store) Register(ctx context.Context, tenantID, endpoint string, card Ag
 		return RegisterResult{}, fmt.Errorf("insert endpoint: %w", err)
 	}
 
+	type skillRow struct {
+		id, name, description string
+	}
+	rows := make([]skillRow, 0, len(skillIDs))
+	seen := map[string]struct{}{}
 	for _, sk := range card.Skills {
 		if sk.ID == "" {
 			continue
@@ -131,15 +150,24 @@ func (s *Store) Register(ctx context.Context, tenantID, endpoint string, card Ag
 		if name == "" {
 			name = sk.ID
 		}
+		rows = append(rows, skillRow{sk.ID, name, sk.Description})
+		seen[sk.ID] = struct{}{}
+	}
+	if agentKey != "" {
+		if _, ok := seen[agentKey]; !ok {
+			rows = append(rows, skillRow{agentKey, agentKey, "synthetic skill from agent_key"})
+		}
+	}
+	for _, sk := range rows {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO agent_skills (agent_id, skill_id, name, description, created_at)
 			VALUES ($1::uuid, $2, $3, $4, $5)
 			ON CONFLICT (agent_id, skill_id) DO UPDATE SET
 				name = EXCLUDED.name,
 				description = EXCLUDED.description
-		`, agentID, sk.ID, name, sk.Description, now)
+		`, agentID, sk.id, sk.name, sk.description, now)
 		if err != nil {
-			return RegisterResult{}, fmt.Errorf("insert skill %s: %w", sk.ID, err)
+			return RegisterResult{}, fmt.Errorf("insert skill %s: %w", sk.id, err)
 		}
 	}
 

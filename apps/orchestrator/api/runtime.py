@@ -62,6 +62,54 @@ def collaboration_graph_payload(root_task_id: str) -> dict[str, Any]:
     return _json_safe(graph)
 
 
+def _emit_edge_observation(body: RuntimeEdgeRequest, edge: dict[str, Any]) -> None:
+    """Best-effort Visual Runtime events from runtime edges (never fails the write)."""
+    if not body.root_task_id and not body.task_id:
+        return
+    try:
+        from execution.events import (
+            AGENT_COMPLETED,
+            AGENT_DELEGATED,
+            AGENT_FAILED,
+            AGENT_STARTED,
+            ExecutionEvent,
+        )
+
+        status = str(body.status or edge.get("status") or "submitted").lower()
+        if status in {"submitted", "running", "working", "accepted"}:
+            event_types = [AGENT_DELEGATED, AGENT_STARTED]
+        elif status in {"completed", "succeeded", "success"}:
+            event_types = [AGENT_COMPLETED]
+        elif status in {"failed", "error", "timeout", "cancelled", "canceled"}:
+            event_types = [AGENT_FAILED]
+        else:
+            event_types = [AGENT_DELEGATED]
+
+        for et in event_types:
+            ctx.execution.events.emit(
+                ExecutionEvent(
+                    event_type=et,
+                    root_task_id=body.root_task_id or body.task_id,
+                    correlation_id=body.correlation_id
+                    or body.root_task_id
+                    or body.task_id,
+                    task_id=body.task_id or body.root_task_id,
+                    agent_id=body.target_agent_id,
+                    parent_agent_id=body.caller_agent_id,
+                    parent_task_id=body.parent_task_id,
+                    payload={
+                        "caller_agent_id": body.caller_agent_id,
+                        "skill": body.skill,
+                        "depth": body.depth,
+                        "status": status,
+                        "edge_id": edge.get("id"),
+                    },
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("edge observation emit skipped: %s", exc)
+
+
 @router.post("/v1/runtime/edges", status_code=201)
 def record_runtime_edge(body: RuntimeEdgeRequest) -> dict[str, Any]:
     """A2A OS: record an Agent-to-Agent call edge in the runtime execution graph."""
@@ -74,7 +122,7 @@ def record_runtime_edge(body: RuntimeEdgeRequest) -> dict[str, Any]:
             },
         )
     try:
-        return ctx.tasks.record_runtime_edge(
+        edge = ctx.tasks.record_runtime_edge(
             caller_agent_id=body.caller_agent_id,
             target_agent_id=body.target_agent_id,
             root_task_id=body.root_task_id,
@@ -91,6 +139,8 @@ def record_runtime_edge(body: RuntimeEdgeRequest) -> dict[str, Any]:
             status_code=503,
             detail={"code": "runtime_graph_error", "message": str(exc)},
         ) from exc
+    _emit_edge_observation(body, edge if isinstance(edge, dict) else {})
+    return edge
 
 
 @router.get("/v1/runtime/graph/{root_task_id}")

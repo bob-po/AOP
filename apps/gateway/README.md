@@ -8,6 +8,7 @@
 cd apps/gateway
 go mod tidy
 # PowerShell: $env:ORCHESTRATOR_URL="http://127.0.0.1:8090"
+# 国内若 proxy.golang.org 超时: $env:GOPROXY="https://goproxy.cn,direct"; $env:GOSUMDB="sum.golang.google.cn"
 go run ./cmd
 ```
 

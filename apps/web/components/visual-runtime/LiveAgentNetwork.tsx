@@ -1,0 +1,256 @@
+"use client";
+
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Background,
+  Controls,
+  Handle,
+  Position,
+  ReactFlow,
+  type Edge,
+  type Node,
+  type NodeProps,
+  type NodeTypes,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import type { VisualGraphEdge, VisualGraphNode, VisualGraphSnapshot } from "@/lib/api";
+import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
+
+const COL_W = 200;
+const ROW_H = 140;
+
+function statusColor(status: string): string {
+  const s = (status || "").toLowerCase();
+  if (s === "running" || s === "active") return "#3dffa8";
+  if (s === "waiting" || s === "retrying") return "#ffb454";
+  if (s === "failed" || s === "error" || s === "timeout") return "#ff6b6b";
+  if (s === "completed" || s === "succeeded") return "#7eaea0";
+  if (s === "discovered") return "#8ab4ff";
+  return "#5a7a70";
+}
+
+function VrNode({ data }: NodeProps) {
+  const kind = String(data.kind || "agent");
+  const status = String(data.status || "pending");
+  const label = String(data.label || "");
+  const color = statusColor(status);
+  const running = status === "running" || status === "active";
+  const waiting = status === "waiting" || status === "retrying";
+  const size =
+    kind === "task" ? 72 : kind === "tool" || kind === "data" ? 40 : kind === "error" ? 48 : 56;
+  const radius = kind === "data" ? 6 : kind === "tool" ? 8 : "50%";
+
+  return (
+    <div className="relative flex flex-col items-center" style={{ width: size + 48 }}>
+      <Handle type="target" position={Position.Top} className="!h-1.5 !w-1.5 !border-0 !bg-mist-400" />
+      <div
+        className={
+          running
+            ? "vr-node-running relative flex items-center justify-center border"
+            : "relative flex items-center justify-center border"
+        }
+        style={{
+          width: size,
+          height: size,
+          borderRadius: radius,
+          borderColor: color,
+          borderStyle: waiting ? "dashed" : "solid",
+          borderWidth: kind === "task" ? 2 : 1.5,
+          background:
+            kind === "error"
+              ? "rgba(255,107,107,0.12)"
+              : kind === "task"
+                ? "rgba(61,255,168,0.08)"
+                : "rgba(15,28,24,0.85)",
+          boxShadow: running ? `0 0 24px ${color}44` : "none",
+        }}
+      >
+        <span
+          className="font-mono text-[9px] uppercase tracking-[0.14em]"
+          style={{ color }}
+        >
+          {kind === "task" ? "TASK" : kind === "tool" ? "TOOL" : kind === "error" ? "ERR" : kind === "data" ? "DATA" : "AGT"}
+        </span>
+      </div>
+      <div className="mt-2 max-w-[140px] truncate text-center font-sans text-[11px] text-mist-100">
+        {label}
+      </div>
+      <div className="font-mono text-[9px] uppercase tracking-wider" style={{ color }}>
+        {status}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!h-1.5 !w-1.5 !border-0 !bg-mist-400" />
+    </div>
+  );
+}
+
+const MemoVrNode = memo(VrNode);
+const NODE_TYPES = Object.freeze({ vr: MemoVrNode }) as unknown as NodeTypes;
+
+function layout(snapshot: VisualGraphSnapshot | null): { nodes: Node[]; edges: Edge[] } {
+  const rawNodes = snapshot?.nodes || [];
+  const rawEdges = snapshot?.edges || [];
+  if (!rawNodes.length) {
+    return {
+      nodes: [
+        {
+          id: "idle-task",
+          type: "vr",
+          position: { x: 280, y: 180 },
+          data: { kind: "task", label: "A2A OS", status: "idle" },
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  const task = rawNodes.find((n) => n.type === "task");
+  const agents = rawNodes.filter((n) => n.type === "agent");
+  const others = rawNodes.filter((n) => n.type !== "task" && n.type !== "agent");
+
+  const positioned: Node[] = [];
+  if (task) {
+    positioned.push({
+      id: task.id,
+      type: "vr",
+      position: { x: Math.max(0, (agents.length - 1) * (COL_W / 2)), y: 40 },
+      data: { kind: "task", label: task.label, status: task.status, meta: task },
+    });
+  }
+
+  agents.forEach((a, i) => {
+    const row = Math.floor(i / 5);
+    const col = i % 5;
+    positioned.push({
+      id: a.id,
+      type: "vr",
+      position: { x: col * COL_W, y: 200 + row * ROW_H },
+      data: {
+        kind: "agent",
+        label: a.label,
+        status: a.status,
+        meta: a,
+        visit: (a.metadata as { visit_count?: number } | undefined)?.visit_count,
+      },
+    });
+  });
+
+  others.forEach((o, i) => {
+    positioned.push({
+      id: o.id,
+      type: "vr",
+      position: { x: (i % 6) * 160, y: 200 + Math.ceil(agents.length / 5) * ROW_H + 120 },
+      data: { kind: o.type, label: o.label, status: o.status, meta: o },
+    });
+  });
+
+  const idSet = new Set(positioned.map((n) => n.id));
+  const edges: Edge[] = rawEdges
+    .filter((e) => idSet.has(e.source) && idSet.has(e.target))
+    .map((e: VisualGraphEdge) => {
+      const active = (e.status || "").toLowerCase() === "active" || (e.status || "") === "running";
+      return {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        animated: active || e.type === "delegation",
+        style: {
+          stroke: statusColor(e.status || "completed"),
+          strokeWidth: active ? 2 : 1.25,
+          opacity: active ? 0.95 : 0.55,
+        },
+        label: e.type !== "delegation" ? e.type : undefined,
+        labelStyle: { fill: "#7eaea0", fontSize: 9 },
+      };
+    });
+
+  return { nodes: positioned, edges };
+}
+
+type Props = {
+  snapshot: VisualGraphSnapshot | null;
+  selectedId?: string | null;
+  onSelect?: (node: VisualGraphNode | null) => void;
+  replayCursor?: number | null;
+};
+
+export function LiveAgentNetwork({ snapshot, selectedId, onSelect, replayCursor }: Props) {
+  const mounted = useClientMounted();
+  const view = useMemo(() => {
+    if (replayCursor == null || !snapshot?.events?.length) return snapshot;
+    // Replay projects only events up to cursor — UI-only, no re-execution
+    const allowed = new Set(
+      snapshot.events
+        .filter((e) => (e.sequence ?? 0) <= replayCursor)
+        .flatMap((e) => {
+          const ids: string[] = [`task:${snapshot.task_id}`];
+          if (e.agent_id) ids.push(`agent:${e.agent_id}`);
+          return ids;
+        }),
+    );
+    const nodes = (snapshot.nodes || []).filter(
+      (n) => n.type === "task" || allowed.has(n.id) || (n.agent_id && allowed.has(`agent:${n.agent_id}`)),
+    );
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges = (snapshot.edges || []).filter(
+      (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
+    );
+    return { ...snapshot, nodes, edges };
+  }, [snapshot, replayCursor]);
+
+  const { nodes, edges } = useMemo(() => layout(view), [view]);
+  const [rfNodes, setRfNodes] = useState<Node[]>(nodes);
+  const [rfEdges, setRfEdges] = useState<Edge[]>(edges);
+
+  useEffect(() => {
+    setRfNodes(
+      nodes.map((n) => ({
+        ...n,
+        selected: n.id === selectedId,
+        style: n.id === selectedId ? { outline: "1px solid #3dffa8" } : undefined,
+      })),
+    );
+    setRfEdges(edges);
+  }, [nodes, edges, selectedId]);
+
+  const onNodeClick = useCallback(
+    (_: unknown, node: Node) => {
+      const meta = (node.data as { meta?: VisualGraphNode }).meta || null;
+      onSelect?.(meta);
+    },
+    [onSelect],
+  );
+
+  if (!mounted) {
+    return (
+      <div className="flex h-full items-center justify-center font-mono text-xs text-mist-400">
+        initializing network…
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full w-full">
+      <ReactFlow
+        nodes={rfNodes}
+        edges={rfEdges}
+        nodeTypes={NODE_TYPES}
+        fitView
+        fitViewOptions={{ padding: 0.35, minZoom: 0.35, maxZoom: 1.4 }}
+        minZoom={0.2}
+        maxZoom={1.8}
+        proOptions={{ hideAttribution: true }}
+        onNodeClick={onNodeClick}
+        onPaneClick={() => onSelect?.(null)}
+        onError={reactFlowOnError}
+        nodesDraggable
+        elementsSelectable
+      >
+        <Background gap={28} size={1} color="rgba(232,242,238,0.06)" />
+        <Controls
+          showInteractive={false}
+          className="!overflow-hidden !rounded-lg !border !border-white/10 !bg-ink-900/90"
+        />
+      </ReactFlow>
+    </div>
+  );
+}

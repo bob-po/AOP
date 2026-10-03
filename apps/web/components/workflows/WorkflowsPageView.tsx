@@ -222,6 +222,9 @@ export function WorkflowsPageView() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-3xl text-mist-100">编排模板</h1>
+          <p className="mt-1 font-mono text-[11px] text-mist-500">
+            高级入口 · 已从主导航降级 · API 仍可用
+          </p>
           <p className="mt-1 text-sm text-mist-400">
             预制 DAG 工作流。节点 skill = harness agent_key（claude-code / deepseek-harness / pi / openclaw / hermes）。
           </p>

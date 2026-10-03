@@ -27,3 +27,19 @@ body {
 ::selection {
   background: rgba(61, 255, 168, 0.28);
 }
+
+@keyframes vrPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 0.92;
+  }
+}
+
+.vr-node-running {
+  animation: vrPulse 2.2s ease-in-out infinite;
+}
