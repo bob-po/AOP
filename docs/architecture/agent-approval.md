@@ -212,3 +212,16 @@ curl -X POST http://127.0.0.1:8011/v1/approvals -H "Content-Type: application/js
 ```
 
 真实解锁必须用 **正在 `waiting_for_agent` 的 task_id**。假 UUID 也能入队，回调会 404。
+
+---
+
+## 7. Console
+
+| 表面 | 行为 |
+|------|------|
+| **Tasks 待审批** | 列出 `waiting_for_user` **和** `waiting_for_agent`。抽屉里「系统批准」只对系统门生效；Agent 门等对端 `actor=agent`，人可以 **Reject**。无独立 Inbox 页。 |
+| **Network** | 系统等待可 Approve/Reject；Agent 等待只提示，链到 Tasks。 |
+| **Flows** | 节点可设 `approval_mode` / `approver_agent`，保存进 DAG，不会在编辑器里丢掉。 |
+| 顶栏 | `waiting_hitl` + `waiting_agent` 合计进 Tasks 角标。 |
+
+`GET /v1/preflight` 带 `waiting_hitl` / `waiting_agent`（不算预检失败）。Network 图上 `waiting_for_agent` **不会**再被折成通用 waiting，避免弹出系统 Approve。

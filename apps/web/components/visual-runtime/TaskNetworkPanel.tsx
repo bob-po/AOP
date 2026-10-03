@@ -57,8 +57,15 @@ export function TaskNetworkPanel({
     [onBusyChange, refresh],
   );
 
+  const stale = !!(graph && graph.task_id && graph.task_id !== taskId);
+
   return (
-    <div className="flex h-full min-h-[420px] flex-col rounded-xl border border-white/10 bg-ink-950/40">
+    <div className="relative flex h-full min-h-[420px] flex-col rounded-xl border border-white/10 bg-ink-950/40">
+      {stale ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-ink-950/45 font-mono text-[11px] text-mist-300">
+          更新协作图…
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
         <div className="flex items-center gap-2">
           <span

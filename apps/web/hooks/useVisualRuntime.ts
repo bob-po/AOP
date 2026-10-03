@@ -17,8 +17,8 @@ type VisualWsMessage = WebSocketMessage & {
 };
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "canceled"]);
-const POLL_MS_LIVE = 2000;
-const POLL_MS_DISCONNECTED = 1500;
+const POLL_MS_LIVE = 5000;
+const POLL_MS_DISCONNECTED = 4000;
 
 function isTerminalStatus(status: string | undefined | null): boolean {
   return TERMINAL.has(String(status || "").toLowerCase());
@@ -27,7 +27,6 @@ function isTerminalStatus(status: string | undefined | null): boolean {
 /**
  * Visual Runtime live state: Snapshot + incremental events.
  * HTTP graph (Postgres SoT) is authoritative; WS is acceleration only.
- * UI disconnect must never stop Agent Runtime — this is observation only.
  */
 export function useVisualRuntime(taskId: string | null) {
   const [graph, setGraph] = useState<VisualGraphSnapshot | null>(null);
@@ -37,30 +36,29 @@ export function useVisualRuntime(taskId: string | null) {
   const seenIds = useRef<Set<string>>(new Set());
   const lastSeq = useRef(0);
   const graphRef = useRef<VisualGraphSnapshot | null>(null);
-
-  const reset = useCallback(() => {
-    seenIds.current = new Set();
-    lastSeq.current = 0;
-    graphRef.current = null;
-    setGraph(null);
-    setEvents([]);
-    setSequence(0);
-    setError(null);
-  }, []);
+  const connectedRef = useRef(false);
+  const wantIdRef = useRef<string | null>(null);
 
   const applySnapshot = useCallback((snap: VisualGraphSnapshot) => {
-    // Ignore stale / empty overwrite when we already have a richer snapshot
+    const want = wantIdRef.current;
+    if (want && snap.task_id && snap.task_id !== want) return;
     const prev = graphRef.current;
     const nextSeq = snap.sequence || 0;
     if (
       prev &&
+      prev.task_id === snap.task_id &&
       (prev.nodes?.length || 0) > 0 &&
       (snap.nodes?.length || 0) === 0 &&
       nextSeq <= (prev.sequence || 0)
     ) {
       return;
     }
-    if (prev && nextSeq < (prev.sequence || 0) && !isTerminalStatus(snap.status)) {
+    if (
+      prev &&
+      prev.task_id === snap.task_id &&
+      nextSeq < (prev.sequence || 0) &&
+      !isTerminalStatus(snap.status)
+    ) {
       return;
     }
     graphRef.current = snap;
@@ -74,37 +72,11 @@ export function useVisualRuntime(taskId: string | null) {
     setSequence(snap.sequence || 0);
   }, []);
 
-  // HTTP snapshot bootstrap / reconnect recovery
-  useEffect(() => {
-    if (!taskId) {
-      reset();
-      return;
-    }
-    let alive = true;
-    (async () => {
-      try {
-        const snap = await getTaskVisualGraph(taskId);
-        if (!alive) return;
-        applySnapshot(snap);
-        setError(null);
-      } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : "graph load failed");
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [taskId, applySnapshot, reset]);
-
   const onMessage = useCallback(
     (message: WebSocketMessage) => {
       const data = message as VisualWsMessage;
       const type = data.type;
-      if (type === "snapshot" && data.graph) {
-        applySnapshot(data.graph);
-        return;
-      }
-      if (type === "graph" && data.graph) {
+      if ((type === "snapshot" || type === "graph") && data.graph) {
         applySnapshot(data.graph);
         return;
       }
@@ -126,7 +98,6 @@ export function useVisualRuntime(taskId: string | null) {
     [applySnapshot],
   );
 
-  // Prefer /ws/tasks/{id}; Gateway also proxies /v1/tasks/*/visual/ws
   const path = taskId
     ? `/ws/tasks/${encodeURIComponent(taskId)}`
     : undefined;
@@ -138,55 +109,61 @@ export function useVisualRuntime(taskId: string | null) {
     maxReconnectAttempts: 40,
     reconnectInterval: 2000,
   });
+  connectedRef.current = isConnected;
 
   const refresh = useCallback(async () => {
     if (!taskId) return;
-    const snap = await getTaskVisualGraph(taskId);
+    const snap = await getTaskVisualGraph(taskId, { bust: true });
     applySnapshot(snap);
   }, [taskId, applySnapshot]);
 
-  // Durable poll: keep Console honest when WS lags, drops, or never connects.
-  // Stop once Postgres reports a terminal status (one extra tick after terminal).
   useEffect(() => {
-    if (!taskId) return;
+    wantIdRef.current = taskId;
+    if (!taskId) {
+      seenIds.current = new Set();
+      lastSeq.current = 0;
+      graphRef.current = null;
+      setGraph(null);
+      setEvents([]);
+      setSequence(0);
+      setError(null);
+      return;
+    }
+
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let terminalSettle = false;
 
-    const tick = async () => {
+    const tick = async (bust: boolean) => {
       if (!alive) return;
-      const status = graphRef.current?.status || graphRef.current?.task?.status;
-      const terminal = isTerminalStatus(status);
-      // Still poll briefly after terminal so late artifacts/events land
-      const justTerminal =
-        terminal && (graphRef.current?.nodes?.length || 0) > 0;
       try {
-        const snap = await getTaskVisualGraph(taskId);
+        const snap = await getTaskVisualGraph(taskId, bust ? { bust: true } : undefined);
         if (!alive) return;
         applySnapshot(snap);
         setError(null);
         const done = isTerminalStatus(snap.status || snap.task?.status);
         if (done && (snap.nodes?.length || 0) > 0) {
-          // Final settle poll once more then stop
-          if (justTerminal) return;
-          timer = setTimeout(tick, POLL_MS_LIVE);
+          if (terminalSettle) return;
+          terminalSettle = true;
+          timer = setTimeout(() => void tick(true), POLL_MS_LIVE);
           return;
         }
       } catch (err) {
-        if (alive && !graphRef.current) {
-          setError(err instanceof Error ? err.message : "graph poll failed");
+        if (alive && (!graphRef.current || graphRef.current.task_id !== taskId)) {
+          setError(err instanceof Error ? err.message : "graph load failed");
         }
       }
       if (!alive) return;
-      const interval = isConnected ? POLL_MS_LIVE : POLL_MS_DISCONNECTED;
-      timer = setTimeout(tick, interval);
+      const interval = connectedRef.current ? POLL_MS_LIVE : POLL_MS_DISCONNECTED;
+      timer = setTimeout(() => void tick(false), interval);
     };
 
-    timer = setTimeout(tick, isConnected ? POLL_MS_LIVE : 400);
+    void tick(false);
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, [taskId, isConnected, applySnapshot]);
+  }, [taskId, applySnapshot]);
 
   const stats = useMemo(() => {
     const nodes = graph?.nodes || [];

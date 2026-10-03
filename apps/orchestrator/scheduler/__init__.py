@@ -1611,8 +1611,21 @@ class Scheduler:
     ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 200))
         tid = tenant_id or self.tenant_id
+        allowed = {
+            "pending",
+            "ready",
+            "running",
+            "planning",
+            "completed",
+            "failed",
+            "cancelled",
+            "canceled",
+            "waiting_for_user",
+            "waiting_for_agent",
+        }
+        statuses = [s.strip() for s in (status or "").split(",") if s.strip() in allowed]
         with self._connect() as conn:
-            if status:
+            if len(statuses) == 1:
                 rows = conn.execute(
                     """
                     SELECT id::text AS task_id, title, status, progress,
@@ -1622,7 +1635,19 @@ class Scheduler:
                     ORDER BY created_at DESC
                     LIMIT %s
                     """,
-                    (tid, status, limit),
+                    (tid, statuses[0], limit),
+                ).fetchall()
+            elif statuses:
+                rows = conn.execute(
+                    """
+                    SELECT id::text AS task_id, title, status, progress,
+                           created_at, updated_at, finished_at
+                    FROM tasks
+                    WHERE tenant_id = %s::uuid AND status = ANY(%s)
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (tid, statuses, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(

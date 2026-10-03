@@ -170,7 +170,8 @@ class WorkflowService:
                 skill=str(n["skill"]),
                 depends_on=[str(d) for d in (n.get("depends_on") or [])],
                 requires_approval=bool(n.get("requires_approval"))
-                or str(n["skill"]) in hitl_skills(),
+                or str(n["skill"]) in hitl_skills()
+                or str(n.get("approval_mode") or "").strip().lower() in {"system", "both"},
                 approval_mode=(
                     str(n["approval_mode"]).strip().lower()
                     if isinstance(n.get("approval_mode"), str) and n["approval_mode"].strip()

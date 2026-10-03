@@ -28,6 +28,7 @@ jobs:
           tests/test_api_routers.py
           tests/test_quota.py
           tests/test_dag.py
+          tests/test_workflows.py
           tests/test_execution_state_machine.py
           tests/test_visual_runtime.py
           tests/test_error_handling.py

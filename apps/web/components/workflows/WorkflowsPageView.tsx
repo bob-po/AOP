@@ -25,23 +25,41 @@ import {
 } from "@/lib/api";
 import { reactFlowOnError, useClientMounted } from "@/lib/reactFlow";
 
+const NODE_STYLE = {
+  background: "#152822",
+  border: "1.5px solid #3dffa8",
+  borderRadius: 12,
+  color: "#e8f2ee",
+  fontSize: 11,
+  fontFamily: "IBM Plex Mono, monospace",
+  padding: 10,
+  width: 160,
+  whiteSpace: "pre-line" as const,
+};
+
+function gateLine(n: {
+  approval_mode?: string | null;
+  approver_agent?: string | null;
+  requires_approval?: boolean;
+}): string {
+  const mode = (n.approval_mode || (n.requires_approval ? "system" : "none")).toLowerCase();
+  if (!mode || mode === "none" || mode === "off") return "";
+  const who = n.approver_agent ? `@${n.approver_agent}` : "";
+  return `\n${mode}${who}`;
+}
+
 function dagToFlow(dag?: TaskPlan | null): { nodes: Node[]; edges: Edge[] } {
   const planNodes = dag?.nodes || [];
   const nodes: Node[] = planNodes.map((n, i) => ({
     id: n.id,
     position: { x: 40 + (i % 3) * 200, y: 40 + Math.floor(i / 3) * 110 },
-    data: { label: `${n.id}\n${n.skill}` },
-    style: {
-      background: "#152822",
-      border: "1.5px solid #3dffa8",
-      borderRadius: 12,
-      color: "#e8f2ee",
-      fontSize: 11,
-      fontFamily: "IBM Plex Mono, monospace",
-      padding: 10,
-      width: 150,
-      whiteSpace: "pre-line",
+    data: {
+      label: `${n.id}\n${n.skill}${gateLine(n)}`,
+      skill: n.skill,
+      approval_mode: n.approval_mode || (n.requires_approval ? "system" : "none"),
+      approver_agent: n.approver_agent || "",
     },
+    style: NODE_STYLE,
   }));
   const edges: Edge[] = [];
   for (const n of planNodes) {
@@ -68,14 +86,25 @@ function flowToDag(nodes: Node[], edges: Edge[], title: string): TaskPlan {
   return {
     title,
     nodes: nodes.map((n) => {
-      const label = String(n.data?.label || n.id);
+      const data = n.data || {};
+      const label = String(data.label || n.id);
       const parts = label.split("\n");
-      const skill = parts[1] || parts[0] || n.id;
-      return {
+      const skill = String(data.skill || parts[1] || parts[0] || n.id);
+      const mode = String(data.approval_mode || "none").toLowerCase();
+      const approver = String(data.approver_agent || "").trim();
+      const node: TaskPlan["nodes"][number] = {
         id: n.id,
         skill,
         depends_on: deps.get(n.id) || [],
       };
+      if (mode && mode !== "none" && mode !== "off") {
+        node.approval_mode = mode;
+        if (mode === "system" || mode === "both") node.requires_approval = true;
+      }
+      if (approver && (mode === "agent" || mode === "both")) {
+        node.approver_agent = approver;
+      }
+      return node;
     }),
   };
 }
@@ -94,6 +123,8 @@ export function WorkflowsPageView() {
   const [desc, setDesc] = useState("并行 claude-code / deepseek-harness / pi / openclaw / hermes");
   const [skillInput, setSkillInput] = useState("claude-code");
   const [nodeId, setNodeId] = useState("claude");
+  const [approvalMode, setApprovalMode] = useState("none");
+  const [approverAgent, setApproverAgent] = useState("claude-code");
   const [busy, setBusy] = useState(false);
 
   const initial = useMemo(
@@ -131,7 +162,7 @@ export function WorkflowsPageView() {
     setError(null);
     try {
       const task = await runWorkflow(wf.workflow_id, goal.trim(), wf.name);
-      router.push(`/tasks/${task.task_id}`);
+      router.push(`/tasks?task=${encodeURIComponent(task.task_id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "run failed");
       setRunning(null);
@@ -144,23 +175,25 @@ export function WorkflowsPageView() {
       setError("node id already exists");
       return;
     }
+    const skill = skillInput.trim() || "skill";
+    const mode = approvalMode;
+    const approver =
+      mode === "agent" || mode === "both" ? approverAgent.trim() : "";
     setNodes((prev) => [
       ...prev,
       {
         id,
         position: { x: 60 + prev.length * 40, y: 60 + prev.length * 30 },
-        data: { label: `${id}\n${skillInput.trim() || "skill"}` },
-        style: {
-          background: "#152822",
-          border: "1.5px solid #3dffa8",
-          borderRadius: 12,
-          color: "#e8f2ee",
-          fontSize: 11,
-          fontFamily: "IBM Plex Mono, monospace",
-          padding: 10,
-          width: 150,
-          whiteSpace: "pre-line",
+        data: {
+          label: `${id}\n${skill}${gateLine({
+            approval_mode: mode,
+            approver_agent: approver,
+          })}`,
+          skill,
+          approval_mode: mode,
+          approver_agent: approver,
         },
+        style: NODE_STYLE,
       },
     ]);
   }
@@ -221,12 +254,9 @@ export function WorkflowsPageView() {
     <div className="px-4 py-6 md:px-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl text-mist-100">编排模板</h1>
-          <p className="mt-1 font-mono text-[11px] text-mist-500">
-            高级入口 · 已从主导航降级 · API 仍可用
-          </p>
+          <h1 className="font-display text-3xl text-mist-100">Flows</h1>
           <p className="mt-1 text-sm text-mist-400">
-            预制 DAG 工作流。节点 skill = harness agent_key（claude-code / deepseek-harness / pi / openclaw / hermes）。
+            预制 DAG。节点 skill = harness agent_key。审批门（none / system / agent / both）会写进计划，Tasks 待审批与 Network 按门等待。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -285,6 +315,14 @@ export function WorkflowsPageView() {
               <p className="mt-2 line-clamp-2 text-sm text-mist-400">
                 {wf.description || n.map((x) => x.id).join(" → ")}
               </p>
+              {n.some((x) => x.approval_mode && x.approval_mode !== "none") ? (
+                <p className="mt-1 font-mono text-[10px] text-mist-500">
+                  {n
+                    .filter((x) => x.approval_mode && x.approval_mode !== "none")
+                    .map((x) => `${x.id}:${x.approval_mode}`)
+                    .join(" · ")}
+                </p>
+              ) : null}
               <button
                 type="button"
                 disabled={!!running || !goal.trim()}
@@ -342,6 +380,29 @@ export function WorkflowsPageView() {
                 <option value="openclaw" />
                 <option value="hermes" />
               </datalist>
+              <select
+                id="workflow-edit-approval"
+                name="workflow-approval"
+                value={approvalMode}
+                onChange={(e) => setApprovalMode(e.target.value)}
+                className="rounded-lg border border-white/10 bg-ink-900 px-2 py-1.5 font-mono text-xs text-mist-100"
+              >
+                <option value="none">none</option>
+                <option value="system">system</option>
+                <option value="agent">agent</option>
+                <option value="both">both</option>
+              </select>
+              {approvalMode === "agent" || approvalMode === "both" ? (
+                <input
+                  id="workflow-edit-approver"
+                  name="workflow-approver"
+                  value={approverAgent}
+                  onChange={(e) => setApproverAgent(e.target.value)}
+                  className="w-36 rounded-lg border border-white/10 bg-ink-900 px-2 py-1.5 font-mono text-xs text-mist-100"
+                  placeholder="approver_agent"
+                  list="harness-agent-keys"
+                />
+              ) : null}
               <button
                 type="button"
                 onClick={addNode}
@@ -391,7 +452,7 @@ export function WorkflowsPageView() {
               ) : null}
             </div>
             <div className="border-t border-white/10 px-4 py-2 font-mono text-[10px] text-mist-400">
-              拖拽连线配置 depends_on；节点标签第二行为 agent_key（勿填旧 specialty skill）。
+              拖拽连线 = depends_on。加节点时选审批门；agent/both 需填 approver_agent（对端 agent_key）。
             </div>
           </div>
         </div>

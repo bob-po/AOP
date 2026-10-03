@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import zipfile
 
+from datetime import datetime, timezone
+
 from artifacts.package import (
     build_citations,
     build_package_zip,
@@ -63,3 +65,21 @@ def test_zip_skips_unreadable_artifacts():
     names = zipfile.ZipFile(io.BytesIO(data)).namelist()
     assert "run-report.md" in names
     assert not any(n.startswith("artifacts/") for n in names)
+
+
+def test_zip_serializes_datetime_fields():
+    data = build_package_zip(
+        {
+            "id": "t-dt",
+            "status": "completed",
+            "title": "dt",
+            "created_at": datetime(2026, 10, 3, 13, 17, 32, tzinfo=timezone.utc),
+            "finished_at": datetime(2026, 10, 3, 13, 17, 48, tzinfo=timezone.utc),
+        },
+        artifacts=[],
+        events=[{"event_type": "task.completed", "ts": datetime(2026, 10, 3, 13, 17, 48, tzinfo=timezone.utc)}],
+    )
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    cites = zf.read("citations.json").decode("utf-8")
+    assert "2026-10-03T13:17:32" in cites
+    assert "task.completed" in cites

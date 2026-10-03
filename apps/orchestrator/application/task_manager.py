@@ -159,8 +159,8 @@ class TaskManager:
     def overview(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         return self.scheduling.overview_stats(tenant_id=tenant_id)
 
-    def events(self, task_id: str) -> list[dict[str, Any]]:
-        return self.scheduling.list_events(task_id)
+    def events(self, task_id: str, limit: int = 80) -> list[dict[str, Any]]:
+        return self.scheduling.list_events(task_id, limit=limit)
 
     def list_artifacts(self, task_id: str) -> list[dict[str, Any]]:
         return self.artifacts.list_for_task(task_id)

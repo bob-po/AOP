@@ -34,7 +34,8 @@ const STATUS_LABEL: Record<string, string> = {
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
-  waiting_for_user: "待审批",
+  waiting_for_user: "待系统审",
+  waiting_for_agent: "待 Agent 审",
   pending: "等待",
   created: "已创建",
 };
@@ -64,6 +65,7 @@ function statusTone(status?: string) {
     case "failed":
       return "text-red-400";
     case "waiting_for_user":
+    case "waiting_for_agent":
       return "text-amber-300";
     case "running":
       return "text-signal-warm";
@@ -156,9 +158,9 @@ export function TaskDetailDrawer({
   }, [taskId]);
 
   useEffect(() => {
-    if (!taskId) return;
+    if (!taskId || tab !== "nodes") return;
     let alive = true;
-    listTaskCheckpoints(taskId, { limit: 80 })
+    listTaskCheckpoints(taskId, { limit: 40 })
       .then((r) => {
         if (!alive) return;
         setCheckpoints(r.checkpoints || []);
@@ -173,11 +175,12 @@ export function TaskDetailDrawer({
     return () => {
       alive = false;
     };
-  }, [taskId, task?.status, task?.progress]);
+  }, [taskId, tab, task?.status]);
 
   const goal = task?.input_json?.content || task?.plan_json?.goal || task?.title || "";
   const terminal = ["completed", "failed", "cancelled"].includes(task?.status || "");
-  const waiting = task?.status === "waiting_for_user";
+  const waiting =
+    task?.status === "waiting_for_user" || task?.status === "waiting_for_agent";
   const live = !!task && !terminal && !waiting;
   const duration = formatDuration(
     task?.created_at,
@@ -273,10 +276,15 @@ export function TaskDetailDrawer({
 
   return (
     <aside
-      className={`flex w-full shrink-0 flex-col border-t border-white/10 lg:border-l lg:border-t-0 ${
+      className={`relative flex w-full shrink-0 flex-col border-t border-white/10 lg:border-l lg:border-t-0 ${
         wide ? "lg:w-[40rem]" : "lg:w-80"
       }`}
     >
+      {taskId && task && task.task_id !== taskId ? (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-start justify-center bg-ink-950/50 pt-16 font-mono text-[11px] text-mist-300">
+          更新详情…
+        </div>
+      ) : null}
       <div className="border-b border-white/10 px-4 py-3">
         <div className="flex items-start justify-between gap-2">
           <div className="font-display text-lg text-mist-100">任务详情</div>

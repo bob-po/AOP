@@ -317,8 +317,20 @@ def _start_aop_node(
 ) -> bool:
     """Start one aopd process. Returns False if caller should use legacy uvicorn."""
     if _http_ok("http://127.0.0.1:7920/health"):
-        print("  aop-node already up on :7920 — not spawning extra harness processes", flush=True)
-        return True
+        missing = [
+            f"{name}:{port}"
+            for name, port in _harness_profiles()
+            if not _http_ok(f"http://127.0.0.1:{port}/health")
+        ]
+        if not missing:
+            print("  aop-node :7920 up and harness ports healthy", flush=True)
+            return True
+        print(
+            "  aop-node :7920 up but harness not listening "
+            f"({', '.join(missing)}) — will start uvicorn children",
+            flush=True,
+        )
+        return False
     node_root = ROOT / "apps" / "client" / "aop-node"
     if not (node_root / "Cargo.toml").is_file():
         return False

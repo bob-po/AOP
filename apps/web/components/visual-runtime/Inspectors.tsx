@@ -10,6 +10,14 @@ import type {
   VisualRuntimeEvent,
 } from "@/lib/api";
 
+/** UTC clock — locale `toLocale*` hydrates differently on Node vs browser. */
+export function formatUtcClock(iso?: string | null): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  return new Date(ms).toISOString().slice(11, 19) + "Z";
+}
+
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="grid grid-cols-[96px_1fr] gap-2 border-b border-white/5 py-2">
@@ -58,6 +66,12 @@ export function AgentInspector({
       <Row label="Name" value={agent?.name || node.label} />
       <Row label="ID" value={node.agent_id || node.id} />
       <Row label="Status" value={(node.status || "").toUpperCase()} />
+      {String(node.status || "").toLowerCase() === "waiting_for_agent" ? (
+        <Row label="Approval" value="waiting for peer agent" />
+      ) : String(node.status || "").toLowerCase() === "waiting_for_user" ||
+        String(node.status || "").toLowerCase() === "waiting" ? (
+        <Row label="Approval" value="waiting for operator (Tasks)" />
+      ) : null}
       {readiness ? (
         <Row
           label="Runner"
@@ -83,9 +97,7 @@ export function AgentInspector({
       <Row
         label="Started"
         value={
-          started?.timestamp
-            ? new Date(started.timestamp).toLocaleTimeString()
-            : "—"
+          formatUtcClock(started?.timestamp)
         }
       />
       <div className="mt-4 flex flex-wrap gap-2">
@@ -168,9 +180,19 @@ export function TaskInspector({
       <div className="mb-3 font-display text-lg text-mist-100">Task</div>
       <Row label="Task ID" value={snapshot?.task_id || "—"} />
       <Row label="Status" value={(snapshot?.status || "idle").toUpperCase()} />
+      {(() => {
+        const raw = String(snapshot?.task?.status || snapshot?.status || "").toLowerCase();
+        const gate =
+          raw === "waiting_for_agent"
+            ? "Agent peer"
+            : raw === "waiting_for_user" || raw === "waiting"
+              ? "System / Tasks"
+              : "";
+        return gate ? <Row label="Approval" value={gate} /> : null;
+      })()}
       <Row
         label="Created"
-        value={t0 ? new Date(t0).toLocaleString() : "—"}
+        value={t0 ? formatUtcClock(t0) : "—"}
       />
       <Row label="Agents" value={String(stats.agents)} />
       <Row label="Hops" value={String(hops || stats.executions)} />
@@ -245,7 +267,7 @@ export function ExecutionTimeline({ events }: { events: VisualRuntimeEvent[] }) 
       </div>
       <ul className="max-h-64 space-y-1.5 overflow-auto pr-1">
         {events.map((e) => {
-          const t = e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : "—";
+          const t = formatUtcClock(e.timestamp);
           return (
             <li
               key={e.event_id || `${e.sequence}-${e.event_type}-${e.timestamp}`}

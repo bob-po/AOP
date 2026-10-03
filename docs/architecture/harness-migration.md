@@ -154,13 +154,13 @@ copy config\aop-node.example.toml aop-node.toml
 cargo run -p aopd -- --config aop-node.toml
 ```
 
-**无 Supervisor 回退**（`dev_up.py --legacy-agents`，或 `start_and_register_agents.py`；若 `:7920` 已在跑会跳过）：
+**无 Supervisor 回退**（`dev_up.py --legacy-agents`，或 `start_and_register_agents.py`）。`:7920` 已健康**且** 8011–8015 都在听才会跳过；节点空转时会自动拉起 harness。
 
 ```powershell
 pip install -e "packages/agent-runtime[harness]"
 pip install -e packages/a2a-sdk
 python scripts/start_and_register_agents.py
-# 强制并行：FORCE_START_SCRIPT=1
+# 即使端口已 occupied 仍再起一份：FORCE_START_SCRIPT=1
 ```
 
 ```powershell

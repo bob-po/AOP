@@ -84,7 +84,7 @@ class _FakeTasks:
             }
         ]
 
-    def events(self, task_id):
+    def events(self, task_id, limit=80):
         return [
             {
                 "event_type": "task.completed",

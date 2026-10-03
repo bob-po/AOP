@@ -50,21 +50,25 @@ def _postgres_snapshot() -> dict[str, Any]:
                 return _svc(True, outbox_table="missing", detail=str(exc))
             stuck_running = 0
             waiting_hitl = 0
+            waiting_agent = 0
             try:
                 trow = conn.execute(
                     """
                     SELECT
                       COUNT(*) FILTER (WHERE status IN ('running', 'planning')) AS stuck_running,
-                      COUNT(*) FILTER (WHERE status = 'waiting_for_user') AS waiting_hitl
+                      COUNT(*) FILTER (WHERE status = 'waiting_for_user') AS waiting_hitl,
+                      COUNT(*) FILTER (WHERE status = 'waiting_for_agent') AS waiting_agent
                     FROM tasks
                     """
                 ).fetchone()
                 if trow:
                     stuck_running = int(trow.get("stuck_running") or 0)
                     waiting_hitl = int(trow.get("waiting_hitl") or 0)
+                    waiting_agent = int(trow.get("waiting_agent") or 0)
             except Exception:  # noqa: BLE001
                 stuck_running = 0
                 waiting_hitl = 0
+                waiting_agent = 0
         return _svc(
             True,
             pending_outbox=pending,
@@ -73,6 +77,7 @@ def _postgres_snapshot() -> dict[str, Any]:
             last_processed_at=last_processed,
             stuck_running=stuck_running,
             waiting_hitl=waiting_hitl,
+            waiting_agent=waiting_agent,
         )
     except Exception as exc:  # noqa: BLE001
         return _svc(False, detail=str(exc), hint="Start Postgres: docker compose -f deployments/docker-compose.yml up -d postgres")
@@ -197,7 +202,8 @@ def classify(
             f"{stuck} 个任务仍在 running，会占满并发配额。打开 Tasks 取消，或在 Network 点 Retry。"
         )
     waiting = int(services.get("postgres", {}).get("waiting_hitl") or 0)
-    # HITL queue is operator work, not a stack health failure.
+    waiting_agent = int(services.get("postgres", {}).get("waiting_agent") or 0)
+    # HITL / peer-approval queues are operator work, not stack health failures.
 
     ready_agents = [a for a in agents if a.get("runner_ready")]
     reachable = [a for a in agents if a.get("reachable")]
@@ -234,6 +240,7 @@ def classify(
         "reachable_agents": len(reachable),
         "registered_agents": len(agents),
         "waiting_hitl": waiting,
+        "waiting_agent": waiting_agent,
         "stuck_running": stuck,
         "recover_steps": recover_steps(blocking=blocking, warnings=warnings),
     }

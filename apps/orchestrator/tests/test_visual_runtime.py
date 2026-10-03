@@ -549,3 +549,21 @@ def test_task_row_reconciles_orphan_running_agent():
     agent = next(n for n in g["nodes"] if n.get("agent_id") == "agent-uuid")
     assert agent["status"] == "completed"
     assert g["status"] == "completed"
+
+
+def test_task_row_preserves_waiting_for_agent():
+    g = project_visual_graph(
+        task_id="t-agent",
+        events=[],
+        task_row={"id": "t-agent", "status": "waiting_for_agent", "title": "peer"},
+    )
+    assert g["status"] == "waiting_for_agent"
+    task_node = next(n for n in g["nodes"] if n["type"] == "task")
+    assert task_node["status"] == "waiting_for_agent"
+
+    human = project_visual_graph(
+        task_id="t-sys",
+        events=[],
+        task_row={"id": "t-sys", "status": "waiting_for_user"},
+    )
+    assert human["status"] == "waiting_for_user"

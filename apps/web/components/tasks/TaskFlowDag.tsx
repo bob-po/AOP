@@ -134,7 +134,8 @@ const LEGEND = [
   ["ready", "就绪"],
   ["running", "执行中"],
   ["success", "完成"],
-  ["waiting_for_user", "待审批"],
+  ["waiting_for_user", "待系统审"],
+  ["waiting_for_agent", "待 Agent 审"],
   ["failed", "失败"],
 ] as const;
 

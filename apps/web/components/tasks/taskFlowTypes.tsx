@@ -36,7 +36,10 @@ type DagFlowNode = Node<DagNodeData, "dagNode">;
 
 function DagNodeCard({ data }: NodeProps<DagFlowNode>) {
   const color = STATUS_COLOR[data.status] || STATUS_COLOR.pending;
-  const running = data.status === "running" || data.status === "waiting_for_user";
+  const running =
+    data.status === "running" ||
+    data.status === "waiting_for_user" ||
+    data.status === "waiting_for_agent";
   return (
     <div
       className="min-w-[168px] max-w-[200px] rounded-xl border px-3 py-2.5"

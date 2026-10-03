@@ -462,8 +462,10 @@ def _map_task_status(status: Any) -> str:
         return "failed"
     if s in {"cancelled", "canceled"}:
         return "cancelled"
-    if s in {"waiting_for_user", "waiting", "waiting_for_agent"}:
-        return "waiting"
+    if s in {"waiting_for_agent"}:
+        return "waiting_for_agent"
+    if s in {"waiting_for_user", "waiting"}:
+        return "waiting_for_user"
     if s in {"running", "planning", "ready"}:
         return "running"
     return s or "pending"

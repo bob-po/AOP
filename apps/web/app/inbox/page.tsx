@@ -1,14 +1,6 @@
-import { Suspense } from "react";
-import { HitlInboxView } from "@/components/inbox/HitlInboxView";
+import { redirect } from "next/navigation";
 
-export default function InboxPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="p-6 font-mono text-sm text-mist-400">Loading inbox…</div>
-      }
-    >
-      <HitlInboxView />
-    </Suspense>
-  );
+/** Inbox UI removed — HITL lives on Tasks 待审批 + Network. */
+export default function InboxRedirect() {
+  redirect("/tasks?status=waiting_for_user,waiting_for_agent");
 }

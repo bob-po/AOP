@@ -23,7 +23,8 @@ const ROW_H = 140;
 function statusColor(status: string): string {
   const s = (status || "").toLowerCase();
   if (s === "running" || s === "active") return "#3dffa8";
-  if (s === "waiting" || s === "retrying") return "#ffb454";
+  if (s === "waiting" || s === "waiting_for_user" || s === "retrying") return "#ffb454";
+  if (s === "waiting_for_agent") return "#7dd3fc";
   if (s === "failed" || s === "error" || s === "timeout") return "#ff6b6b";
   if (s === "completed" || s === "succeeded") return "#7eaea0";
   if (s === "discovered") return "#8ab4ff";
@@ -50,7 +51,11 @@ function VrNode({ data }: NodeProps) {
   const hint = typeof data.runnerHint === "string" ? data.runnerHint : "";
   const color = statusColor(status);
   const running = status === "running" || status === "active";
-  const waiting = status === "waiting" || status === "retrying";
+  const waiting =
+    status === "waiting" ||
+    status === "waiting_for_user" ||
+    status === "waiting_for_agent" ||
+    status === "retrying";
   const size =
     kind === "task" ? 72 : kind === "tool" || kind === "data" ? 40 : kind === "error" ? 48 : 56;
   const radius = kind === "data" ? 6 : kind === "tool" ? 8 : "50%";

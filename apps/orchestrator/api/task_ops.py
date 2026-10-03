@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, PlainTextResponse
 from pydantic import BaseModel
 
@@ -261,13 +261,9 @@ def reject_task(task_id: str, body: HitlDecisionRequest | None = None) -> dict[s
 
 
 @router.get("/v1/tasks/{task_id}/events")
-def get_events(task_id: str) -> dict[str, Any]:
-    row = ctx.tasks.get(task_id)
-    if not row:
-        raise HTTPException(
-            status_code=404, detail={"code": "not_found", "message": "task not found"}
-        )
-    return {"events": ctx.tasks.events(task_id)}
+def get_events(task_id: str, limit: int = Query(80, ge=1, le=200)) -> dict[str, Any]:
+    events = ctx.tasks.events(task_id, limit=limit)
+    return {"events": events}
 
 
 @router.get("/v1/tasks/{task_id}/artifacts")

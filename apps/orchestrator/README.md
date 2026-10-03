@@ -1,6 +1,6 @@
 # Orchestrator (Python)
 
-编排核心：Planner · Router · Scheduler · Execution · Worker · Outbox · Marketplace。
+编排核心：Planner · Router · Scheduler · Execution · Worker · Outbox。Marketplace HTTP 仍在，产品面冻结。
 
 默认 API：`:8090`。
 

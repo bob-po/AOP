@@ -1,3 +1,5 @@
+import { cachedGet, invalidateTaskCache } from "@/lib/taskFetchCache";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8080";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
@@ -66,6 +68,9 @@ export type TaskPlan = {
     /** Agent key routed by planner (legacy name: skill). */
     skill: string;
     depends_on?: string[];
+    approval_mode?: string | null;
+    approver_agent?: string | null;
+    requires_approval?: boolean;
   }>;
 };
 
@@ -184,6 +189,7 @@ export type PreflightSnapshot = {
   registered_agents: number;
   /** Tasks in waiting_for_user — Inbox queue depth */
   waiting_hitl?: number;
+  waiting_agent?: number;
   stuck_running?: number;
   services: {
     orchestrator?: PreflightService;
@@ -284,9 +290,11 @@ export function listTasks(params?: { status?: string; limit?: number }) {
   return request<{ tasks: TaskSummary[] }>(`/v1/tasks${qs ? `?${qs}` : ""}`);
 }
 
-export function getTask(taskId: string, opts?: { include_graph?: boolean }) {
+export function getTask(taskId: string, opts?: { include_graph?: boolean; bust?: boolean }) {
+  if (opts?.bust) invalidateTaskCache(taskId);
   const q = opts?.include_graph ? "?include_graph=true" : "";
-  return request<TaskDetail>(`/v1/tasks/${taskId}${q}`);
+  const path = `/v1/tasks/${taskId}${q}`;
+  return cachedGet(`task:${taskId}${q}`, 2_500, () => request<TaskDetail>(path));
 }
 
 export function cancelTask(taskId: string) {
@@ -297,12 +305,16 @@ export function cancelTask(taskId: string) {
 }
 
 export function getTaskEvents(taskId: string) {
-  return request<{ events: TaskEvent[] }>(`/v1/tasks/${taskId}/events`);
+  return cachedGet(`events:${taskId}`, 2_500, () =>
+    request<{ events: TaskEvent[] }>(`/v1/tasks/${taskId}/events?limit=80`),
+  );
 }
 
 export function getTaskArtifacts(taskId: string) {
-  return request<{ task_id: string; artifacts: ArtifactItem[] }>(
-    `/v1/tasks/${taskId}/artifacts`,
+  return cachedGet(`artifacts:${taskId}`, 8_000, () =>
+    request<{ task_id: string; artifacts: ArtifactItem[] }>(
+      `/v1/tasks/${taskId}/artifacts`,
+    ),
   );
 }
 
@@ -710,8 +722,12 @@ export type EvaluationOverview = {
 };
 
 export function getTaskEvaluation(taskId: string) {
-  return request<TaskEvaluation>(`/v1/tasks/${taskId}/evaluation`);
+  return cachedGet(`eval:${taskId}`, 20_000, () =>
+    request<TaskEvaluation>(`/v1/tasks/${taskId}/evaluation`),
+  );
 }
+
+export { invalidateTaskCache } from "@/lib/taskFetchCache";
 
 export function evaluateTask(taskId: string, method = "heuristic") {
   const qs = method ? `?method=${encodeURIComponent(method)}` : "";
@@ -1524,9 +1540,15 @@ export type VisualGraphSnapshot = {
   };
 };
 
-export function getTaskVisualGraph(taskId: string) {
-  return request<VisualGraphSnapshot>(
-    `/v1/tasks/${encodeURIComponent(taskId)}/graph`,
+export function getTaskVisualGraph(taskId: string, opts?: { bust?: boolean }) {
+  return cachedGet(
+    `graph:${taskId}`,
+    1_200,
+    () =>
+      request<VisualGraphSnapshot>(
+        `/v1/tasks/${encodeURIComponent(taskId)}/graph`,
+      ),
+    { bust: opts?.bust },
   );
 }
 

@@ -145,7 +145,7 @@ cp .env.example .env   # 编辑 AOP_PUBLIC_HOST
 
 - **平台 Phase 1–34**：Registry · Planner/DAG · Worker · Console · Auth · Billing · Quotas · Sandbox · Stripe · Egress  
 - **平台 Phase 35–37**：见 [docs/phases](./docs/phases/) 摘要  
-- **A2A OS Phase 3–6**：Execution · Production · Scheduling · Marketplace  
+- **A2A OS Phase 3–6**：Execution · Production；Scheduling / Marketplace **API 仍在、Console 停放**  
 - **协议**：Agent 线对齐 [a2aproject/A2A](https://github.com/a2aproject/A2A)；OS 控制面仍为 `/v1/*`
 
 验收表：[mvp-plan.md](./docs/architecture/mvp-plan.md)。冒烟：`apps/orchestrator/scripts/phase*.py`。

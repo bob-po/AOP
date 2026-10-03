@@ -50,13 +50,7 @@ $env:HARNESS_PROFILE="claude-code"; $env:PORT="8011"
 uvicorn agent:app --app-dir agents/harness-agent --port 8011
 ```
 
-## 远端安装（Marketplace）
-
-A2A OS 可达时（示例口 `:8000` 或 Gateway `:8080`，以实际 Marketplace 为准）：
-
-```powershell
-irm http://<a2a-os>/install/claude-code.ps1 | iex
-```
+推荐本机用仓库根目录 `python scripts/dev_up.py`（aop-node 拉起本进程）。Marketplace 安装脚本仍是 API，**Console 没有 Marketplace 页**（产品冻结）。
 
 ## 边缘节点
 

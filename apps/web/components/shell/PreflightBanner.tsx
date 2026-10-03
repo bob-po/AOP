@@ -37,8 +37,9 @@ export function PreflightBanner() {
   if (!snapshot) return null;
 
   const hitlCount = snapshot.waiting_hitl || 0;
-  // Ready stack with only HITL waiting: still surface a thin Inbox strip.
-  if (snapshot.status === "ready" && hitlCount <= 0) return null;
+  const agentCount = snapshot.waiting_agent || 0;
+  // Ready stack with only approval queues: thin Tasks 待审批 strip.
+  if (snapshot.status === "ready" && hitlCount <= 0 && agentCount <= 0) return null;
 
   const tone =
     snapshot.status === "blocked"
@@ -87,12 +88,15 @@ export function PreflightBanner() {
             Tasks 回收
           </Link>
         ) : null}
-        {hitlCount > 0 || snapshot.warnings.includes("waiting_hitl") ? (
+        {hitlCount > 0 || agentCount > 0 || snapshot.warnings.includes("waiting_hitl") ? (
           <Link
-            href="/inbox"
+            href="/tasks?status=waiting_for_user,waiting_for_agent"
             className="rounded-full border border-signal/30 px-2 py-0.5 font-mono text-[10px] text-signal hover:bg-signal/10"
           >
-            Inbox {hitlCount > 0 ? `· ${hitlCount}` : "待审批"}
+            待审批
+            {hitlCount + agentCount > 0
+              ? ` · ${hitlCount + agentCount}`
+              : ""}
           </Link>
         ) : null}
       </div>

@@ -20,10 +20,10 @@ Open http://127.0.0.1:3000
 | Route | Purpose |
 |-------|---------|
 | `/` | Command Center — Live Agent Network + Run |
-| `/inbox` | HITL 待审批队列（Approve / Reject） |
-| `/tasks` | 任务列表 · DAG · 产物 |
+| `/tasks` | 任务列表 · DAG · 产物 · 待审批（系统 Approve / Agent 可见可驳回） |
+| `/inbox` | 重定向到 Tasks 待审批（无独立 Inbox 页） |
 | `/agents` | Registry + router preview by **agent_key** |
-| `/workflows` | 编排模板（主导航 Flows） |
+| `/workflows` | Flows：编排模板（节点可设 none/system/agent/both） |
 | `/settings` | API Keys · 团队 · 监控（Chaos 恢复） · 审计 · 配额 |
 | `/login` | 开发账号 `admin@aop.local` / `aop_admin_dev` |
 

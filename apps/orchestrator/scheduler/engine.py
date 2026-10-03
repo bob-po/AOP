@@ -148,5 +148,5 @@ class SchedulingEngine:
     def overview_stats(self, *, tenant_id: str | None = None) -> dict[str, Any]:
         return self.scheduler.overview_stats(tenant_id=tenant_id)
 
-    def list_events(self, task_id: str) -> list[dict[str, Any]]:
-        return self.scheduler.list_events(task_id)
+    def list_events(self, task_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        return self.scheduler.list_events(task_id, limit=limit)

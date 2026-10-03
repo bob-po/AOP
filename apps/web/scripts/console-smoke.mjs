@@ -17,7 +17,7 @@ const required = [
   "app/settings/page.tsx",
   "app/login/page.tsx",
   "components/ops/ChaosPlaybook.tsx",
-  "components/inbox/HitlInboxView.tsx",
+  "components/workflows/WorkflowsPageView.tsx",
   "components/shell/PreflightBanner.tsx",
   "hooks/useVisualRuntime.ts",
   "hooks/usePreflight.tsx",
@@ -37,8 +37,12 @@ if (leaked.length) {
   console.error("nav freeze broken; AppShell still links", leaked.join(", "));
   process.exit(1);
 }
-if (!shell.includes("/inbox") || !shell.includes("/workflows")) {
-  console.error("nav missing Inbox or Flows (/workflows)");
+if (!shell.includes("/workflows")) {
+  console.error("nav missing Flows (/workflows)");
+  process.exit(1);
+}
+if (shell.includes('href: "/inbox"')) {
+  console.error("nav freeze: Inbox must stay out of AppShell");
   process.exit(1);
 }
 
@@ -48,6 +52,12 @@ for (const needle of ["recover_steps", "downloadTaskPackage", "listTeammates"]) 
     console.error("lib/api.ts missing", needle);
     process.exit(1);
   }
+}
+
+const flows = fs.readFileSync(path.join(root, "components/workflows/WorkflowsPageView.tsx"), "utf8");
+if (!flows.includes("approval_mode") || !flows.includes("approver_agent")) {
+  console.error("Flows editor dropped approval_mode / approver_agent");
+  process.exit(1);
 }
 
 console.log("console smoke ok", required.length, "files");

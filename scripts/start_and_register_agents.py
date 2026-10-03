@@ -73,6 +73,16 @@ def _aop_node_running() -> bool:
         return False
 
 
+def _force_start() -> bool:
+    return os.getenv("FORCE_START_SCRIPT", "").lower() in {"1", "true", "yes"}
+
+
+def _harness_ports_ready(profiles: list[tuple[str, int]]) -> bool:
+    if not profiles:
+        return False
+    return all(wait_health(port, timeout=1.0) for _, port in profiles)
+
+
 def _harness_enabled() -> bool:
     flag = os.getenv("HARNESS_ENABLED", "1").lower()
     if flag in {"0", "false", "off", "no"}:
@@ -95,22 +105,21 @@ def main() -> int:
         print("HARNESS_ENABLED=0 — nothing to start")
         return 0
 
-    if _aop_node_running() and os.getenv("FORCE_START_SCRIPT", "").lower() not in {
-        "1",
-        "true",
-        "yes",
-    }:
-        print(
-            f"aop-node is already healthy at {AOP_NODE_MGMT}.\n"
-            "Edge ownership belongs there (register + heartbeat).\n"
-            "Skip this script, or set FORCE_START_SCRIPT=1 to start anyway."
-        )
-        return 0
-
     selected = _selected_harness_profiles()
     if not selected:
         print("No harness profiles selected")
         return 1
+
+    if _aop_node_running() and _harness_ports_ready(selected) and not _force_start():
+        print(
+            f"aop-node is healthy at {AOP_NODE_MGMT} and harness ports are up.\n"
+            "Skip this script, or set FORCE_START_SCRIPT=1 to spawn extra copies."
+        )
+        return 0
+    if _aop_node_running() and not _harness_ports_ready(selected):
+        print(
+            f"aop-node is up at {AOP_NODE_MGMT} but harness children are empty — starting them."
+        )
 
     print(f"Harness profiles: {', '.join(n for n, _ in selected)}")
     print("Note: without aop-node, each agent heartbeats itself (HARNESS_HEARTBEAT=1).")

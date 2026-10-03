@@ -76,6 +76,7 @@ def test_classify_exposes_waiting_hitl_count():
     ]
     v = classify(services, agents)
     assert v["waiting_hitl"] == 3
+    assert v.get("waiting_agent", 0) == 0
     assert v["stuck_running"] == 1
     assert "waiting_hitl" not in v["warnings"]
     assert "stuck_running" in v["warnings"]
@@ -83,6 +84,21 @@ def test_classify_exposes_waiting_hitl_count():
     ids = {s["id"]: s["active"] for s in v["recover_steps"]}
     assert ids["stuck_running"] is True
     assert ids["worker"] is False
+
+
+def test_classify_exposes_waiting_agent_count():
+    services = {
+        "postgres": {"ok": True, "pending_outbox": 0, "waiting_hitl": 1, "waiting_agent": 2},
+        "redis": {"ok": True},
+        "worker": {"ok": True},
+        "outbox": {"ok": True},
+    }
+    agents = [{"agent_key": "claude-code", "reachable": True, "runner_ready": True}]
+    v = classify(services, agents)
+    assert v["waiting_agent"] == 2
+    assert v["waiting_hitl"] == 1
+    assert "waiting_agent" not in v["warnings"]
+    assert v["status"] == "ready"
 
 
 def test_probe_agent_health_parses_runner_ready(monkeypatch):

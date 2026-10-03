@@ -1,6 +1,14 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -38,11 +46,38 @@ const PROMPTS = [
   "Discover agents for research and summarize A2A OS architecture",
 ];
 
+/** Same chrome as idle Network so Suspense fallback hydrates without a flash. */
+export function NetworkIdleHero({
+  agentChips,
+}: {
+  agentChips?: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-[52vh] flex-col items-center justify-center px-6 pb-36 pt-16 text-center">
+      <div className="font-display text-5xl tracking-tight text-mist-100 md:text-6xl">
+        A2A OS
+      </div>
+      <p className="mt-4 max-w-md font-sans text-sm text-mist-400 md:text-base">
+        What do you want to build?
+      </p>
+      <div className="mt-10 h-40 w-40 rounded-full border border-signal/30 bg-signal/5 shadow-[0_0_80px_rgba(61,255,168,0.15)]" />
+      <p className="mt-8 font-mono text-[10px] uppercase tracking-[0.22em] text-mist-400">
+        Live Agent Network · idle
+      </p>
+      {agentChips}
+    </div>
+  );
+}
+
 export function CommandCenter() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [goal, setGoal] = useState(PROMPTS[0]);
-  const [taskId, setTaskId] = useState<string | null>(null);
+  const urlTask = searchParams.get("task");
+  const [goal, setGoal] = useState(
+    () => searchParams.get("prefill") || PROMPTS[0],
+  );
+  const [taskId, setTaskId] = useState<string | null>(urlTask);
+  const [chipsReady, setChipsReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -60,20 +95,21 @@ export function CommandCenter() {
     useVisualRuntime(taskId);
   const { snapshot: preflight } = usePreflight();
   const runBlocked = preflight ? !preflight.can_run : false;
-  const waitingHitl =
-    (graph?.status || "").toLowerCase() === "waiting" ||
-    (graph?.status || "").toLowerCase() === "waiting_for_user" ||
-    (graph?.task?.status || "").toLowerCase() === "waiting_for_user";
   const waitingAgent =
     (graph?.status || "").toLowerCase() === "waiting_for_agent" ||
     (graph?.task?.status || "").toLowerCase() === "waiting_for_agent";
+  const waitingHitl =
+    !waitingAgent &&
+    ((graph?.status || "").toLowerCase() === "waiting" ||
+      (graph?.status || "").toLowerCase() === "waiting_for_user" ||
+      (graph?.task?.status || "").toLowerCase() === "waiting_for_user");
 
   useEffect(() => {
-    const tid = searchParams.get("task");
-    if (tid) setTaskId(tid);
+    setTaskId(urlTask);
     const prefill = searchParams.get("prefill");
     if (prefill) setGoal(prefill);
-  }, [searchParams]);
+    setChipsReady(true);
+  }, [searchParams, urlTask]);
 
   useEffect(() => {
     listAgents()
@@ -266,38 +302,30 @@ export function CommandCenter() {
       <div className="relative z-10 flex flex-1 flex-col lg:flex-row">
         <section className="relative min-h-[52vh] flex-1 lg:min-h-0">
           {!active ? (
-            <div className="flex h-full flex-col items-center justify-center px-6 pb-36 pt-16 text-center">
-              <div className="font-display text-5xl tracking-tight text-mist-100 md:text-6xl">
-                A2A OS
-              </div>
-              <p className="mt-4 max-w-md font-sans text-sm text-mist-400 md:text-base">
-                What do you want to build?
-              </p>
-              <div className="mt-10 h-40 w-40 rounded-full border border-signal/30 bg-signal/5 shadow-[0_0_80px_rgba(61,255,168,0.15)]" />
-              <p className="mt-8 font-mono text-[10px] uppercase tracking-[0.22em] text-mist-400">
-                Live Agent Network · idle
-              </p>
-              {preflight?.agents?.length ? (
-                <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
-                  {preflight.agents.map((a) => (
-                    <span
-                      key={a.agent_key}
-                      title={a.runner_reason || a.agent_key}
-                      className={`rounded-full border px-2.5 py-1 font-mono text-[10px] ${
-                        a.runner_ready
-                          ? "border-signal/30 text-signal"
-                          : a.reachable
-                            ? "border-signal-warm/40 text-signal-warm"
-                            : "border-white/10 text-mist-400"
-                      }`}
-                    >
-                      {a.agent_key}
-                      {a.runner_ready ? "" : a.reachable ? " · stub" : " · off"}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            <NetworkIdleHero
+              agentChips={
+                chipsReady && preflight?.agents?.length ? (
+                  <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
+                    {preflight.agents.map((a) => (
+                      <span
+                        key={a.agent_key}
+                        title={a.runner_reason || a.agent_key}
+                        className={`rounded-full border px-2.5 py-1 font-mono text-[10px] ${
+                          a.runner_ready
+                            ? "border-signal/30 text-signal"
+                            : a.reachable
+                              ? "border-signal-warm/40 text-signal-warm"
+                              : "border-white/10 text-mist-400"
+                        }`}
+                      >
+                        {a.agent_key}
+                        {a.runner_ready ? "" : a.reachable ? " · stub" : " · off"}
+                      </span>
+                    ))}
+                  </div>
+                ) : null
+              }
+            />
           ) : (
             <>
               <div className="absolute left-4 top-4 z-20 flex items-center gap-3">
@@ -317,7 +345,7 @@ export function CommandCenter() {
                 <ControlBtn
                   label="Tasks"
                   onClick={() =>
-                    router.push(`/tasks/${encodeURIComponent(taskId!)}`)
+                    router.push(`/tasks?task=${encodeURIComponent(taskId!)}`)
                   }
                 />
               </div>
@@ -343,10 +371,10 @@ export function CommandCenter() {
                     Reject
                   </button>
                   <Link
-                    href="/inbox"
+                    href="/tasks?status=waiting_for_user,waiting_for_agent"
                     className="font-mono text-[10px] uppercase tracking-wider text-signal hover:underline"
                   >
-                    Open Inbox
+                    Open Tasks
                   </Link>
                 </div>
               ) : waitingAgent ? (
@@ -355,10 +383,10 @@ export function CommandCenter() {
                     Waiting for agent approval
                   </span>
                   <Link
-                    href="/inbox"
+                    href="/tasks?status=waiting_for_user,waiting_for_agent"
                     className="font-mono text-[10px] uppercase tracking-wider text-mist-300 hover:text-signal"
                   >
-                    Inbox
+                    Tasks
                   </Link>
                 </div>
               ) : null}
@@ -386,7 +414,7 @@ export function CommandCenter() {
                 onPause={onPause}
                 onRetry={onRetry}
                 onInspect={() =>
-                  router.push(`/tasks/${encodeURIComponent(taskId!)}`)
+                  router.push(`/tasks?task=${encodeURIComponent(taskId!)}`)
                 }
               />
             ) : (

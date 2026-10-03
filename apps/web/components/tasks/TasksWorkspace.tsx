@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -15,13 +16,35 @@ import {
   type TaskSummary,
 } from "@/lib/api";
 import { useTaskLive } from "@/hooks/useTaskLive";
-import { TaskNetworkPanel } from "@/components/visual-runtime/TaskNetworkPanel";
 import { TaskDetailDrawer } from "@/components/tasks/TaskDetailDrawer";
+
+const TaskNetworkPanel = dynamic(
+  () =>
+    import("@/components/visual-runtime/TaskNetworkPanel").then((m) => ({
+      default: m.TaskNetworkPanel,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-[320px] flex-1 items-center justify-center font-mono text-xs text-mist-400">
+        加载协作图…
+      </div>
+    ),
+  },
+);
+
+function tasksHref(status: string, taskId?: string | null) {
+  const q = new URLSearchParams();
+  if (status) q.set("status", status);
+  if (taskId) q.set("task", taskId);
+  const qs = q.toString();
+  return qs ? `/tasks?${qs}` : "/tasks";
+}
 
 const FILTERS = [
   { key: "", label: "全部" },
   { key: "running", label: "运行中" },
-  { key: "waiting_for_user", label: "待审批" },
+  { key: "waiting_for_user,waiting_for_agent", label: "待审批" },
   { key: "completed", label: "成功" },
   { key: "failed", label: "失败" },
   { key: "cancelled", label: "已取消" },
@@ -31,38 +54,50 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get("status") || "";
+  const urlTask = searchParams.get("task") || initialTaskId || null;
 
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [listQuery, setListQuery] = useState("");
   const [listError, setListError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(initialTaskId || null);
+  const [listLoading, setListLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(urlTask);
   const [busy, setBusy] = useState(false);
 
   const { task, events, artifacts, evaluation, memories, error: liveError, reload, liveMode, wsConnected } =
     useTaskLive(selectedId);
 
   const loadList = useCallback(async () => {
+    if (typeof document !== "undefined" && document.hidden) return;
     try {
       const data = await listTasks({
         status: statusFilter || undefined,
-        limit: 80,
+        limit: 40,
       });
       setTasks(data.tasks || []);
       setListError(null);
     } catch (err) {
       setListError(apiErrorMessage(err, "list failed"));
+    } finally {
+      setListLoading(false);
     }
   }, [statusFilter]);
 
   useEffect(() => {
-    loadList();
-    const t = setInterval(loadList, 8000);
-    return () => clearInterval(t);
+    void loadList();
+    const t = setInterval(loadList, 12000);
+    const onVis = () => {
+      if (!document.hidden) void loadList();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [loadList]);
 
   useEffect(() => {
-    if (initialTaskId) setSelectedId(initialTaskId);
-  }, [initialTaskId]);
+    setSelectedId(urlTask);
+  }, [urlTask]);
 
   const filteredTasks = useMemo(() => {
     const q = listQuery.trim().toLowerCase();
@@ -75,15 +110,9 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
     );
   }, [tasks, listQuery]);
 
-  useEffect(() => {
-    if (!selectedId && filteredTasks.length > 0) {
-      setSelectedId(filteredTasks[0].task_id);
-    }
-  }, [filteredTasks, selectedId]);
-
   function selectTask(id: string) {
     setSelectedId(id);
-    router.replace(`/tasks/${id}${statusFilter ? `?status=${statusFilter}` : ""}`);
+    router.replace(tasksHref(statusFilter, id), { scroll: false });
   }
 
   async function onCancel() {
@@ -172,7 +201,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
   }
 
   const nodeInflight = (task?.nodes || []).some((n) =>
-    ["pending", "ready", "running", "retrying", "waiting_for_user"].includes(n.status),
+    ["pending", "ready", "running", "retrying", "waiting_for_user", "waiting_for_agent"].includes(n.status),
   );
   const canCancel =
     !!task &&
@@ -197,7 +226,7 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
             {FILTERS.map((f) => (
               <Link
                 key={f.key || "all"}
-                href={f.key ? `/tasks?status=${f.key}` : "/tasks"}
+                href={tasksHref(f.key, selectedId)}
                 className={`rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] ${
                   statusFilter === f.key
                     ? "bg-signal/15 text-signal"
@@ -215,7 +244,11 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
           ) : null}
           {filteredTasks.length === 0 ? (
             <div className="p-4 font-mono text-xs text-mist-400">
-              {tasks.length === 0 ? "暂无任务" : "无匹配任务"}
+              {listLoading
+                ? "加载任务…"
+                : tasks.length === 0
+                  ? "暂无任务"
+                  : "无匹配任务"}
             </div>
           ) : null}
           {filteredTasks.map((t) => (
@@ -237,14 +270,18 @@ export function TasksWorkspace({ initialTaskId }: { initialTaskId?: string }) {
                       ? "text-signal"
                       : t.status === "failed"
                         ? "text-red-400"
-                        : t.status === "waiting_for_user"
+                        : t.status === "waiting_for_user" || t.status === "waiting_for_agent"
                           ? "text-amber-300"
                           : t.status === "running"
                             ? "text-signal-warm"
                             : "text-mist-400"
                   }`}
                 >
-                  {t.status === "waiting_for_user" ? "待审批" : t.status}
+                  {t.status === "waiting_for_user"
+                    ? "待系统审"
+                    : t.status === "waiting_for_agent"
+                      ? "待 Agent 审"
+                      : t.status}
                 </span>
               </div>
               <div className="mt-1 truncate text-sm text-mist-100">

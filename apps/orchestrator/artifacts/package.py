@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from datetime import date, datetime
 from typing import Any, Callable, Optional
 
 MAX_PACKAGE_BYTES = 40_000_000
@@ -20,6 +21,26 @@ def _safe_part(raw: str, fallback: str = "item") -> str:
 def _task_id(task: dict[str, Any] | None) -> str:
     row = task or {}
     return str(row.get("task_id") or row.get("id") or "task")
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _dumps(obj: Any) -> bytes:
+    return json.dumps(obj, ensure_ascii=False, indent=2, default=_json_default).encode("utf-8")
+
+
+def _iso(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
 
 
 def _goal(task: dict[str, Any] | None) -> str:
@@ -94,8 +115,8 @@ def build_citations(
         "title": row.get("title"),
         "status": row.get("status"),
         "goal": _goal(row),
-        "created_at": row.get("created_at"),
-        "finished_at": row.get("finished_at"),
+        "created_at": _iso(row.get("created_at")),
+        "finished_at": _iso(row.get("finished_at")),
         "agents": agents,
         "evaluation": evaluation,
         "artifacts": arts,
@@ -180,7 +201,7 @@ def build_package_zip(
         zf.writestr("run-report.md", report.encode("utf-8"))
         zf.writestr(
             "citations.json",
-            json.dumps(citations, ensure_ascii=False, indent=2).encode("utf-8"),
+            _dumps(citations),
         )
         files += 2
         for a in artifacts or []:
@@ -207,13 +228,12 @@ def build_package_zip(
             files += 1
         zf.writestr(
             "manifest.json",
-            json.dumps(
+            _dumps(
                 {
                     "task_id": citations.get("task_id"),
                     "files": files,
                     "artifact_bytes": used,
-                },
-                indent=2,
-            ).encode("utf-8"),
+                }
+            ),
         )
     return buf.getvalue()

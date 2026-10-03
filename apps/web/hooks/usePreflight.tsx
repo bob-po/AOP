@@ -44,8 +44,9 @@ export function PreflightProvider({ children }: { children: ReactNode }) {
       await refresh();
     })();
     const id = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       void refresh();
-    }, 8000);
+    }, 15000);
     return () => {
       alive = false;
       window.clearInterval(id);
